@@ -1,5 +1,9 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.IO;
+using Avalonia.Media;
 using ReactiveUI;
+using SHARD.Controls;
 using SHARD.Core;
 
 namespace SHARD.ViewModels;
@@ -41,6 +45,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     // ── Overview panel info rows ──────────────────────────────────────────
     public ObservableCollection<InfoRow> DatabaseInfoRows { get; } = [];
 
+    // ── Raw bytes + highlights for the HexView ────────────────────────────
+    private byte[] _headerBytes = [];
+    public byte[] HeaderBytes
+    {
+        get => _headerBytes;
+        private set => this.RaiseAndSetIfChanged(ref _headerBytes, value);
+    }
+
+    private IReadOnlyList<HexHighlight> _headerHighlights = [];
+    public IReadOnlyList<HexHighlight> HeaderHighlights
+    {
+        get => _headerHighlights;
+        private set => this.RaiseAndSetIfChanged(ref _headerHighlights, value);
+    }
+
     // ── Status bar ────────────────────────────────────────────────────────
     private string _statusText = "Open a SQLite database to begin.";
     public string StatusText
@@ -64,38 +83,78 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var info = new FileInfo(path);
 
-            // Always-available file info
-            DatabaseInfoRows.Add(new InfoRow("File",   info.Name));
-            DatabaseInfoRows.Add(new InfoRow("Path",   path));
-            DatabaseInfoRows.Add(new InfoRow("Size",   FormatBytes(info.Length)));
-
-            // Try the forensic library (works once SqliteForensicDatabase.Open() is implemented)
-            try
+            // Read exactly the 100-byte SQLite header
+            byte[] headerBytes = new byte[100];
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
-                Database = SqliteForensicDatabase.Open(path);
-
-                DatabaseInfoRows.Add(new InfoRow("Page Size",    $"{Database.Header.PageSize:N0} bytes"));
-                DatabaseInfoRows.Add(new InfoRow("Page Count",   $"{Database.PageCount:N0}"));
-                DatabaseInfoRows.Add(new InfoRow("Encoding",     Database.Header.TextEncodingName));
-                DatabaseInfoRows.Add(new InfoRow("Write Mode",   Database.Header.WriteVersionName));
-                DatabaseInfoRows.Add(new InfoRow("Schema Cookie",$"{Database.Header.SchemaCookie}"));
-                DatabaseInfoRows.Add(new InfoRow("User Version", $"{Database.Header.UserVersion}"));
-                DatabaseInfoRows.Add(new InfoRow("App ID",       $"0x{Database.Header.ApplicationId:X8}"));
-                DatabaseInfoRows.Add(new InfoRow("SQLite Ver",   FormatSqliteVersion(Database.Header.SqliteVersionNumber)));
-                DatabaseInfoRows.Add(new InfoRow("Free Pages",   $"{Database.Header.TotalFreelistPages:N0}"));
-
-                foreach (var page in Database.ReadAllPages())
-                    Pages.Add(new PageViewModel(page));
-
-                StatusText = $"{info.Name}  ·  {Database.PageCount:N0} pages  ·  {Database.Header.PageSize} bytes/page  ·  {Database.Header.TextEncodingName}";
+                int read = fs.Read(headerBytes, 0, 100);
+                if (read < 100)
+                    throw new InvalidDataException("File is too small to be a valid SQLite database.");
             }
-            catch (NotImplementedException)
-            {
-                DatabaseInfoRows.Add(new InfoRow("Parser", "Not yet implemented — implement SqliteForensicDatabase.Open()"));
-                StatusText = $"{info.Name}  ({FormatBytes(info.Length)})  —  awaiting parser implementation";
-            }
+
+            // Throws InvalidDataException if the magic/fields are invalid
+            var header = new DatabaseHeader(headerBytes);
+            HeaderBytes      = headerBytes;
+            HeaderHighlights = BuildHeaderHighlights();
+
+            // ── File info ────────────────────────────────────────────────────
+            DatabaseInfoRows.Add(new InfoRow("File",                        info.Name));
+            DatabaseInfoRows.Add(new InfoRow("Path",                        path));
+            DatabaseInfoRows.Add(new InfoRow("Size",                        FormatBytes(info.Length)));
+
+            // ── Header fields in byte-offset order ───────────────────────────
+            // Offset 0
+            DatabaseInfoRows.Add(new InfoRow("Magic (0)",                   header.Magic.TrimEnd('\0')));
+            // Offset 16
+            DatabaseInfoRows.Add(new InfoRow("Page Size (16)",              $"{header.PageSize:N0} bytes  (raw: {header.PageSizeRaw})"));
+            // Offset 18
+            DatabaseInfoRows.Add(new InfoRow("Write Version (18)",          $"{header.WriteVersion}  —  {header.WriteVersionName}"));
+            // Offset 19
+            DatabaseInfoRows.Add(new InfoRow("Read Version (19)",           $"{header.ReadVersion}"));
+            // Offset 20
+            DatabaseInfoRows.Add(new InfoRow("Reserved Per Page (20)",      $"{header.ReservedBytesPerPage} bytes"));
+            // Offset 21
+            DatabaseInfoRows.Add(new InfoRow("Max Payload Fraction (21)",   $"{header.MaxEmbeddedPayloadFraction}"));
+            // Offset 22
+            DatabaseInfoRows.Add(new InfoRow("Min Payload Fraction (22)",   $"{header.MinEmbeddedPayloadFraction}"));
+            // Offset 23
+            DatabaseInfoRows.Add(new InfoRow("Leaf Payload Fraction (23)",  $"{header.LeafPayloadFraction}"));
+            // Offset 24
+            DatabaseInfoRows.Add(new InfoRow("File Change Counter (24)",    $"{header.FileChangeCounter}"));
+            // Offset 28
+            DatabaseInfoRows.Add(new InfoRow("DB Size in Pages (28)",       $"{header.DatabaseSizeInPages:N0}"));
+            // Offset 32
+            DatabaseInfoRows.Add(new InfoRow("First Freelist Page (32)",    $"{header.FirstFreelistTrunkPage}"));
+            // Offset 36
+            DatabaseInfoRows.Add(new InfoRow("Total Freelist Pages (36)",   $"{header.TotalFreelistPages:N0}"));
+            // Offset 40
+            DatabaseInfoRows.Add(new InfoRow("Schema Cookie (40)",          $"{header.SchemaCookie}"));
+            // Offset 44
+            DatabaseInfoRows.Add(new InfoRow("Schema Format (44)",          $"{header.SchemaFormat}"));
+            // Offset 48
+            DatabaseInfoRows.Add(new InfoRow("Default Cache Size (48)",     $"{header.DefaultPageCacheSize:N0}"));
+            // Offset 52
+            DatabaseInfoRows.Add(new InfoRow("Largest Root Page (52)",      $"{header.LargestRootBTreePage}"));
+            // Offset 56
+            DatabaseInfoRows.Add(new InfoRow("Text Encoding (56)",          $"{header.TextEncoding}  —  {header.TextEncodingName}"));
+            // Offset 60
+            DatabaseInfoRows.Add(new InfoRow("User Version (60)",           $"{header.UserVersion}"));
+            // Offset 64
+            DatabaseInfoRows.Add(new InfoRow("Incremental Vacuum (64)",     $"{header.IncrementalVacuumMode}"));
+            // Offset 68
+            DatabaseInfoRows.Add(new InfoRow("Application ID (68)",         $"0x{header.ApplicationId:X8}"));
+            // Offset 72–91: reserved (not shown)
+            // Offset 92
+            DatabaseInfoRows.Add(new InfoRow("Version Valid For (92)",      $"{header.VersionValidFor}"));
+            // Offset 96
+            DatabaseInfoRows.Add(new InfoRow("SQLite Version (96)",         $"{header.SqliteVersionNumber}  —  {FormatSqliteVersion(header.SqliteVersionNumber)}"));
 
             HasDatabase = true;
+            StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}";
+        }
+        catch (InvalidDataException ex)
+        {
+            StatusText = $"Not a valid SQLite file: {ex.Message}";
         }
         catch (Exception ex)
         {
@@ -110,6 +169,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         Database = null;
         Pages.Clear();
         DatabaseInfoRows.Clear();
+        HeaderBytes      = [];
+        HeaderHighlights = [];
         SelectedPage = null;
         HasDatabase  = false;
         StatusText   = "Open a SQLite database to begin.";
@@ -124,6 +185,58 @@ public sealed class MainWindowViewModel : ViewModelBase
         < 1024 * 1024 * 1024  => $"{bytes / (1024.0 * 1024):F1} MB",
         _                     => $"{bytes / (1024.0 * 1024 * 1024):F2} GB",
     };
+
+    /// <summary>
+    /// Highlights for every field in the 100-byte SQLite database header,
+    /// in byte-offset order. Colours are chosen to be distinct and group
+    /// related fields visually.
+    /// </summary>
+    private static IReadOnlyList<HexHighlight> BuildHeaderHighlights() =>
+    [
+        // Offset  0 — Magic string
+        new(  0, 16, Color.FromRgb( 86, 156, 214), "Magic"),
+        // Offset 16 — Page size
+        new( 16,  2, Color.FromRgb( 78, 201, 176), "Page Size"),
+        // Offset 18 — Write version
+        new( 18,  1, Color.FromRgb(220, 220, 170), "Write Version"),
+        // Offset 19 — Read version
+        new( 19,  1, Color.FromRgb(206, 145, 120), "Read Version"),
+        // Offset 20 — Reserved bytes per page
+        new( 20,  1, Color.FromRgb(155, 155, 155), "Reserved Per Page"),
+        // Offset 21-23 — Payload fractions (fixed values; group with same colour)
+        new( 21,  1, Color.FromRgb(106, 153, 85),  "Max Payload Fraction"),
+        new( 22,  1, Color.FromRgb(106, 153, 85),  "Min Payload Fraction"),
+        new( 23,  1, Color.FromRgb(106, 153, 85),  "Leaf Payload Fraction"),
+        // Offset 24 — File change counter
+        new( 24,  4, Color.FromRgb(255, 215,   0), "File Change Counter"),
+        // Offset 28 — Database size in pages
+        new( 28,  4, Color.FromRgb(218, 165,  32), "DB Size in Pages"),
+        // Offset 32 — First freelist trunk page
+        new( 32,  4, Color.FromRgb(205,  92,  92), "First Freelist Page"),
+        // Offset 36 — Total freelist pages
+        new( 36,  4, Color.FromRgb(178,  34,  34), "Total Freelist Pages"),
+        // Offset 40 — Schema cookie
+        new( 40,  4, Color.FromRgb(147, 112, 219), "Schema Cookie"),
+        // Offset 44 — Schema format
+        new( 44,  4, Color.FromRgb(123,  91, 196), "Schema Format"),
+        // Offset 48 — Default page cache size
+        new( 48,  4, Color.FromRgb(255, 160, 122), "Default Cache Size"),
+        // Offset 52 — Largest root b-tree page
+        new( 52,  4, Color.FromRgb(255, 127,  80), "Largest Root Page"),
+        // Offset 56 — Text encoding
+        new( 56,  4, Color.FromRgb( 79, 193, 255), "Text Encoding"),
+        // Offset 60 — User version
+        new( 60,  4, Color.FromRgb(  0, 191, 255), "User Version"),
+        // Offset 64 — Incremental vacuum mode
+        new( 64,  4, Color.FromRgb(255,  99,  71), "Incremental Vacuum"),
+        // Offset 68 — Application ID
+        new( 68,  4, Color.FromRgb(255, 140,   0), "Application ID"),
+        // Offset 72-91 — Reserved (not highlighted)
+        // Offset 92 — Version valid for
+        new( 92,  4, Color.FromRgb(189, 183, 107), "Version Valid For"),
+        // Offset 96 — SQLite version number
+        new( 96,  4, Color.FromRgb(240, 230, 140), "SQLite Version"),
+    ];
 
     private static string FormatSqliteVersion(uint v)
     {
