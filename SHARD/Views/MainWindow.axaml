@@ -1,0 +1,191 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SHARD.ViewModels"
+        xmlns:conv="using:Avalonia.Data.Converters"
+        x:Class="SHARD.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="SHARD — SQLite Forensic Analyser"
+        Width="1200" Height="760"
+        MinWidth="800" MinHeight="500"
+        DragDrop.AllowDrop="True">
+
+    <DockPanel>
+
+        <!-- ═══ Menu bar ═══════════════════════════════════════════════════ -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Open Database…"
+                          Name="MenuOpen"
+                          InputGesture="Ctrl+O" />
+                <MenuItem Header="_Close"
+                          Name="MenuClose"
+                          IsEnabled="{Binding HasDatabase}"
+                          InputGesture="Ctrl+W" />
+                <Separator />
+                <MenuItem Header="E_xit"
+                          Name="MenuExit" />
+            </MenuItem>
+        </Menu>
+
+        <!-- ═══ Status bar ══════════════════════════════════════════════════ -->
+        <Border DockPanel.Dock="Bottom"
+                Padding="10,4"
+                BorderThickness="0,1,0,0">
+            <TextBlock Text="{Binding StatusText}"
+                       FontSize="12"
+                       Opacity="0.75" />
+        </Border>
+
+        <!-- ═══ Content area (switches between empty-state and main view) ═══ -->
+        <Grid>
+
+            <!-- ─── Empty state ─────────────────────────────────────────── -->
+            <StackPanel IsVisible="{Binding HasNoDatabase}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="12">
+
+                <TextBlock Text="SHARD"
+                           FontSize="52"
+                           FontWeight="Bold"
+                           HorizontalAlignment="Center"
+                           Opacity="0.9" />
+
+                <TextBlock Text="SQLite Forensic Analyser"
+                           FontSize="15"
+                           HorizontalAlignment="Center"
+                           Opacity="0.45" />
+
+                <Border Height="1" Margin="0,8" Opacity="0.15" />
+
+                <Button Name="BtnOpen"
+                        Content="Open SQLite Database…"
+                        HorizontalAlignment="Center"
+                        Padding="28,10"
+                        FontSize="14" />
+
+                <TextBlock Text="or drag a .db / .sqlite file here"
+                           HorizontalAlignment="Center"
+                           FontSize="12"
+                           Opacity="0.35" />
+            </StackPanel>
+
+            <!-- ─── Main 3-pane view ─────────────────────────────────────── -->
+            <Grid IsVisible="{Binding HasDatabase}"
+                  ColumnDefinitions="280,4,*">
+
+                <!-- Left panel: page list -->
+                <DockPanel Grid.Column="0">
+
+                    <Border DockPanel.Dock="Top"
+                            Padding="10,6"
+                            BorderThickness="0,0,0,1">
+                        <TextBlock Text="Pages"
+                                   FontWeight="SemiBold"
+                                   FontSize="13" />
+                    </Border>
+
+                    <ListBox ItemsSource="{Binding Pages}"
+                             SelectedItem="{Binding SelectedPage}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PageViewModel">
+                                <Grid ColumnDefinitions="5,44,*" Height="26">
+
+                                    <!-- Type colour swatch -->
+                                    <Border Grid.Column="0"
+                                            Background="{Binding TypeBrush}"
+                                            CornerRadius="2,0,0,2" />
+
+                                    <!-- Page number -->
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding PageNumber}"
+                                               VerticalAlignment="Center"
+                                               TextAlignment="Right"
+                                               Padding="0,0,8,0"
+                                               FontSize="11"
+                                               Opacity="0.5" />
+
+                                    <!-- Page type -->
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding TypeLabel}"
+                                               VerticalAlignment="Center"
+                                               FontSize="12" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+
+                <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                <!-- Right panel: tab control -->
+                <TabControl Grid.Column="2" Padding="0">
+
+                    <!-- ── Tab 1: Database overview ── -->
+                    <TabItem Header="Overview">
+                        <ScrollViewer Padding="16,12">
+                            <ItemsControl ItemsSource="{Binding DatabaseInfoRows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:InfoRow">
+                                        <Grid ColumnDefinitions="160,*" Margin="0,4">
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Label}"
+                                                       FontWeight="SemiBold"
+                                                       Opacity="0.6"
+                                                       FontSize="12" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding Value}"
+                                                       TextWrapping="Wrap"
+                                                       FontSize="12" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <!-- ── Tab 2: Page detail ── -->
+                    <TabItem Header="Page Detail">
+                        <Grid>
+
+                            <!-- No page selected placeholder -->
+                            <TextBlock IsVisible="{Binding SelectedPage,
+                                                   Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                       Text="← Select a page from the list"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Opacity="0.35"
+                                       FontSize="13" />
+
+                            <!-- Page content -->
+                            <Grid IsVisible="{Binding SelectedPage,
+                                              Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                  RowDefinitions="*,4,*">
+
+                                <!-- Summary (top half) -->
+                                <ScrollViewer Grid.Row="0" Padding="14,10">
+                                    <TextBlock Text="{Binding SelectedPage.Summary}"
+                                               FontFamily="Courier New"
+                                               FontSize="12"
+                                               TextWrapping="Wrap" />
+                                </ScrollViewer>
+
+                                <GridSplitter Grid.Row="1" ResizeDirection="Rows" />
+
+                                <!-- Hex dump (bottom half) -->
+                                <ScrollViewer Grid.Row="2" Padding="14,10">
+                                    <TextBlock Text="{Binding SelectedPage.HexDump}"
+                                               FontFamily="Courier New"
+                                               FontSize="11" />
+                                </ScrollViewer>
+
+                            </Grid>
+                        </Grid>
+                    </TabItem>
+
+                </TabControl>
+            </Grid>
+        </Grid>
+
+    </DockPanel>
+</Window>
