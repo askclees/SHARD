@@ -1,10 +1,13 @@
+using System.Buffers.Binary;
+using SHARD.Core.Enums;
+
 namespace SHARD.Core.Pages;
 
 /// <summary>
-/// A SQLite B-Tree page (interior or leaf, table or index).
+/// Abstract base for all SQLite B-Tree pages (interior and leaf, table and index).
 ///
 /// Page header layout (relative to <see cref="SqlitePage.HeaderOffset"/>):
-///   +0  : 1 byte  — page type (see <see cref="PageType"/>)
+///   +0  : 1 byte  — page type flag
 ///   +1  : 2 bytes — offset of first freeblock (0 = none)
 ///   +3  : 2 bytes — number of cells on this page
 ///   +5  : 2 bytes — start of cell content area (0 means 65536)
@@ -14,15 +17,13 @@ namespace SHARD.Core.Pages;
 /// The cell pointer array follows immediately after the header.
 /// Each entry is a 2-byte big-endian offset into the page.
 /// </summary>
-public sealed class BTreePage : SqlitePage
+public abstract class BTreePage : SqlitePage
 {
-    public override PageType PageType { get; }
+    public abstract override PageType PageType { get; }
 
-    public bool IsInterior => PageType is PageType.BTreeInteriorTable
-                                       or PageType.BTreeInteriorIndex;
-    public bool IsLeaf     => !IsInterior;
-    public bool IsTable    => PageType is PageType.BTreeLeafTable
-                                       or PageType.BTreeInteriorTable;
+    public bool IsInterior => this is BTreeInteriorPage;
+    public bool IsLeaf     => this is BTreeLeafPage;
+    public bool IsTable    => PageType is PageType.BTreeLeafTable or PageType.BTreeInteriorTable;
     public bool IsIndex    => !IsTable;
 
     // ── Header fields ────────────────────────────────────────────────────────
@@ -41,9 +42,6 @@ public sealed class BTreePage : SqlitePage
     /// <summary>Number of fragmented free bytes within the cell content area.</summary>
     public byte FragmentedFreeBytes { get; }
 
-    /// <summary>Rightmost child page number. Set only for interior pages.</summary>
-    public uint? RightmostPointer { get; }
-
     // ── Cell pointer array ───────────────────────────────────────────────────
     /// <summary>
     /// Raw byte offsets (into this page) of each cell, in the order
@@ -52,23 +50,26 @@ public sealed class BTreePage : SqlitePage
     public ushort[] CellPointers { get; }
 
     // ── Constructor ──────────────────────────────────────────────────────────
-    public BTreePage(uint pageNumber, int pageSize, byte[] data, PageType type)
+    /// <param name="cellPointerStart">
+    /// Byte offset within <paramref name="data"/> where the cell pointer array begins.
+    /// Pass <c>HeaderOffset + 8</c> for leaf pages, <c>HeaderOffset + 12</c> for interior pages.
+    /// </param>
+    protected BTreePage(uint pageNumber, int pageSize, byte[] data, int cellPointerStart)
         : base(pageNumber, pageSize, data)
     {
-        PageType     = type;
-        FirstFreeblock       = default;
-        CellCount            = default;
-        CellContentAreaStart = default;
-        FragmentedFreeBytes  = default;
-        RightmostPointer     = null;
-        CellPointers         = [];
-        throw new NotImplementedException();
-    }
+        if (data.Length != pageSize)
+            throw new InvalidDataException("Data must be equal to pagesize");
 
-    /// <summary>
-    /// Return the raw bytes starting at a cell's offset.
-    /// Callers parse the variable-length content themselves using varint helpers.
-    /// </summary>
-    public ReadOnlySpan<byte> GetCellData(int cellIndex) =>
-        throw new NotImplementedException();
+        int h = HeaderOffset;
+        FirstFreeblock       = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(h + 1, 2));
+        CellCount            = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(h + 3, 2));
+        CellContentAreaStart = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(h + 5, 2));
+        FragmentedFreeBytes  = data[h + 7];
+
+        CellPointers = new ushort[CellCount];
+        for (int i = 0; i < CellCount; i++)
+            CellPointers[i] = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(cellPointerStart + i * 2, 2));
+        
+        
+    }
 }

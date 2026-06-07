@@ -83,19 +83,14 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var info = new FileInfo(path);
 
-            // Read exactly the 100-byte SQLite header
-            byte[] headerBytes = new byte[100];
-            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                int read = fs.Read(headerBytes, 0, 100);
-                if (read < 100)
-                    throw new InvalidDataException("File is too small to be a valid SQLite database.");
-            }
+            var db = SqliteForensicDatabase.Open(path);
+            Database = db;
 
-            // Throws InvalidDataException if the magic/fields are invalid
-            var header = new DatabaseHeader(headerBytes);
-            HeaderBytes      = headerBytes;
+            var page1 = db.ReadPage(1);
+            HeaderBytes      = page1.Data[..100];
             HeaderHighlights = BuildHeaderHighlights();
+
+            var header = db.Header;
 
             // ── File info ────────────────────────────────────────────────────
             DatabaseInfoRows.Add(new InfoRow("File",                        info.Name));
@@ -149,8 +144,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Offset 96
             DatabaseInfoRows.Add(new InfoRow("SQLite Version (96)",         $"{header.SqliteVersionNumber}  —  {FormatSqliteVersion(header.SqliteVersionNumber)}"));
 
+            foreach (var page in db.ReadAllPages())
+                Pages.Add(new PageViewModel(page));
+
             HasDatabase = true;
-            StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}";
+            StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}  ·  {db.PageCount:N0} pages";
         }
         catch (InvalidDataException ex)
         {

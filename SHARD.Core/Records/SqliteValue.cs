@@ -12,7 +12,7 @@ public sealed class SqliteValue
     public long?   IntegerValue { get; init; }
     public double? RealValue    { get; init; }
     public string? TextValue    { get; init; }
-    public byte[]? BlobValue    { get; init; }
+    public byte[]? BlobValue { get; init; }
 
     // ── Convenience ──────────────────────────────────────────────────────────
     public bool IsNull => StorageClass == SqliteStorageClass.Null;
@@ -43,8 +43,8 @@ public sealed class SqliteValue
     public static SqliteValue FromBlob(byte[] value) =>
         throw new NotImplementedException();
 
-    /// <summary>Decode a value from payload bytes given its <see cref="SerialType"/>.</summary>
-    public static SqliteValue Decode(SerialType serialType, ReadOnlySpan<byte> payload) =>
+    /// <summary>Decode a value from payload bytes given its <see cref="HeaderEntry"/>.</summary>
+    public static SqliteValue Decode(HeaderEntry headerEntry, ReadOnlySpan<byte> payload) =>
         throw new NotImplementedException();
 }
 

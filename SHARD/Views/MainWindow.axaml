@@ -126,15 +126,24 @@
                                                       IsChecked="True"
                                                       Padding="8,2"
                                                       FontSize="11" />
+                                        <TextBlock x:Name="HdrFieldLabel"
+                                                   Text="{Binding #HdrHexView.HoveredLabel}"
+                                                   IsVisible="{Binding #HdrHexView.HoveredLabel,
+                                                               Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11"
+                                                   Opacity="0.75"
+                                                   Margin="8,0,0,0" />
                                     </StackPanel>
                                 </Border>
 
                                 <!-- Hex view -->
                                 <ScrollViewer Grid.Row="1"
-                                              Padding="14,8"
                                               VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Auto">
-                                    <controls:HexView Data="{Binding HeaderBytes}"
+                                    <controls:HexView x:Name="HdrHexView"
+                                                      Margin="14,8,14,16"
+                                                      Data="{Binding HeaderBytes}"
                                                       Highlights="{Binding HeaderHighlights}"
                                                       UseDecimalOffsets="{Binding #HdrOffsetToggle.IsChecked}"
                                                       ShowHighlights="{Binding #HdrHighlightToggle.IsChecked}" />
@@ -147,73 +156,175 @@
 
                     <!-- ── Tab 2: Pages ── -->
                     <TabItem Header="Pages">
-                        <ListBox ItemsSource="{Binding Pages}"
-                                 SelectedItem="{Binding SelectedPage}">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate x:DataType="vm:PageViewModel">
-                                    <Grid ColumnDefinitions="5,44,*" Height="26">
+                        <Grid ColumnDefinitions="250,4,*">
 
-                                        <!-- Type colour swatch -->
-                                        <Border Grid.Column="0"
-                                                Background="{Binding TypeBrush}"
-                                                CornerRadius="2,0,0,2" />
+                            <!-- Left: page list -->
+                            <ListBox Grid.Column="0"
+                                     ItemsSource="{Binding Pages}"
+                                     SelectedItem="{Binding SelectedPage}">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PageViewModel">
+                                        <Grid ColumnDefinitions="5,44,*" Height="26">
 
-                                        <!-- Page number -->
-                                        <TextBlock Grid.Column="1"
-                                                   Text="{Binding PageNumber}"
-                                                   VerticalAlignment="Center"
-                                                   TextAlignment="Right"
-                                                   Padding="0,0,8,0"
-                                                   FontSize="11"
-                                                   Opacity="0.5" />
+                                            <!-- Type colour swatch -->
+                                            <Border Grid.Column="0"
+                                                    Background="{Binding TypeBrush}"
+                                                    CornerRadius="2,0,0,2" />
 
-                                        <!-- Page type -->
-                                        <TextBlock Grid.Column="2"
-                                                   Text="{Binding TypeLabel}"
-                                                   VerticalAlignment="Center"
-                                                   FontSize="12" />
+                                            <!-- Page number -->
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding PageNumber}"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Right"
+                                                       Padding="0,0,8,0"
+                                                       FontSize="11"
+                                                       Opacity="0.5" />
+
+                                            <!-- Page type -->
+                                            <TextBlock Grid.Column="2"
+                                                       Text="{Binding TypeLabel}"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="12" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                            <!-- Right: page detail -->
+                            <Grid Grid.Column="2">
+
+                                <!-- No page selected placeholder -->
+                                <TextBlock IsVisible="{Binding SelectedPage,
+                                                       Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                           Text="← Select a page from the list"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Opacity="0.35"
+                                           FontSize="13" />
+
+                                <!-- Page content -->
+                                <Grid IsVisible="{Binding SelectedPage,
+                                                  Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                      ColumnDefinitions="*,4,*">
+
+                                    <!-- Left: summary + expandable sections -->
+                                    <ScrollViewer Grid.Column="0"
+                                                  VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel Margin="14,10" Spacing="6">
+
+                                            <!-- Basic page info -->
+                                            <TextBlock Text="{Binding SelectedPage.Summary}"
+                                                       FontFamily="Courier New"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap" />
+
+                                            <!-- Cell pointers -->
+                                            <Expander Header="{Binding SelectedPage.CellPointerHeader}"
+                                                      IsExpanded="False"
+                                                      IsVisible="{Binding SelectedPage.HasCellPointers}">
+                                                <ItemsControl ItemsSource="{Binding SelectedPage.CellPointerRows}"
+                                                              Margin="8,4,0,4">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                            <Grid ColumnDefinitions="52,*" Margin="0,2">
+                                                                <TextBlock Grid.Column="0"
+                                                                           Text="{Binding Label}"
+                                                                           FontFamily="Courier New"
+                                                                           FontSize="11"
+                                                                           Opacity="0.55" />
+                                                                <TextBlock Grid.Column="1"
+                                                                           Text="{Binding Value}"
+                                                                           FontFamily="Courier New"
+                                                                           FontSize="11" />
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </Expander>
+
+                                            <!-- Per-cell expanders (table leaf pages only) -->
+                                            <ItemsControl ItemsSource="{Binding SelectedPage.CellSections}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:CellSectionViewModel">
+                                                        <Expander Header="{Binding Header}"
+                                                                  IsExpanded="False"
+                                                                  Margin="0,2,0,0">
+                                                            <ItemsControl ItemsSource="{Binding Rows}"
+                                                                          Margin="8,4,0,4">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                            <TextBlock Grid.Column="0"
+                                                                                       Text="{Binding Label}"
+                                                                                       FontSize="12"
+                                                                                       FontWeight="SemiBold"
+                                                                                       Opacity="0.6" />
+                                                                            <TextBlock Grid.Column="1"
+                                                                                       Text="{Binding Value}"
+                                                                                       FontSize="12"
+                                                                                       TextWrapping="Wrap" />
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </Expander>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                        </StackPanel>
+                                    </ScrollViewer>
+
+                                    <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                                    <!-- Right: toolbar + hex view -->
+                                    <Grid Grid.Column="2" RowDefinitions="Auto,*">
+
+                                        <Border Grid.Row="0"
+                                                Padding="8,4"
+                                                BorderThickness="0,0,0,1">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <ToggleButton x:Name="PageOffsetToggle"
+                                                              Content="Dec Offsets"
+                                                              ToolTip.Tip="Toggle between hexadecimal (default) and decimal offsets"
+                                                              IsChecked="False"
+                                                              Padding="8,2"
+                                                              FontSize="11" />
+                                                <ToggleButton x:Name="PageHighlightToggle"
+                                                              Content="Highlights"
+                                                              ToolTip.Tip="Toggle field highlights on/off"
+                                                              IsChecked="True"
+                                                              Padding="8,2"
+                                                              FontSize="11" />
+                                                <TextBlock Text="{Binding #PageHexView.HoveredLabel}"
+                                                           IsVisible="{Binding #PageHexView.HoveredLabel,
+                                                                       Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="11"
+                                                           Opacity="0.75"
+                                                           Margin="8,0,0,0" />
+                                            </StackPanel>
+                                        </Border>
+
+                                        <ScrollViewer Grid.Row="1"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Auto">
+                                            <controls:HexView x:Name="PageHexView"
+                                                              Margin="14,8,14,16"
+                                                              Data="{Binding SelectedPage.PageBytes}"
+                                                              Highlights="{Binding SelectedPage.PageHighlights}"
+                                                              UseDecimalOffsets="{Binding #PageOffsetToggle.IsChecked}"
+                                                              ShowHighlights="{Binding #PageHighlightToggle.IsChecked}" />
+                                        </ScrollViewer>
+
                                     </Grid>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                    </TabItem>
 
-                    <!-- ── Tab 3: Page Detail ── -->
-                    <TabItem Header="Page Detail">
-                        <Grid>
-
-                            <!-- No page selected placeholder -->
-                            <TextBlock IsVisible="{Binding SelectedPage,
-                                                   Converter={x:Static conv:ObjectConverters.IsNull}}"
-                                       Text="← Select a page from the Pages tab"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       Opacity="0.35"
-                                       FontSize="13" />
-
-                            <!-- Page content -->
-                            <Grid IsVisible="{Binding SelectedPage,
-                                              Converter={x:Static conv:ObjectConverters.IsNotNull}}"
-                                  RowDefinitions="*,4,*">
-
-                                <!-- Summary (top half) -->
-                                <ScrollViewer Grid.Row="0" Padding="14,10">
-                                    <TextBlock Text="{Binding SelectedPage.Summary}"
-                                               FontFamily="Courier New"
-                                               FontSize="12"
-                                               TextWrapping="Wrap" />
-                                </ScrollViewer>
-
-                                <GridSplitter Grid.Row="1" ResizeDirection="Rows" />
-
-                                <!-- Hex dump (bottom half) -->
-                                <ScrollViewer Grid.Row="2" Padding="14,10">
-                                    <TextBlock Text="{Binding SelectedPage.HexDump}"
-                                               FontFamily="Courier New"
-                                               FontSize="11" />
-                                </ScrollViewer>
-
+                                </Grid>
                             </Grid>
+
                         </Grid>
                     </TabItem>
 

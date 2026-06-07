@@ -1,3 +1,6 @@
+using System.IO;
+using SHARD.Core.Enums;
+
 namespace SHARD.Core.Pages;
 
 /// <summary>
@@ -36,8 +39,31 @@ public abstract class SqlitePage
     /// Read and classify a page from the stream.
     /// Returns the appropriate subclass based on the type byte.
     /// </summary>
-    public static SqlitePage Read(Stream stream, uint pageNumber, int pageSize) =>
-        throw new NotImplementedException();
+    public static SqlitePage Read(Stream stream, uint pageNumber, int pageSize)
+    {
+        var data = new byte[pageSize];
+        stream.Position = (long)(pageNumber - 1) * pageSize;
+        stream.ReadExactly(data);
+
+        int headerOffset = pageNumber == 1 ? 100 : 0;
+        var typeByte = (PageType)data[headerOffset];
+
+        try
+        {
+            return typeByte switch
+            {
+                PageType.BTreeInteriorTable => new TableBTreeInteriorPage(pageNumber, pageSize, data),
+                PageType.BTreeInteriorIndex => new IndexBTreeInteriorPage(pageNumber, pageSize, data),
+                PageType.BTreeLeafTable     => new TableBTreeLeafPage(pageNumber, pageSize, data),
+                PageType.BTreeLeafIndex     => new IndexBTreeLeafPage(pageNumber, pageSize, data),
+                _                           => new UnknownPage(pageNumber, pageSize, data),
+            };
+        }
+        catch
+        {
+            return new UnknownPage(pageNumber, pageSize, data);
+        }
+    }
 }
 
 /// <summary>Catch-all for pages whose type byte is unrecognised.</summary>

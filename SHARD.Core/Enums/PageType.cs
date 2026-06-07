@@ -1,4 +1,4 @@
-namespace SHARD.Core.Pages;
+namespace SHARD.Core.Enums;
 
 /// <summary>
 /// SQLite page type. The type byte lives at offset 0 of the page header

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.IO;
 using SHARD.Core.Pages;
 
 namespace SHARD.Core;
@@ -24,19 +26,40 @@ public sealed class SqliteForensicDatabase : IDisposable
     }
 
     /// <summary>Open a SQLite file and parse its header.</summary>
-    public static SqliteForensicDatabase Open(string filePath) =>
-        throw new NotImplementedException();
+    public static SqliteForensicDatabase Open(string filePath)
+    {
+        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            var headerBytes = new byte[100];
+            stream.ReadExactly(headerBytes);
+            var header = new DatabaseHeader(headerBytes);
+            return new SqliteForensicDatabase(stream, header);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
 
     /// <summary>
     /// Read and return a single page by 1-based page number.
     /// Returns the appropriate <see cref="SqlitePage"/> subclass.
     /// </summary>
-    public SqlitePage ReadPage(uint pageNumber) =>
-        throw new NotImplementedException();
+    public SqlitePage ReadPage(uint pageNumber)
+    {
+        if (pageNumber < 1 || pageNumber > PageCount)
+            throw new ArgumentOutOfRangeException(nameof(pageNumber));
+        return SqlitePage.Read(_stream, pageNumber, Header.PageSize);
+    }
 
     /// <summary>Enumerate all pages in page-number order.</summary>
-    public IEnumerable<SqlitePage> ReadAllPages() =>
-        throw new NotImplementedException();
+    public IEnumerable<SqlitePage> ReadAllPages()
+    {
+        for (uint i = 1; i <= PageCount; i++)
+            yield return ReadPage(i);
+    }
 
     /// <summary>Enumerate every freelist trunk and its leaf pages.</summary>
     public IEnumerable<FreelistPage> ReadFreelistChain() =>

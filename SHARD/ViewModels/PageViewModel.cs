@@ -1,5 +1,8 @@
+using System.Collections.Generic;
+using System.Text;
 using Avalonia.Media;
-using ReactiveUI;
+using SHARD.Controls;
+using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 
 namespace SHARD.ViewModels;
@@ -27,32 +30,97 @@ public sealed class PageViewModel : ViewModelBase
     };
 
     // ── Detail panel ──────────────────────────────────────────────────────
-    /// <summary>Human-readable summary of page header fields.</summary>
-    public string Summary
+    public string Summary => BuildSummary(Page);
+
+    public byte[] PageBytes => Page.Data;
+
+    public IReadOnlyList<HexHighlight> PageHighlights => BuildPageHighlights(Page);
+
+    // ── Cell pointers expander ────────────────────────────────────────────
+    public bool HasCellPointers => Page is BTreePage bp && bp.CellPointers.Length > 0;
+
+    public string CellPointerHeader => Page is BTreePage bpH
+        ? $"Cell Pointers ({bpH.CellPointers.Length})"
+        : "Cell Pointers";
+
+    public IReadOnlyList<InfoRow> CellPointerRows { get; }
+
+    // ── Per-cell expanders (table leaf pages only) ────────────────────────
+    public IReadOnlyList<CellSectionViewModel> CellSections { get; }
+
+    public PageViewModel(SqlitePage page)
     {
-        get
+        Page = page;
+
+        if (page is BTreePage bp)
         {
-            try   { return BuildSummary(Page); }
-            catch (NotImplementedException) { return $"[Implement BuildSummary()]\n\nPage {Page.PageNumber}  ·  {Page.PageType}  ·  {Page.PageSize} bytes"; }
+            var rows = new List<InfoRow>(bp.CellPointers.Length);
+            for (int i = 0; i < bp.CellPointers.Length; i++)
+                rows.Add(new InfoRow($"[{i}]", $"0x{bp.CellPointers[i]:X4}  ({bp.CellPointers[i]})"));
+            CellPointerRows = rows;
+        }
+        else
+        {
+            CellPointerRows = [];
+        }
+
+        if (page is TableBTreeLeafPage tlp)
+        {
+            var sections = new List<CellSectionViewModel>(tlp.Cells.Count);
+            for (int i = 0; i < tlp.Cells.Count; i++)
+                sections.Add(new CellSectionViewModel(tlp.Cells[i], i));
+            CellSections = sections;
+        }
+        else
+        {
+            CellSections = [];
         }
     }
 
-    /// <summary>Hex + ASCII dump of the raw page bytes.</summary>
-    public string HexDump
+    private static string BuildSummary(SqlitePage page)
     {
-        get
-        {
-            try   { return BuildHexDump(Page.Data); }
-            catch (NotImplementedException) { return "[Implement BuildHexDump()]"; }
-        }
+        var sb = new StringBuilder();
+        sb.AppendLine($"Page       : {page.PageNumber}");
+        sb.AppendLine($"Type       : {page.PageType}");
+        sb.AppendLine($"Size       : {page.PageSize} bytes");
+
+        if (page is not BTreePage bp) return sb.ToString();
+
+        sb.AppendLine();
+        sb.AppendLine($"First Freeblock  : {bp.FirstFreeblock}");
+        sb.AppendLine($"Cell Count       : {bp.CellCount}");
+        uint cca = bp.CellContentAreaStart == 0 ? 65536u : bp.CellContentAreaStart;
+        sb.AppendLine($"Cell Content At  : {cca} (0x{cca:X4})");
+        sb.AppendLine($"Fragmented Bytes : {bp.FragmentedFreeBytes}");
+        if (bp is BTreeInteriorPage ip)
+            sb.AppendLine($"Rightmost Ptr    : {ip.RightmostPointer}");
+
+        return sb.ToString();
     }
 
-    public PageViewModel(SqlitePage page) => Page = page;
+    private static IReadOnlyList<HexHighlight> BuildPageHighlights(SqlitePage page)
+    {
+        if (page is not BTreePage bp) return [];
 
-    // ── Implement these ───────────────────────────────────────────────────
-    private static string BuildSummary(SqlitePage page) =>
-        throw new NotImplementedException();
+        var list = new List<HexHighlight>();
+        int h = page.HeaderOffset;
 
-    private static string BuildHexDump(byte[] data) =>
-        throw new NotImplementedException();
+        list.Add(new(h + 0, 1, Color.FromRgb( 86, 156, 214), "Page Type"));
+        list.Add(new(h + 1, 2, Color.FromRgb( 78, 201, 176), "First Freeblock"));
+        list.Add(new(h + 3, 2, Color.FromRgb(220, 220, 170), "Cell Count"));
+        list.Add(new(h + 5, 2, Color.FromRgb(206, 145, 120), "Cell Content Area"));
+        list.Add(new(h + 7, 1, Color.FromRgb(155, 155, 155), "Fragmented Bytes"));
+
+        int cellPtrStart = h + 8;
+        if (bp.IsInterior)
+        {
+            list.Add(new(h + 8, 4, Color.FromRgb(205, 92, 92), "Rightmost Pointer"));
+            cellPtrStart = h + 12;
+        }
+
+        for (int i = 0; i < bp.CellPointers.Length; i++)
+            list.Add(new(cellPtrStart + i * 2, 2, Color.FromRgb(106, 153, 85), $"Cell Pointer {i}"));
+
+        return list;
+    }
 }

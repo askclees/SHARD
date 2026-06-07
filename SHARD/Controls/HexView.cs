@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Media;
 
@@ -112,25 +111,34 @@ public sealed class HexView : Control
         return new Size(TotalCols * _cw, rows * _lh);
     }
 
-    // ── Tooltip hit-testing ───────────────────────────────────────────────────
+    // ── Hovered-field label (bound in the toolbar TextBlock) ─────────────────
 
-    private string? _lastTooltipLabel; // avoids redundant SetTip calls
+    public static readonly StyledProperty<string?> HoveredLabelProperty =
+        AvaloniaProperty.Register<HexView, string?>(nameof(HoveredLabel));
+
+    public string? HoveredLabel
+    {
+        get => GetValue(HoveredLabelProperty);
+        private set => SetValue(HoveredLabelProperty, value);
+    }
+
+    private string? _lastLabel;
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
         EnsureMetrics();
         var label = ShowHighlights ? HitTestHighlight(e.GetPosition(this)) : null;
-        if (label == _lastTooltipLabel) return;
-        _lastTooltipLabel = label;
-        ToolTip.SetTip(this, label);
+        if (label == _lastLabel) return;
+        _lastLabel    = label;
+        HoveredLabel  = label;
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
         base.OnPointerExited(e);
-        _lastTooltipLabel = null;
-        ToolTip.SetTip(this, null);
+        _lastLabel   = null;
+        HoveredLabel = null;
     }
 
     /// <summary>
