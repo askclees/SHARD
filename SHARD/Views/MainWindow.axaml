@@ -251,6 +251,7 @@
                                                     <DataTemplate x:DataType="vm:CellSectionViewModel">
                                                         <Expander Header="{Binding Header}"
                                                                   IsExpanded="False"
+                                                                  Expanded="OnCellSectionExpanded"
                                                                   Margin="0,2,0,0">
                                                             <ItemsControl ItemsSource="{Binding Rows}"
                                                                           Margin="8,4,0,4">

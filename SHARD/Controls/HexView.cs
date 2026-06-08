@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 
 namespace SHARD.Controls;
 
@@ -16,6 +17,7 @@ namespace SHARD.Controls;
 ///   &lt;controls:HexView Data="{Binding MyBytes}" Highlights="{Binding MyHighlights}" /&gt;
 ///
 /// Wrap in a ScrollViewer — the control reports its full unclipped size.
+/// Click to place a cursor; drag to select a range; Ctrl+C copies selected bytes as hex.
 /// </summary>
 public sealed class HexView : Control
 {
@@ -29,10 +31,9 @@ public sealed class HexView : Control
     //   16 ASCII chars                    → 16 chars
     //   "|"                               →  1 char   (closing pipe)
     //   ─────────────────────────────────   74 chars total
-    private const int ColOffset = 6;   // chars before hex section starts
-    private const int ColHex    = 6;
-    private const int ColSep    = 6 + 49;
-    private const int ColAscii  = 6 + 49 + 2;
+    private const int ColHex   = 6;
+    private const int ColSep   = 6 + 49;
+    private const int ColAscii = 6 + 49 + 2;
     private const int TotalCols = 6 + 49 + 2 + 16 + 1;  // 74
 
     private static readonly Typeface Mono = new("Courier New");
@@ -80,10 +81,15 @@ public sealed class HexView : Control
 
     static HexView()
     {
-        DataProperty.Changed.AddClassHandler<HexView>((v, _) => { v.InvalidateMeasure(); v.InvalidateVisual(); });
+        DataProperty.Changed.AddClassHandler<HexView>((v, _) => { v.ClearSelection(); v.InvalidateMeasure(); v.InvalidateVisual(); });
         HighlightsProperty.Changed.AddClassHandler<HexView>((v, _) => v.InvalidateVisual());
         UseDecimalOffsetsProperty.Changed.AddClassHandler<HexView>((v, _) => v.InvalidateVisual());
         ShowHighlightsProperty.Changed.AddClassHandler<HexView>((v, _) => v.InvalidateVisual());
+    }
+
+    public HexView()
+    {
+        Focusable = true;
     }
 
     // ── Font metrics (initialised lazily on first render) ─────────────────────
@@ -124,14 +130,76 @@ public sealed class HexView : Control
 
     private string? _lastLabel;
 
+    // ── Selection / cursor ────────────────────────────────────────────────────
+
+    private int  _selStart  = -1;
+    private int  _selEnd    = -1;
+    private bool _isDragging;
+
+    private void ClearSelection()
+    {
+        _selStart = -1;
+        _selEnd   = -1;
+    }
+
+    // ── Scroll to offset ──────────────────────────────────────────────────────
+
+    /// <summary>Scrolls the parent <see cref="ScrollViewer"/> to bring the row containing
+    /// <paramref name="byteOffset"/> to the top of the viewport.</summary>
+    public void ScrollToByteOffset(int byteOffset)
+    {
+        EnsureMetrics();
+        if (_lh <= 0) return;
+        int row = Math.Max(0, byteOffset / BytesPerRow);
+        this.FindAncestorOfType<ScrollViewer>()
+            ?.SetCurrentValue(ScrollViewer.OffsetProperty, new Vector(0, row * _lh));
+    }
+
+    // ── Pointer input ─────────────────────────────────────────────────────────
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        EnsureMetrics();
+        int hit = HitTestByte(e.GetPosition(this));
+        if (hit < 0) return;
+        _selStart   = hit;
+        _selEnd     = hit;
+        _isDragging = true;
+        e.Pointer.Capture(this);
+        Focus();
+        InvalidateVisual();
+        e.Handled = true;
+    }
+
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
         EnsureMetrics();
+
+        // Hover label
         var label = ShowHighlights ? HitTestHighlight(e.GetPosition(this)) : null;
-        if (label == _lastLabel) return;
-        _lastLabel    = label;
-        HoveredLabel  = label;
+        if (label != _lastLabel)
+        {
+            _lastLabel   = label;
+            HoveredLabel = label;
+        }
+
+        // Drag selection
+        if (!_isDragging) return;
+        int hit = HitTestByte(e.GetPosition(this));
+        if (hit >= 0 && hit != _selEnd)
+        {
+            _selEnd = hit;
+            InvalidateVisual();
+        }
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        _isDragging = false;
+        e.Pointer.Capture(null);
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
@@ -141,11 +209,66 @@ public sealed class HexView : Control
         HoveredLabel = null;
     }
 
-    /// <summary>
-    /// Returns the label of the first highlight whose drawn rectangle contains
-    /// <paramref name="pos"/>, or null if the cursor is not over any highlight.
-    /// Uses the same geometry as the renderer so hit areas match exactly.
-    /// </summary>
+    protected override async void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Key != Key.C || e.KeyModifiers != KeyModifiers.Control) return;
+
+        var data = Data;
+        if (data is null || _selStart < 0 || _selEnd < 0) { e.Handled = true; return; }
+
+        int lo = Math.Clamp(Math.Min(_selStart, _selEnd), 0, data.Length - 1);
+        int hi = Math.Clamp(Math.Max(_selStart, _selEnd), 0, data.Length - 1);
+
+        var sb = new StringBuilder((hi - lo + 1) * 3);
+        for (int i = lo; i <= hi; i++)
+        {
+            if (i > lo) sb.Append(' ');
+            sb.Append($"{data[i]:X2}");
+        }
+
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard != null)
+            await clipboard.SetTextAsync(sb.ToString());
+
+        e.Handled = true;
+    }
+
+    // ── Hit testing ───────────────────────────────────────────────────────────
+
+    private int HitTestByte(Point pos)
+    {
+        var data = Data;
+        if (data is not { Length: > 0 } || _lh <= 0) return -1;
+
+        int row = (int)(pos.Y / _lh);
+        if (row < 0) return -1;
+        int rowStart = row * BytesPerRow;
+        if (rowStart >= data.Length) return -1;
+        int rowLen = Math.Min(BytesPerRow, data.Length - rowStart);
+
+        double charX = pos.X / _cw;
+        int byteInRow;
+
+        if (charX >= ColHex && charX < ColSep)
+        {
+            double rel = charX - ColHex;
+            if (rel > 24) rel -= 1;  // skip the extra gap between the two groups of 8
+            byteInRow = Math.Clamp((int)(rel / 3), 0, rowLen - 1);
+        }
+        else if (charX >= ColAscii && charX < ColAscii + BytesPerRow)
+        {
+            byteInRow = Math.Clamp((int)(charX - ColAscii), 0, rowLen - 1);
+        }
+        else
+        {
+            return -1;
+        }
+
+        int offset = rowStart + byteInRow;
+        return offset < data.Length ? offset : -1;
+    }
+
     private string? HitTestHighlight(Point pos)
     {
         var data       = Data;
@@ -159,7 +282,6 @@ public sealed class HexView : Control
         int rowLen   = Math.Min(BytesPerRow, data.Length - rowStart);
         if (rowStart >= data.Length) return null;
 
-        // Y bounds for this row
         double rowY = row * _lh;
         if (pos.Y < rowY || pos.Y >= rowY + _lh) return null;
 
@@ -174,12 +296,10 @@ public sealed class HexView : Control
             int lo = absStart - rowStart;
             int hi = absEnd   - rowStart - 1;
 
-            // Hex section bounds (mirrors the renderer exactly)
             double hexX1 = (ColHex + lo * 3 + (lo >= 8 ? 1 : 0)) * _cw;
             double hexX2 = (ColHex + hi * 3 + (hi >= 8 ? 1 : 0) + 3) * _cw;
             if (pos.X >= hexX1 && pos.X < hexX2) return h.Label;
 
-            // ASCII section bounds
             double ascX1 = (ColAscii + lo) * _cw;
             double ascX2 = (ColAscii + hi + 1) * _cw;
             if (pos.X >= ascX1 && pos.X < ascX2) return h.Label;
@@ -201,6 +321,14 @@ public sealed class HexView : Control
         int  rows        = (data.Length + BytesPerRow - 1) / BytesPerRow;
         var  sb          = new StringBuilder(TotalCols + 4);
 
+        bool hasSelection = _selStart >= 0 && _selEnd >= 0;
+        int  selMin       = hasSelection ? Math.Min(_selStart, _selEnd) : -1;
+        int  selMax       = hasSelection ? Math.Max(_selStart, _selEnd) : -1;
+        bool isCursor     = hasSelection && _selStart == _selEnd;
+
+        var selBrush  = new SolidColorBrush(Color.FromRgb(51, 102, 153), 0.70);
+        var cursorPen = new Pen(Brushes.White, 1.0);
+
         for (int row = 0; row < rows; row++)
         {
             int    rowStart = row * BytesPerRow;
@@ -208,56 +336,63 @@ public sealed class HexView : Control
             double y        = row * _lh;
 
             // ── 1. Highlight backgrounds ──────────────────────────────────────
-            //
-            // For each highlight that overlaps this row we draw a single
-            // rectangle across the entire highlighted range — this keeps the
-            // colour contiguous over the spaces between bytes and over the
-            // mid-row gap between byte 7 and byte 8.
             if (ShowHighlights && highlights is { Count: > 0 })
             {
                 foreach (var h in highlights)
                 {
-                    // Clamp highlight to bytes present on this row
                     int absStart = Math.Max(h.Offset, rowStart);
                     int absEnd   = Math.Min(h.Offset + h.Length, rowStart + rowLen);
                     if (absStart >= absEnd) continue;
 
-                    int lo = absStart - rowStart;          // 0-based, inclusive
-                    int hi = absEnd   - rowStart - 1;      // 0-based, inclusive
+                    int lo = absStart - rowStart;
+                    int hi = absEnd   - rowStart - 1;
 
                     var brush = new SolidColorBrush(h.Colour, 0.40);
 
-                    // Hex section: one rect from start of `lo` to end of `hi` (including trailing space).
-                    // The (i >= 8 ? 1 : 0) term accounts for the extra gap between groups;
-                    // drawing from lo..hi in one rectangle automatically covers that gap.
                     double hexX1 = (ColHex + lo * 3 + (lo >= 8 ? 1 : 0)) * _cw;
                     double hexX2 = (ColHex + hi * 3 + (hi >= 8 ? 1 : 0) + 3) * _cw;
                     ctx.FillRectangle(brush, new Rect(hexX1, y, hexX2 - hexX1, _lh));
 
-                    // ASCII section: one rect from start of `lo` to end of `hi`
                     double ascX1 = (ColAscii + lo) * _cw;
                     double ascX2 = (ColAscii + hi + 1) * _cw;
                     ctx.FillRectangle(brush, new Rect(ascX1, y, ascX2 - ascX1, _lh));
                 }
             }
 
-            // ── 2. Row text ───────────────────────────────────────────────────
+            // ── 2. Selection background ───────────────────────────────────────
+            if (hasSelection && !isCursor)
+            {
+                int absStart = Math.Max(selMin, rowStart);
+                int absEnd   = Math.Min(selMax + 1, rowStart + rowLen);
+                if (absStart < absEnd)
+                {
+                    int lo = absStart - rowStart;
+                    int hi = absEnd   - rowStart - 1;
+
+                    double hexX1 = (ColHex + lo * 3 + (lo >= 8 ? 1 : 0)) * _cw;
+                    double hexX2 = (ColHex + hi * 3 + (hi >= 8 ? 1 : 0) + 3) * _cw;
+                    ctx.FillRectangle(selBrush, new Rect(hexX1, y, hexX2 - hexX1, _lh));
+
+                    double ascX1 = (ColAscii + lo) * _cw;
+                    double ascX2 = (ColAscii + hi + 1) * _cw;
+                    ctx.FillRectangle(selBrush, new Rect(ascX1, y, ascX2 - ascX1, _lh));
+                }
+            }
+
+            // ── 3. Row text ───────────────────────────────────────────────────
             sb.Clear();
 
-            // Offset column — 6 chars in both modes
             if (decOffsets)
-                sb.Append($"{rowStart:D5} ");   // "DDDDD " — up to 99 999
+                sb.Append($"{rowStart:D5} ");
             else
-                sb.Append($"{rowStart:X4}  ");  // "XXXX  "
+                sb.Append($"{rowStart:X4}  ");
 
-            // Hex bytes (two groups of 8, separated by an extra space)
             for (int i = 0; i < BytesPerRow; i++)
             {
                 sb.Append(i < rowLen ? $"{data[rowStart + i]:X2} " : "   ");
                 if (i == 7) sb.Append(' ');
             }
 
-            // ASCII column
             sb.Append(" |");
             for (int i = 0; i < rowLen; i++)
             {
@@ -269,6 +404,18 @@ public sealed class HexView : Control
             var ft = new FormattedText(sb.ToString(), CultureInfo.InvariantCulture,
                                        FlowDirection.LeftToRight, Mono, Em, Brushes.White);
             ctx.DrawText(ft, new Point(0, y));
+
+            // ── 4. Cursor outline ─────────────────────────────────────────────
+            if (isCursor && _selStart >= rowStart && _selStart < rowStart + rowLen)
+            {
+                int byteInRow = _selStart - rowStart;
+
+                double hexX = (ColHex + byteInRow * 3 + (byteInRow >= 8 ? 1 : 0)) * _cw;
+                ctx.DrawRectangle(null, cursorPen, new Rect(hexX, y, 2 * _cw, _lh));
+
+                double ascX = (ColAscii + byteInRow) * _cw;
+                ctx.DrawRectangle(null, cursorPen, new Rect(ascX, y, _cw, _lh));
+            }
         }
     }
 }

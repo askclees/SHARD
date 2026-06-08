@@ -28,8 +28,20 @@ public sealed class SqliteValue
         _ => null
     };
 
+    public SqliteValue(int value)
+    {
+        StorageClass = SqliteStorageClass.Integer;
+        IntegerValue = value;
+    }
+    
+    public SqliteValue(long value)
+    {
+        StorageClass = SqliteStorageClass.Integer;
+        IntegerValue = value;
+    }    
+
     // ── Static factories ─────────────────────────────────────────────────────
-    public static readonly SqliteValue Null = new() { StorageClass = SqliteStorageClass.Null };
+    //public static readonly SqliteValue Null = new() { StorageClass = SqliteStorageClass.Null };
 
     public static SqliteValue FromInteger(long value) =>
         throw new NotImplementedException();

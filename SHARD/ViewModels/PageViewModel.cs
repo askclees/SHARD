@@ -4,6 +4,7 @@ using Avalonia.Media;
 using SHARD.Controls;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
+using SHARD.Core.Records;
 
 namespace SHARD.ViewModels;
 
@@ -68,7 +69,7 @@ public sealed class PageViewModel : ViewModelBase
         {
             var sections = new List<CellSectionViewModel>(tlp.Cells.Count);
             for (int i = 0; i < tlp.Cells.Count; i++)
-                sections.Add(new CellSectionViewModel(tlp.Cells[i], i));
+                sections.Add(new CellSectionViewModel(tlp.Cells[i], i, tlp.CellPointers[i]));
             CellSections = sections;
         }
         else
@@ -121,6 +122,52 @@ public sealed class PageViewModel : ViewModelBase
         for (int i = 0; i < bp.CellPointers.Length; i++)
             list.Add(new(cellPtrStart + i * 2, 2, Color.FromRgb(106, 153, 85), $"Cell Pointer {i}"));
 
+        if (page is TableBTreeLeafPage tlp)
+        {
+            for (int j = 0; j < tlp.Cells.Count; j++)
+            {
+                var cell      = tlp.Cells[j];
+                int cellStart = tlp.CellPointers[j];
+                int dataStart = cellStart
+                                + cell.SizeOfPayload.Length
+                                + cell.RowId.Length
+                                + (int)cell.HeaderSize.Value;
+
+                int fieldOffset = dataStart;
+                for (int i = 0; i < cell.HeaderEntries.Count; i++)
+                {
+                    int len = cell.HeaderEntries[i].ContentLength;
+                    if (len > 0)
+                        list.Add(new HexHighlight(fieldOffset, len, ColumnColour(i), $"Row {cell.RowId.Value} · Col {i}"));
+                    fieldOffset += len;
+                }
+            }
+        }
+
         return list;
+    }
+
+    private static Color ColumnColour(int columnIndex)
+    {
+        double hue = columnIndex * 137.508 % 360.0;
+        const double s = 0.65;
+        const double l = 0.55;
+
+        double c = (1.0 - Math.Abs(2.0 * l - 1.0)) * s;
+        double x = c * (1.0 - Math.Abs(hue / 60.0 % 2.0 - 1.0));
+        double m = l - c / 2.0;
+
+        double r, g, b;
+        if      (hue < 60)  { r = c; g = x; b = 0; }
+        else if (hue < 120) { r = x; g = c; b = 0; }
+        else if (hue < 180) { r = 0; g = c; b = x; }
+        else if (hue < 240) { r = 0; g = x; b = c; }
+        else if (hue < 300) { r = x; g = 0; b = c; }
+        else                { r = c; g = 0; b = x; }
+
+        return Color.FromRgb(
+            (byte)((r + m) * 255),
+            (byte)((g + m) * 255),
+            (byte)((b + m) * 255));
     }
 }

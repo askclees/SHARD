@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using SHARD.Controls;
 using SHARD.ViewModels;
 
 namespace SHARD.Views;
@@ -65,6 +66,14 @@ public partial class MainWindow : Window
         if (file is not null)
             Vm.LoadFile(file.Path.LocalPath);
         e.Handled = true;
+    }
+
+    // ── Cell section expand → scroll hex ─────────────────────────────────────
+
+    private void OnCellSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
+        this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
     // ── Convenience ──────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using SHARD.Core.Enums;
 using SHARD.Core.Records;
 
 namespace SHARD.ViewModels;
@@ -7,9 +8,11 @@ public sealed class CellSectionViewModel
 {
     public string Header { get; }
     public IReadOnlyList<InfoRow> Rows { get; }
+    public int ByteOffset { get; }
 
-    public CellSectionViewModel(BTreeLeafCell cell, int index)
+    public CellSectionViewModel(BTreeLeafCell cell, int index, int byteOffset)
     {
+        ByteOffset = byteOffset;
         Header = $"Cell {index}  —  RowId: {cell.RowId.Value}";
 
         var rows = new List<InfoRow>
@@ -22,7 +25,12 @@ public sealed class CellSectionViewModel
         for (int i = 0; i < cell.HeaderEntries.Count; i++)
         {
             var entry = cell.HeaderEntries[i];
-            rows.Add(new InfoRow($"Column {i}", $"{entry.Kind}  ({entry.ContentLength} bytes)"));
+            var sv    = cell.FieldVaues[i];
+
+            string valStr = sv?.Value?.ToString()
+                ?? (entry.Kind == SerialTypeKind.Null ? "NULL" : "—");
+
+            rows.Add(new InfoRow($"Column {i}", $"{entry.Kind}  ({entry.ContentLength} bytes)  =  {valStr}"));
         }
 
         Rows = rows;
