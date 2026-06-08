@@ -1,0 +1,29 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:SHARD.ViewModels"
+             x:Class="SHARD.Controls.DataInspectorControl">
+
+    <Border BorderThickness="1,0,0,0" Width="185">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="RowsControl" Margin="8,6,8,8">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:InfoRow">
+                        <Grid ColumnDefinitions="76,*" Margin="0,2">
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding Label}"
+                                       FontSize="11"
+                                       Opacity="0.55" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Value}"
+                                       FontFamily="Courier New"
+                                       FontSize="11"
+                                       TextWrapping="NoWrap" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Border>
+
+</UserControl>

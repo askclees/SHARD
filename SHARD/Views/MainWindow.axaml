@@ -310,16 +310,21 @@
                                             </StackPanel>
                                         </Border>
 
-                                        <ScrollViewer Grid.Row="1"
-                                                      VerticalScrollBarVisibility="Auto"
-                                                      HorizontalScrollBarVisibility="Auto">
-                                            <controls:HexView x:Name="PageHexView"
-                                                              Margin="14,8,14,16"
-                                                              Data="{Binding SelectedPage.PageBytes}"
-                                                              Highlights="{Binding SelectedPage.PageHighlights}"
-                                                              UseDecimalOffsets="{Binding #PageOffsetToggle.IsChecked}"
-                                                              ShowHighlights="{Binding #PageHighlightToggle.IsChecked}" />
-                                        </ScrollViewer>
+                                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                            <ScrollViewer Grid.Column="0"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Auto">
+                                                <controls:HexView x:Name="PageHexView"
+                                                                  Margin="14,8,14,16"
+                                                                  Data="{Binding SelectedPage.PageBytes}"
+                                                                  Highlights="{Binding SelectedPage.PageHighlights}"
+                                                                  UseDecimalOffsets="{Binding #PageOffsetToggle.IsChecked}"
+                                                                  ShowHighlights="{Binding #PageHighlightToggle.IsChecked}" />
+                                            </ScrollViewer>
+                                            <controls:DataInspectorControl Grid.Column="1"
+                                                                           Data="{Binding #PageHexView.Data}"
+                                                                           Offset="{Binding #PageHexView.CursorOffset}" />
+                                        </Grid>
 
                                     </Grid>
 
@@ -452,16 +457,21 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <ScrollViewer Grid.Row="1"
-                                                  VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Auto">
-                                        <controls:HexView x:Name="SearchHexView"
-                                                          Margin="14,8,14,16"
-                                                          Data="{Binding SearchTab.SelectedPageBytes}"
-                                                          Highlights="{Binding SearchTab.SelectedHighlights}"
-                                                          UseDecimalOffsets="{Binding #SearchOffsetToggle.IsChecked}"
-                                                          ShowHighlights="{Binding #SearchHighlightToggle.IsChecked}" />
-                                    </ScrollViewer>
+                                    <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                        <ScrollViewer Grid.Column="0"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Auto">
+                                            <controls:HexView x:Name="SearchHexView"
+                                                              Margin="14,8,14,16"
+                                                              Data="{Binding SearchTab.SelectedPageBytes}"
+                                                              Highlights="{Binding SearchTab.SelectedHighlights}"
+                                                              UseDecimalOffsets="{Binding #SearchOffsetToggle.IsChecked}"
+                                                              ShowHighlights="{Binding #SearchHighlightToggle.IsChecked}" />
+                                        </ScrollViewer>
+                                        <controls:DataInspectorControl Grid.Column="1"
+                                                                       Data="{Binding #SearchHexView.Data}"
+                                                                       Offset="{Binding #SearchHexView.CursorOffset}" />
+                                    </Grid>
 
                                 </Grid>
                             </Grid>

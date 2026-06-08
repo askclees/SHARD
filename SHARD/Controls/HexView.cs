@@ -79,6 +79,16 @@ public sealed class HexView : Control
         set => SetValue(ShowHighlightsProperty, value);
     }
 
+    public static readonly StyledProperty<int> CursorOffsetProperty =
+        AvaloniaProperty.Register<HexView, int>(nameof(CursorOffset), defaultValue: -1);
+
+    /// <summary>Byte offset of the last clicked position, or -1 when no cursor is set.</summary>
+    public int CursorOffset
+    {
+        get => GetValue(CursorOffsetProperty);
+        private set => SetValue(CursorOffsetProperty, value);
+    }
+
     static HexView()
     {
         DataProperty.Changed.AddClassHandler<HexView>((v, _) => { v.ClearSelection(); v.InvalidateMeasure(); v.InvalidateVisual(); });
@@ -138,8 +148,9 @@ public sealed class HexView : Control
 
     private void ClearSelection()
     {
-        _selStart = -1;
-        _selEnd   = -1;
+        _selStart    = -1;
+        _selEnd      = -1;
+        CursorOffset = -1;
     }
 
     // ── Scroll to offset ──────────────────────────────────────────────────────
@@ -163,9 +174,10 @@ public sealed class HexView : Control
         EnsureMetrics();
         int hit = HitTestByte(e.GetPosition(this));
         if (hit < 0) return;
-        _selStart   = hit;
-        _selEnd     = hit;
-        _isDragging = true;
+        _selStart    = hit;
+        _selEnd      = hit;
+        CursorOffset = hit;
+        _isDragging  = true;
         e.Pointer.Capture(this);
         Focus();
         InvalidateVisual();
