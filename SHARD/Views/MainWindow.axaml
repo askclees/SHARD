@@ -329,6 +329,146 @@
                         </Grid>
                     </TabItem>
 
+                    <!-- ── Tab 3: Search ── -->
+                    <TabItem Header="Search">
+                        <Grid RowDefinitions="Auto,Auto,Auto,*">
+
+                            <!-- Search bar -->
+                            <Border Grid.Row="0"
+                                    Padding="10,6"
+                                    BorderThickness="0,0,0,1">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBox Grid.Column="0"
+                                             Text="{Binding SearchTab.Pattern}"
+                                             Watermark="Regular expression  (e.g.  CREATE TABLE|\x00\xFF)"
+                                             FontFamily="Courier New"
+                                             FontSize="12"
+                                             KeyDown="OnSearchBoxKeyDown" />
+                                    <Button Grid.Column="1"
+                                            Content="Search"
+                                            Command="{Binding SearchTab.SearchCommand}"
+                                            Padding="16,4"
+                                            Margin="6,0,0,0" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Error / summary row -->
+                            <TextBlock Grid.Row="1"
+                                       Text="{Binding SearchTab.ErrorMessage}"
+                                       IsVisible="{Binding SearchTab.ErrorMessage,
+                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                       Foreground="#E05C5C"
+                                       Padding="10,4"
+                                       FontSize="11" />
+                            <TextBlock Grid.Row="2"
+                                       Text="{Binding SearchTab.Summary}"
+                                       IsVisible="{Binding SearchTab.HasResults}"
+                                       Opacity="0.55"
+                                       Padding="10,2"
+                                       FontSize="11" />
+
+                            <!-- Placeholder: not searched yet -->
+                            <TextBlock Grid.Row="3"
+                                       IsVisible="{Binding SearchTab.ShowPlaceholder}"
+                                       Text="Enter a pattern above and click Search"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Opacity="0.35"
+                                       FontSize="13" />
+
+                            <!-- Placeholder: no results -->
+                            <TextBlock Grid.Row="3"
+                                       IsVisible="{Binding SearchTab.ShowNoResults}"
+                                       Text="No matches found"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Opacity="0.35"
+                                       FontSize="13" />
+
+                            <!-- Results: grouped list + hex view -->
+                            <Grid Grid.Row="3"
+                                  IsVisible="{Binding SearchTab.HasResults}"
+                                  ColumnDefinitions="260,4,*">
+
+                                <!-- Left: page groups -->
+                                <ScrollViewer Grid.Column="0"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding SearchTab.Results}"
+                                                  Margin="4,4">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:SearchPageGroupViewModel">
+                                                <Expander Header="{Binding Header}"
+                                                          IsExpanded="False"
+                                                          Expanded="OnSearchGroupExpanded"
+                                                          Margin="0,2,0,0">
+                                                    <ItemsControl ItemsSource="{Binding Hits}"
+                                                                  Margin="8,2,0,2">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:SearchHitViewModel">
+                                                                <Button Content="{Binding Preview}"
+                                                                        Click="OnSearchHitClicked"
+                                                                        HorizontalAlignment="Stretch"
+                                                                        HorizontalContentAlignment="Left"
+                                                                        Padding="6,3"
+                                                                        Margin="0,1"
+                                                                        FontFamily="Courier New"
+                                                                        FontSize="11" />
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </Expander>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+
+                                <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                                <!-- Right: toolbar + hex view -->
+                                <Grid Grid.Column="2" RowDefinitions="Auto,*">
+
+                                    <Border Grid.Row="0"
+                                            Padding="8,4"
+                                            BorderThickness="0,0,0,1">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ToggleButton x:Name="SearchOffsetToggle"
+                                                          Content="Dec Offsets"
+                                                          IsChecked="False"
+                                                          Padding="8,2"
+                                                          FontSize="11" />
+                                            <ToggleButton x:Name="SearchHighlightToggle"
+                                                          Content="Highlights"
+                                                          IsChecked="True"
+                                                          Padding="8,2"
+                                                          FontSize="11" />
+                                            <TextBlock Text="{Binding #SearchHexView.HoveredLabel}"
+                                                       IsVisible="{Binding #SearchHexView.HoveredLabel,
+                                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="11"
+                                                       Opacity="0.75"
+                                                       Margin="8,0,0,0" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <ScrollViewer Grid.Row="1"
+                                                  VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Auto">
+                                        <controls:HexView x:Name="SearchHexView"
+                                                          Margin="14,8,14,16"
+                                                          Data="{Binding SearchTab.SelectedPageBytes}"
+                                                          Highlights="{Binding SearchTab.SelectedHighlights}"
+                                                          UseDecimalOffsets="{Binding #SearchOffsetToggle.IsChecked}"
+                                                          ShowHighlights="{Binding #SearchHighlightToggle.IsChecked}" />
+                                    </ScrollViewer>
+
+                                </Grid>
+                            </Grid>
+
+                        </Grid>
+                    </TabItem>
+
                 </TabControl>
             </Grid>
         </Grid>

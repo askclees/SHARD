@@ -60,12 +60,20 @@ public sealed class MainWindowViewModel : ViewModelBase
         private set => this.RaiseAndSetIfChanged(ref _headerHighlights, value);
     }
 
+    // ── Search tab ────────────────────────────────────────────────────────────
+    public SearchViewModel SearchTab { get; }
+
     // ── Status bar ────────────────────────────────────────────────────────
     private string _statusText = "Open a SQLite database to begin.";
     public string StatusText
     {
         get => _statusText;
         private set => this.RaiseAndSetIfChanged(ref _statusText, value);
+    }
+
+    public MainWindowViewModel()
+    {
+        SearchTab = new SearchViewModel(Pages);
     }
 
     // ── Actions ───────────────────────────────────────────────────────────
@@ -172,6 +180,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SelectedPage = null;
         HasDatabase  = false;
         StatusText   = "Open a SQLite database to begin.";
+        SearchTab.Clear();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

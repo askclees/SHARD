@@ -76,6 +76,26 @@ public partial class MainWindow : Window
         this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
+    // ── Search ───────────────────────────────────────────────────────────────
+
+    private void OnSearchBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+            Vm.SearchTab.SearchCommand.Execute(null);
+    }
+
+    private void OnSearchGroupExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: SearchPageGroupViewModel group }) return;
+        Vm.SearchTab.SelectedGroup = group;
+    }
+
+    private void OnSearchHitClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: SearchHitViewModel hit }) return;
+        this.FindControl<HexView>("SearchHexView")?.ScrollToByteOffset(hit.Offset);
+    }
+
     // ── Convenience ──────────────────────────────────────────────────────────
 
     private MainWindowViewModel Vm => (MainWindowViewModel)DataContext!;
