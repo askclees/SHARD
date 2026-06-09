@@ -14,12 +14,12 @@ public class BTreeLeafCell
 
     public int OverflowPage = 0;
 
-    public BTreeLeafCell(byte[] data, Varint PayloadSize)
+    public BTreeLeafCell(byte[] data, Varint payloadSize)
     {
         int offset = 0;
         SizeOfPayload = new Varint(data.AsSpan(offset..9));
         // Check payload sizes match
-        if (!SizeOfPayload.Equals(PayloadSize))
+        if (!SizeOfPayload.Equals(payloadSize))
         {
             throw new InvalidDataException("Size Of Payload does not matched passed version");
         }
@@ -41,7 +41,7 @@ public class BTreeLeafCell
         {
             recordLength += entry.ContentLength;
         }
-        if (recordLength != PayloadSize.Value)
+        if (recordLength != payloadSize.Value)
         {
             throw new InvalidDataException("Payload does not match size of fields");
         }
@@ -56,48 +56,43 @@ public class BTreeLeafCell
                     FieldVaues.Add(null);
                     break;
                 case SerialTypeKind.Int0:
-                    FieldVaues.Add(new SqliteValue(0L));
+                    FieldVaues.Add(new SqliteValue(0L,0));
                     break;
                 case SerialTypeKind.Int1:
-                    FieldVaues.Add(new SqliteValue(1L));
+                    FieldVaues.Add(new SqliteValue(1L,0));
+                    break;
+                case SerialTypeKind.Integer:
+                    FieldVaues.Add(GetIntegerValue(data[recordOffset..(recordOffset+entry.ContentLength) ]));
                     break;
                 default:
                     FieldVaues.Add(null);
                     break;
-                case SerialTypeKind.Integer:
-                    switch (entry.ContentLength)
-                    {
-                        case 1:
-                            FieldVaues.Add(new SqliteValue((sbyte)data[recordOffset]));
-                            break;
-                        case 2:
-                            FieldVaues.Add(new SqliteValue(
-                                BinaryPrimitives.ReadInt16BigEndian(data[recordOffset..(recordOffset + 2)].AsSpan())));
-                            break;
-                        case 3:
-                            FieldVaues.Add(new SqliteValue(ConvertNonStandardLengthInt(3, data[recordOffset..(recordOffset+3)].AsSpan())));
-                            break;
-                        case 4:
-                            FieldVaues.Add(new SqliteValue(
-                                BinaryPrimitives.ReadInt32BigEndian(data[recordOffset..(recordOffset + 4)])));
-                            break;
-                        case 6:
-                            FieldVaues.Add(new SqliteValue(ConvertNonStandardLengthLong(6, data[recordOffset..(recordOffset+6)].AsSpan())));
-                            break;
-                        case 8:
-                            FieldVaues.Add(new SqliteValue(
-                                BinaryPrimitives.ReadInt64BigEndian(data[recordOffset..(recordOffset + 8)])));
-                            break;
-
-                    }
-
-                    break;
             }
-
             recordOffset += entry.ContentLength;
         }
     }
 
+    private static SqliteValue GetIntegerValue(ReadOnlySpan<byte> data)
+    {
+        switch (data.Length)
+        {
+            case 1:
+                return new SqliteValue((sbyte)data[0], data.Length);
+            case 2:
+                return new SqliteValue(BinaryPrimitives.ReadInt16BigEndian(data), data.Length);
+            case 3:
+                return new SqliteValue(ConvertNonStandardLengthInt(3, data), data.Length);
+            case 4:
+                return new SqliteValue(BinaryPrimitives.ReadInt32BigEndian(data), data.Length);
+            case 6:
+                return new SqliteValue(ConvertNonStandardLengthLong(6, data), data.Length);
+            case 8:
+                return new SqliteValue(BinaryPrimitives.ReadInt64BigEndian(data), data.Length);
+            default:
+                throw new InvalidDataException("Unknown length of data");
+        }
+    }
+    
     private static int ConvertNonStandardLengthInt(int size, ReadOnlySpan<byte> data)
     {
         if (data.Length != size)

@@ -19,7 +19,7 @@ public sealed class Varint
         long tempValue = 0;
         for (int i = 0; i < MAX_VARINT_LENGTH; i++)
         {
-            int current = paddedData[i];
+            long current = paddedData[i];
             //if greater than or equal to, more bytes to come
             if (current >= 128)
             {

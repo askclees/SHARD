@@ -9,6 +9,7 @@
       <PackageReference Include="Avalonia.Desktop" Version="11.2.5" />
       <PackageReference Include="Avalonia.ReactiveUI" Version="11.2.5" />
       <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.5" />
+      <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.1" />
     </ItemGroup>
 
     <PropertyGroup>
