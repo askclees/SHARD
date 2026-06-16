@@ -76,22 +76,27 @@ public sealed class SqliteForensicDatabase : IDisposable
 
     /// <summary>
     /// Walks an overflow page chain starting at <paramref name="firstPage"/>, collecting up
-    /// to <paramref name="totalBytesNeeded"/> bytes of payload data.
+    /// to <paramref name="totalBytesNeeded"/> bytes of payload data along with per-page
+    /// fragment metadata (page number, next pointer, fragment length) for forensic display.
     /// </summary>
-    private byte[] ReadOverflowChain(uint firstPage, int totalBytesNeeded)
+    private (byte[] Data, List<OverflowFragment> Fragments) ReadOverflowChain(uint firstPage, int totalBytesNeeded)
     {
         var result = new byte[totalBytesNeeded];
+        var fragments = new List<OverflowFragment>();
         int written = 0;
         uint pageNum = firstPage;
+        int sequence = 1;
         while (pageNum != 0 && written < totalBytesNeeded)
         {
             var page = ReadOverflowPage(pageNum);
             int toCopy = Math.Min(page.PayloadData.Length, totalBytesNeeded - written);
             page.PayloadData[..toCopy].CopyTo(result.AsMemory(written));
+            fragments.Add(new OverflowFragment(sequence, pageNum, page.NextOverflowPage, toCopy));
             written += toCopy;
             pageNum = page.NextOverflowPage;
+            sequence++;
         }
-        return result;
+        return (result, fragments);
     }
 
     /// <summary>
@@ -148,7 +153,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     {
         if (cell.OverflowPage != 0)
         {
-            var overflowBytes = ReadOverflowChain(cell.OverflowPage, cell.OverflowBytesNeeded);
+            var (overflowBytes, _) = ReadOverflowChain(cell.OverflowPage, cell.OverflowBytesNeeded);
             cell.ResolveOverflow(overflowBytes);
         }
 
@@ -202,6 +207,55 @@ public sealed class SqliteForensicDatabase : IDisposable
         return retVal;
     }
     
+    /// <summary>
+    /// Read and return all rows from a table's B-tree given its root page, resolving overflow
+    /// chains and decorating each row with the forensic provenance of its primary cell.
+    /// </summary>
+    public IEnumerable<TableRow> ReadTableRows(uint rootPage)
+    {
+        foreach (var (cell, pageNum, cellOffset) in ReadTableCells(rootPage))
+        {
+            List<OverflowFragment> fragments = [];
+            if (cell.OverflowPage != 0)
+            {
+                var (overflowBytes, frags) = ReadOverflowChain(cell.OverflowPage, cell.OverflowBytesNeeded);
+                cell.ResolveOverflow(overflowBytes);
+                fragments = frags;
+            }
+
+            yield return new TableRow
+            {
+                RowId             = cell.RowId.Value,
+                FieldValues       = cell.FieldValues,
+                PageNumber        = pageNum,
+                CellOffset        = cellOffset,
+                CellLength        = cell.CellByteLengthOnPage,
+                OverflowFragments = fragments,
+            };
+        }
+    }
+
+    private IEnumerable<(BTreeLeafCell Cell, uint PageNumber, int CellOffset)> ReadTableCells(uint rootPage)
+    {
+        SqlitePage page = ReadPage(rootPage);
+        if (page is TableBTreeLeafPage leaf)
+        {
+            for (int i = 0; i < leaf.Cells.Count; i++)
+                yield return (leaf.Cells[i], rootPage, leaf.CellPointers[i]);
+            yield break;
+        }
+
+        if (page is TableBTreeInteriorPage)
+        {
+            foreach (uint leafPageNum in GetLeafPageNumbers(rootPage))
+            {
+                var leafPage = (TableBTreeLeafPage)ReadPage(leafPageNum);
+                for (int i = 0; i < leafPage.Cells.Count; i++)
+                    yield return (leafPage.Cells[i], leafPageNum, leafPage.CellPointers[i]);
+            }
+        }
+    }
+
     /// <summary>Enumerate every freelist trunk and its leaf pages.</summary>
     public IEnumerable<FreelistPage> ReadFreelistChain() =>
         throw new NotImplementedException();

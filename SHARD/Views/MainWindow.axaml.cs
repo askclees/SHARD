@@ -22,10 +22,11 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         // Wire up named controls
-        this.FindControl<MenuItem>("MenuOpen")!.Click  += OnOpenClick;
-        this.FindControl<MenuItem>("MenuClose")!.Click += OnCloseClick;
-        this.FindControl<MenuItem>("MenuExit")!.Click  += (_, _) => Close();
-        this.FindControl<Button>("BtnOpen")!.Click     += OnOpenClick;
+        this.FindControl<MenuItem>("MenuOpen")!.Click          += OnOpenClick;
+        this.FindControl<MenuItem>("MenuClose")!.Click         += OnCloseClick;
+        this.FindControl<MenuItem>("MenuCreateProject")!.Click += OnCreateProjectClick;
+        this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
+        this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
 
         // Drag-and-drop
         AddHandler(DragDrop.DropEvent,     OnDrop);
@@ -61,6 +62,15 @@ public partial class MainWindow : Window
 
     private void OnCloseClick(object? sender, RoutedEventArgs e) =>
         Vm.CloseFile();
+
+    private async void OnCreateProjectClick(object? sender, RoutedEventArgs e)
+    {
+        var dialog = new CreateProjectWindow();
+        var path = await dialog.ShowDialog<string?>(this);
+
+        if (path is not null)
+            Vm.CreateProject(path);
+    }
 
     // ── Drag-and-drop ────────────────────────────────────────────────────────
 

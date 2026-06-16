@@ -1,0 +1,45 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="SHARD.Views.CreateProjectWindow"
+        Title="Create Project"
+        Width="520" Height="160"
+        MinWidth="420" MinHeight="160"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner">
+
+    <Grid RowDefinitions="*,Auto" Margin="16">
+
+        <StackPanel Grid.Row="0" Spacing="8">
+            <TextBlock Text="Project folder"
+                       FontWeight="SemiBold"
+                       FontSize="13" />
+            <TextBlock Text="A manifest and shadow database will be created in this folder."
+                       Opacity="0.6"
+                       FontSize="12" />
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0"
+                         Name="PathBox"
+                         Watermark="/path/to/project"
+                         FontSize="13" />
+                <Button Grid.Column="1"
+                        Name="BrowseButton"
+                        Content="Browse…"
+                        Margin="6,0,0,0" />
+            </Grid>
+            <TextBlock Name="ErrorText"
+                       Foreground="#E05C5C"
+                       FontSize="11"
+                       IsVisible="False" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,12,0,0">
+            <Button Name="CancelButton" Content="Cancel" Padding="14,4" />
+            <Button Name="CreateButton" Content="Create" Padding="14,4" />
+        </StackPanel>
+
+    </Grid>
+</Window>

@@ -5,12 +5,15 @@ using Avalonia.Media;
 using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
+using SHARD.Core.Shadow;
 
 namespace SHARD.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase
 {
     // ── Loaded database ───────────────────────────────────────────────────
+    private string? _currentFilePath;
+
     private SqliteForensicDatabase? _database;
     public SqliteForensicDatabase? Database
     {
@@ -100,6 +103,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     // ── Search tab ────────────────────────────────────────────────────────────
     public SearchViewModel SearchTab { get; }
 
+    // ── Shadow project ───────────────────────────────────────────────────
+    private ShadowProject? _project;
+    public ShadowProject? Project
+    {
+        get => _project;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _project, value);
+            this.RaisePropertyChanged(nameof(HasProject));
+            this.RaisePropertyChanged(nameof(ProjectFolderPath));
+        }
+    }
+    public bool HasProject => Project is not null;
+    public string? ProjectFolderPath => Project?.ProjectFolder;
+
     // ── Status bar ────────────────────────────────────────────────────────
     private string _statusText = "Open a SQLite database to begin.";
     public string StatusText
@@ -130,6 +148,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var db = SqliteForensicDatabase.Open(path);
             Database = db;
+            _currentFilePath = path;
 
             var page1 = db.ReadPage(1);
             HeaderBytes      = page1.Data[..100];
@@ -213,6 +232,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         Database?.Dispose();
         Database = null;
+        _currentFilePath = null;
         Pages.Clear();
         DatabaseInfoRows.Clear();
         SchemaRows.Clear();
@@ -221,8 +241,38 @@ public sealed class MainWindowViewModel : ViewModelBase
         HeaderHighlights = [];
         SelectedPage = null;
         HasDatabase  = false;
+        Project      = null;
         StatusText   = "Open a SQLite database to begin.";
         SearchTab.Clear();
+    }
+
+    /// <summary>
+    /// Create a project folder containing a manifest and a shadow database mirroring
+    /// the currently-loaded evidence file's table structure.
+    /// </summary>
+    public void CreateProject(string folderPath)
+    {
+        if (Database is null || _currentFilePath is null) return;
+
+        try
+        {
+            Project = ShadowProject.Create(folderPath, _currentFilePath, Database);
+            StatusText = $"Project created at {folderPath}";
+        }
+        catch (Exception ex)
+        {
+            string logPath = Path.Combine(folderPath, "error.log");
+            try
+            {
+                File.WriteAllText(logPath, ex.ToString());
+                StatusText = $"Error creating project: {ex.Message} (see {logPath})";
+            }
+            catch
+            {
+                // Folder may not exist yet (e.g. failed before Directory.CreateDirectory) — fall back to status text only.
+                StatusText = $"Error creating project: {ex.Message}";
+            }
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

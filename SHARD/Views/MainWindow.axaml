@@ -24,6 +24,10 @@
                           IsEnabled="{Binding HasDatabase}"
                           InputGesture="Ctrl+W" />
                 <Separator />
+                <MenuItem Header="Create _Project…"
+                          Name="MenuCreateProject"
+                          IsEnabled="{Binding HasDatabase}" />
+                <Separator />
                 <MenuItem Header="E_xit"
                           Name="MenuExit" />
             </MenuItem>
@@ -33,9 +37,18 @@
         <Border DockPanel.Dock="Bottom"
                 Padding="10,4"
                 BorderThickness="0,1,0,0">
-            <TextBlock Text="{Binding StatusText}"
-                       FontSize="12"
-                       Opacity="0.75" />
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0"
+                           Text="{Binding StatusText}"
+                           FontSize="12"
+                           Opacity="0.75" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding ProjectFolderPath, StringFormat='Project: {0}'}"
+                           IsVisible="{Binding HasProject}"
+                           FontSize="12"
+                           Opacity="0.6"
+                           Margin="12,0,0,0" />
+            </Grid>
         </Border>
 
         <!-- ═══ Content area (switches between empty-state and main view) ═══ -->

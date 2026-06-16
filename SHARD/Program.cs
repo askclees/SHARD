@@ -1,5 +1,6 @@
 ﻿using Avalonia;
 using Avalonia.ReactiveUI;
+using Avalonia.X11;
 
 namespace SHARD;
 
@@ -12,6 +13,7 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<App>()
                   .UsePlatformDetect()
+                  .With(new X11PlatformOptions { OverlayPopups = true })
                   .LogToTrace()
                   .UseReactiveUI();
 }
