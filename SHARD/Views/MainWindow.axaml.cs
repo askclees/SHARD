@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
@@ -25,6 +26,7 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuOpen")!.Click          += OnOpenClick;
         this.FindControl<MenuItem>("MenuClose")!.Click         += OnCloseClick;
         this.FindControl<MenuItem>("MenuCreateProject")!.Click += OnCreateProjectClick;
+        this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
 
@@ -36,13 +38,47 @@ public partial class MainWindow : Window
         DataContextChanged += (_, _) =>
         {
             if (DataContext is MainWindowViewModel vm)
+            {
                 vm.PropertyChanged += (_, e) =>
                 {
                     if (e.PropertyName == nameof(MainWindowViewModel.SelectedSchemaRow) && vm.SelectedSchemaRow is { } row)
                         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                             this.FindControl<HexView>("SchemaHexView")?.ScrollToByteOffset(row.CellOffset));
                 };
+
+                vm.QueryTab.ResultsUpdated += (_, _) => RebuildQueryResultColumns(vm.QueryTab);
+            }
         };
+    }
+
+    // ── Query ────────────────────────────────────────────────────────────────
+
+    private void RebuildQueryResultColumns(QueryViewModel queryTab)
+    {
+        var grid = this.FindControl<DataGrid>("ResultsGrid");
+        if (grid is null) return;
+
+        grid.Columns.Clear();
+        for (int i = 0; i < queryTab.ColumnNames.Count; i++)
+        {
+            grid.Columns.Add(new DataGridTextColumn
+            {
+                Header = queryTab.ColumnNames[i],
+                Binding = new Binding($"[{i}]"),
+            });
+        }
+    }
+
+    private void OnQueryBoxKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.Control)
+            Vm.QueryTab.RunQueryCommand.Execute(default).Subscribe();
+    }
+
+    private void OnTableDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is ListBox { SelectedItem: string table })
+            Vm.QueryTab.RunQueryForTable(table);
     }
 
     // ── File open ────────────────────────────────────────────────────────────
@@ -70,6 +106,18 @@ public partial class MainWindow : Window
 
         if (path is not null)
             Vm.CreateProject(path);
+    }
+
+    private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title         = "Open Project Folder",
+            AllowMultiple = false,
+        });
+
+        if (folders is [var folder])
+            Vm.OpenProject(folder.Path.LocalPath);
     }
 
     // ── Drag-and-drop ────────────────────────────────────────────────────────

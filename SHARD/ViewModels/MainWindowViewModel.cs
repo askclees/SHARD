@@ -103,6 +103,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     // ── Search tab ────────────────────────────────────────────────────────────
     public SearchViewModel SearchTab { get; }
 
+    // ── Query tab ─────────────────────────────────────────────────────────────
+    public QueryViewModel QueryTab { get; }
+
     // ── Shadow project ───────────────────────────────────────────────────
     private ShadowProject? _project;
     public ShadowProject? Project
@@ -129,6 +132,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public MainWindowViewModel()
     {
         SearchTab = new SearchViewModel(Pages);
+        QueryTab  = new QueryViewModel();
     }
 
     // ── Actions ───────────────────────────────────────────────────────────
@@ -244,6 +248,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";
         SearchTab.Clear();
+        QueryTab.Clear();
     }
 
     /// <summary>
@@ -257,6 +262,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         try
         {
             Project = ShadowProject.Create(folderPath, _currentFilePath, Database);
+            QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
             StatusText = $"Project created at {folderPath}";
         }
         catch (Exception ex)
@@ -272,6 +278,34 @@ public sealed class MainWindowViewModel : ViewModelBase
                 // Folder may not exist yet (e.g. failed before Directory.CreateDirectory) — fall back to status text only.
                 StatusText = $"Error creating project: {ex.Message}";
             }
+        }
+    }
+
+    /// <summary>
+    /// Open an existing project folder: loads its evidence file (re-parsing it byte-level,
+    /// same as <see cref="LoadFile"/>) and points the Query tab at the already-built shadow
+    /// database, without rebuilding it.
+    /// </summary>
+    public void OpenProject(string projectFolder)
+    {
+        try
+        {
+            var project = ShadowProject.Open(projectFolder);
+            LoadFile(project.EvidenceFilePath);
+
+            if (Database is null)
+            {
+                StatusText = $"Error opening project: failed to load evidence file '{project.EvidenceFilePath}'.";
+                return;
+            }
+
+            Project = project;
+            QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
+            StatusText = $"Project opened from {projectFolder}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Error opening project: {ex.Message}";
         }
     }
 

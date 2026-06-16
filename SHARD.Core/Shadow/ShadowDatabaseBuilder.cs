@@ -18,7 +18,10 @@ public static class ShadowDatabaseBuilder
     private const string PageNumberColumn = "_page_number";
     private const string CellOffsetColumn = "_cell_offset";
     private const string OverflowPageColumn = "_overflow_page";
-    private const string OverflowTableName = "_shard_overflow_pages";
+
+    /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
+    public const string InternalTablePrefix = "_shard_";
+    private const string OverflowTableName = InternalTablePrefix + "overflow_pages";
 
     public static void Create(string shadowDbPath, SqliteForensicDatabase database)
     {

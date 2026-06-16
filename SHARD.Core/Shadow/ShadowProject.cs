@@ -44,4 +44,21 @@ public sealed class ShadowProject
 
         return new ShadowProject(projectFolder, manifest);
     }
+
+    /// <summary>Open an existing project folder (must already contain a project.json and shadow database).</summary>
+    public static ShadowProject Open(string projectFolder)
+    {
+        string manifestPath = Path.Combine(projectFolder, "project.json");
+        if (!File.Exists(manifestPath))
+            throw new InvalidOperationException($"No project.json found in '{projectFolder}'.");
+
+        var manifest = JsonSerializer.Deserialize<ProjectManifest>(File.ReadAllText(manifestPath))
+            ?? throw new InvalidOperationException($"Failed to read project manifest at '{manifestPath}'.");
+
+        var project = new ShadowProject(projectFolder, manifest);
+        if (!File.Exists(project.ShadowDatabasePath))
+            throw new InvalidOperationException($"No shadow database found at '{project.ShadowDatabasePath}'.");
+
+        return project;
+    }
 }
