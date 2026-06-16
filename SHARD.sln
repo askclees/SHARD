@@ -4,6 +4,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SHARD", "SHARD\SHARD.csproj
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SHARD.Core", "SHARD.Core\SHARD.Core.csproj", "{27DD3412-192C-43E8-8E4F-EF663BEF7061}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SHARD.Core.Tests", "SHARD.Core.Tests\SHARD.Core.Tests.csproj", "{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,6 +40,18 @@ Global
 		{27DD3412-192C-43E8-8E4F-EF663BEF7061}.Release|x64.Build.0 = Release|Any CPU
 		{27DD3412-192C-43E8-8E4F-EF663BEF7061}.Release|x86.ActiveCfg = Release|Any CPU
 		{27DD3412-192C-43E8-8E4F-EF663BEF7061}.Release|x86.Build.0 = Release|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Debug|x64.Build.0 = Debug|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Debug|x86.Build.0 = Debug|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|x64.ActiveCfg = Release|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|x64.Build.0 = Release|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|x86.ActiveCfg = Release|Any CPU
+		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
