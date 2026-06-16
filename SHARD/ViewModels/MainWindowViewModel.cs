@@ -35,14 +35,27 @@ public sealed class MainWindowViewModel : ViewModelBase
     public bool HasNoDatabase => !HasDatabase;
 
     // ── Page list (left panel) ────────────────────────────────────────────
-    public ObservableCollection<PageViewModel> Pages { get; } = [];
+    public ObservableCollection<PageListEntryViewModel> Pages { get; } = [];
 
-    // ── Selected page (right panel) ───────────────────────────────────────
-    private PageViewModel? _selectedPage;
-    public PageViewModel? SelectedPage
+    // ── Selected page (left panel selection; right panel detail) ─────────
+    private PageListEntryViewModel? _selectedPage;
+    public PageListEntryViewModel? SelectedPage
     {
         get => _selectedPage;
-        set => this.RaiseAndSetIfChanged(ref _selectedPage, value);
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedPage, value);
+            SelectedPageDetail = value is not null && Database is not null
+                ? new PageViewModel(Database.ReadPage(value.PageNumber))
+                : null;
+        }
+    }
+
+    private PageViewModel? _selectedPageDetail;
+    public PageViewModel? SelectedPageDetail
+    {
+        get => _selectedPageDetail;
+        private set => this.RaiseAndSetIfChanged(ref _selectedPageDetail, value);
     }
 
     // ── Overview panel info rows ──────────────────────────────────────────
@@ -131,7 +144,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public MainWindowViewModel()
     {
-        SearchTab = new SearchViewModel(Pages);
+        SearchTab = new SearchViewModel(Pages, pageNumber => Database?.ReadPage(pageNumber).Data);
         QueryTab  = new QueryViewModel();
     }
 
@@ -216,7 +229,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 SchemaRows.Add(row);
 
             foreach (var page in db.ReadAllPages())
-                Pages.Add(new PageViewModel(page));
+                Pages.Add(new PageListEntryViewModel(page.PageNumber, page.PageType));
 
             HasDatabase = true;
             StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}  ·  {db.PageCount:N0} pages";
@@ -263,6 +276,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             Project = ShadowProject.Create(folderPath, _currentFilePath, Database);
             QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
+            RefreshPagesFromShadowDatabase();
             StatusText = $"Project created at {folderPath}";
         }
         catch (Exception ex)
@@ -301,11 +315,33 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             Project = project;
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
+            RefreshPagesFromShadowDatabase();
             StatusText = $"Project opened from {projectFolder}";
         }
         catch (Exception ex)
         {
             StatusText = $"Error opening project: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Replace the live-swept <see cref="Pages"/> list with the persisted, potentially more
+    /// accurate classifications (e.g. overflow/freelist) recorded in the shadow database.
+    /// </summary>
+    private void RefreshPagesFromShadowDatabase()
+    {
+        if (Project is null) return;
+
+        try
+        {
+            var pageTypes = Project.ReadPageTypes();
+            Pages.Clear();
+            foreach (var (pageNumber, type, tableName) in pageTypes)
+                Pages.Add(new PageListEntryViewModel(pageNumber, type, tableName));
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Error reading persisted page classifications: {ex.Message}";
         }
     }
 

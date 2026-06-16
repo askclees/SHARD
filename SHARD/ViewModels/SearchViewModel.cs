@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -11,7 +12,8 @@ namespace SHARD.ViewModels;
 
 public sealed class SearchViewModel : ViewModelBase
 {
-    private readonly IReadOnlyList<PageViewModel> _pages;
+    private readonly IReadOnlyList<PageListEntryViewModel> _pages;
+    private readonly Func<uint, byte[]?> _readPageBytes;
 
     // ── Input ─────────────────────────────────────────────────────────────────
 
@@ -89,10 +91,11 @@ public sealed class SearchViewModel : ViewModelBase
 
     // ── Constructor ───────────────────────────────────────────────────────────
 
-    public SearchViewModel(IReadOnlyList<PageViewModel> pages)
+    public SearchViewModel(IReadOnlyList<PageListEntryViewModel> pages, Func<uint, byte[]?> readPageBytes)
     {
-        _pages        = pages;
-        SearchCommand = ReactiveCommand.Create(RunSearch);
+        _pages         = pages;
+        _readPageBytes = readPageBytes;
+        SearchCommand  = ReactiveCommand.Create(RunSearch);
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
@@ -127,7 +130,7 @@ public sealed class SearchViewModel : ViewModelBase
 
         foreach (var pageVm in _pages)
         {
-            var data = pageVm.PageBytes;
+            var data = _readPageBytes(pageVm.PageNumber);
             if (data is not { Length: > 0 }) continue;
 
             // Latin-1 gives a 1:1 byte↔char mapping, so match indices == byte offsets

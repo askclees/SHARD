@@ -180,8 +180,8 @@
                                      ItemsSource="{Binding Pages}"
                                      SelectedItem="{Binding SelectedPage}">
                                 <ListBox.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:PageViewModel">
-                                        <Grid ColumnDefinitions="5,44,*" Height="26">
+                                    <DataTemplate x:DataType="vm:PageListEntryViewModel">
+                                        <Grid ColumnDefinitions="5,44,Auto,*" Height="26">
 
                                             <!-- Type colour swatch -->
                                             <Border Grid.Column="0"
@@ -202,6 +202,17 @@
                                                        Text="{Binding TypeLabel}"
                                                        VerticalAlignment="Center"
                                                        FontSize="12" />
+
+                                            <!-- Associated table (when known) -->
+                                            <TextBlock Grid.Column="3"
+                                                       Text="{Binding TableName}"
+                                                       IsVisible="{Binding TableName,
+                                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                       VerticalAlignment="Center"
+                                                       TextAlignment="Right"
+                                                       Padding="8,0,8,0"
+                                                       FontSize="11"
+                                                       Opacity="0.5" />
                                         </Grid>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
@@ -213,7 +224,7 @@
                             <Grid Grid.Column="2">
 
                                 <!-- No page selected placeholder -->
-                                <TextBlock IsVisible="{Binding SelectedPage,
+                                <TextBlock IsVisible="{Binding SelectedPageDetail,
                                                        Converter={x:Static conv:ObjectConverters.IsNull}}"
                                            Text="← Select a page from the list"
                                            HorizontalAlignment="Center"
@@ -222,7 +233,7 @@
                                            FontSize="13" />
 
                                 <!-- Page content -->
-                                <Grid IsVisible="{Binding SelectedPage,
+                                <Grid IsVisible="{Binding SelectedPageDetail,
                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
                                       ColumnDefinitions="*,4,*">
 
@@ -233,16 +244,16 @@
                                         <StackPanel Margin="14,10" Spacing="6">
 
                                             <!-- Basic page info -->
-                                            <TextBlock Text="{Binding SelectedPage.Summary}"
+                                            <TextBlock Text="{Binding SelectedPageDetail.Summary}"
                                                        FontFamily="Courier New"
                                                        FontSize="12"
                                                        TextWrapping="Wrap" />
 
                                             <!-- Cell pointers -->
-                                            <Expander Header="{Binding SelectedPage.CellPointerHeader}"
+                                            <Expander Header="{Binding SelectedPageDetail.CellPointerHeader}"
                                                       IsExpanded="False"
-                                                      IsVisible="{Binding SelectedPage.HasCellPointers}">
-                                                <ItemsControl ItemsSource="{Binding SelectedPage.CellPointerRows}"
+                                                      IsVisible="{Binding SelectedPageDetail.HasCellPointers}">
+                                                <ItemsControl ItemsSource="{Binding SelectedPageDetail.CellPointerRows}"
                                                               Margin="8,4,0,4">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate x:DataType="vm:InfoRow">
@@ -263,7 +274,7 @@
                                             </Expander>
 
                                             <!-- Per-cell expanders (table leaf pages only) -->
-                                            <ItemsControl ItemsSource="{Binding SelectedPage.CellSections}">
+                                            <ItemsControl ItemsSource="{Binding SelectedPageDetail.CellSections}">
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:CellSectionViewModel">
                                                         <Expander Header="{Binding Header}"
@@ -333,8 +344,8 @@
                                                           HorizontalScrollBarVisibility="Auto">
                                                 <controls:HexView x:Name="PageHexView"
                                                                   Margin="14,8,14,16"
-                                                                  Data="{Binding SelectedPage.PageBytes}"
-                                                                  Highlights="{Binding SelectedPage.PageHighlights}"
+                                                                  Data="{Binding SelectedPageDetail.PageBytes}"
+                                                                  Highlights="{Binding SelectedPageDetail.PageHighlights}"
                                                                   UseDecimalOffsets="{Binding #PageOffsetToggle.IsChecked}"
                                                                   ShowHighlights="{Binding #PageHighlightToggle.IsChecked}" />
                                             </ScrollViewer>

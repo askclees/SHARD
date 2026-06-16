@@ -208,6 +208,26 @@ public sealed class SqliteForensicDatabase : IDisposable
     }
     
     /// <summary>
+    /// Enumerate every page number belonging to a table's B-tree (the root page itself,
+    /// plus every interior and leaf page reachable from it), so callers can attribute
+    /// pages to the table they belong to.
+    /// </summary>
+    public IEnumerable<uint> GetTreePageNumbers(uint rootPage)
+    {
+        yield return rootPage;
+
+        if (ReadPage(rootPage) is TableBTreeInteriorPage interior)
+        {
+            foreach (var cell in interior.Cells)
+                foreach (uint pageNumber in GetTreePageNumbers(cell.PageNumber))
+                    yield return pageNumber;
+
+            foreach (uint pageNumber in GetTreePageNumbers(interior.RightmostPointer))
+                yield return pageNumber;
+        }
+    }
+
+    /// <summary>
     /// Read and return all rows from a table's B-tree given its root page, resolving overflow
     /// chains and decorating each row with the forensic provenance of its primary cell.
     /// </summary>

@@ -18,17 +18,7 @@ public sealed class PageViewModel : ViewModelBase
     public string TypeLabel  => Page.PageType.ToString();
 
     /// <summary>Colour swatch shown next to each page in the list.</summary>
-    public IBrush TypeBrush => Page.PageType switch
-    {
-        PageType.BTreeLeafTable     => new SolidColorBrush(Color.Parse("#4A9ECA")),
-        PageType.BTreeInteriorTable => new SolidColorBrush(Color.Parse("#2D7DB3")),
-        PageType.BTreeLeafIndex     => new SolidColorBrush(Color.Parse("#4CAF82")),
-        PageType.BTreeInteriorIndex => new SolidColorBrush(Color.Parse("#2E8B57")),
-        PageType.FreelistTrunk      => new SolidColorBrush(Color.Parse("#E05C5C")),
-        PageType.FreelistLeaf       => new SolidColorBrush(Color.Parse("#C0392B")),
-        PageType.Overflow           => new SolidColorBrush(Color.Parse("#E0924A")),
-        _                           => new SolidColorBrush(Color.Parse("#888888")),
-    };
+    public IBrush TypeBrush => PageTypeBrushes.For(Page.PageType);
 
     // ── Detail panel ──────────────────────────────────────────────────────
     public string Summary => BuildSummary(Page);

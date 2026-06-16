@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using SHARD.Core.Enums;
 
 namespace SHARD.Core.Shadow;
 
@@ -60,5 +62,28 @@ public sealed class ShadowProject
             throw new InvalidOperationException($"No shadow database found at '{project.ShadowDatabasePath}'.");
 
         return project;
+    }
+
+    /// <summary>Read the persisted page classifications from this project's shadow database.</summary>
+    public IReadOnlyList<(uint PageNumber, PageType Type, string? TableName)> ReadPageTypes()
+    {
+        var result = new List<(uint PageNumber, PageType Type, string? TableName)>();
+
+        using var connection = new SqliteConnection($"Data Source={ShadowDatabasePath};Mode=ReadOnly");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT page_number, page_type, table_name FROM "{ShadowDatabaseBuilder.InternalTablePrefix}pages" ORDER BY page_number
+            """;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            uint pageNumber = (uint)reader.GetInt64(0);
+            var pageType = Enum.Parse<PageType>(reader.GetString(1));
+            string? tableName = reader.IsDBNull(2) ? null : reader.GetString(2);
+            result.Add((pageNumber, pageType, tableName));
+        }
+
+        return result;
     }
 }

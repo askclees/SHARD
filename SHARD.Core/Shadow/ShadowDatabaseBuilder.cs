@@ -22,6 +22,7 @@ public static class ShadowDatabaseBuilder
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
     public const string InternalTablePrefix = "_shard_";
     private const string OverflowTableName = InternalTablePrefix + "overflow_pages";
+    private const string PagesTableName = InternalTablePrefix + "pages";
 
     public static void Create(string shadowDbPath, SqliteForensicDatabase database)
     {
@@ -29,6 +30,9 @@ public static class ShadowDatabaseBuilder
         connection.Open();
 
         CreateOverflowTable(connection);
+        CreatePagesTable(connection);
+        PopulatePagesBaseline(connection, database);
+        TagTablePages(connection, "sqlite_master", database.GetTreePageNumbers(1));
 
         foreach (var row in database.ReadSqliteMaster())
         {
@@ -50,6 +54,7 @@ public static class ShadowDatabaseBuilder
                 }
 
                 InsertRows(connection, tableSchema, database.ReadTableRows(row.RootPage.Value));
+                TagTablePages(connection, tableSchema.TableName, database.GetTreePageNumbers(row.RootPage.Value));
             }
             catch (Exception ex)
             {
@@ -60,6 +65,8 @@ public static class ShadowDatabaseBuilder
                     $"Error: {ex.Message}", ex);
             }
         }
+
+        TagFreelistPages(connection, database);
     }
 
     public static string BuildCreateTableSql(TableSchema schema)
@@ -104,6 +111,111 @@ public static class ShadowDatabaseBuilder
         command.ExecuteNonQuery();
     }
 
+    private static void CreatePagesTable(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            CREATE TABLE {QuoteIdentifier(PagesTableName)} (
+                page_number INTEGER PRIMARY KEY,
+                page_type TEXT NOT NULL,
+                table_name TEXT
+            )
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Records which table's B-tree a set of pages belongs to (root, interior, and leaf pages).</summary>
+    private static void TagTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            UPDATE {QuoteIdentifier(PagesTableName)} SET table_name = @table WHERE page_number = @page
+            """;
+        var tableParam = command.CreateParameter();
+        tableParam.ParameterName = "@table";
+        tableParam.Value = tableName;
+        command.Parameters.Add(tableParam);
+        var pageParam = command.CreateParameter();
+        pageParam.ParameterName = "@page";
+        command.Parameters.Add(pageParam);
+
+        foreach (uint pageNumber in pageNumbers)
+        {
+            pageParam.Value = pageNumber;
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    private static void PopulatePagesBaseline(SqliteConnection connection, SqliteForensicDatabase database)
+    {
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            INSERT INTO {QuoteIdentifier(PagesTableName)} (page_number, page_type)
+            VALUES (@page, @type)
+            """;
+        var pageParam = command.CreateParameter();
+        pageParam.ParameterName = "@page";
+        command.Parameters.Add(pageParam);
+        var typeParam = command.CreateParameter();
+        typeParam.ParameterName = "@type";
+        command.Parameters.Add(typeParam);
+
+        foreach (var page in database.ReadAllPages())
+        {
+            pageParam.Value = page.PageNumber;
+            typeParam.Value = page.PageType.ToString();
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    private static void TagFreelistPages(SqliteConnection connection, SqliteForensicDatabase database)
+    {
+        try
+        {
+            using var transaction = connection.BeginTransaction();
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = $"""
+                UPDATE {QuoteIdentifier(PagesTableName)} SET page_type = @type WHERE page_number = @page
+                """;
+            var pageParam = command.CreateParameter();
+            pageParam.ParameterName = "@page";
+            command.Parameters.Add(pageParam);
+            var typeParam = command.CreateParameter();
+            typeParam.ParameterName = "@type";
+            command.Parameters.Add(typeParam);
+
+            foreach (var trunk in database.ReadFreelistChain())
+            {
+                pageParam.Value = trunk.PageNumber;
+                typeParam.Value = nameof(PageType.FreelistTrunk);
+                command.ExecuteNonQuery();
+
+                foreach (uint leafPageNumber in trunk.LeafPageNumbers)
+                {
+                    pageParam.Value = leafPageNumber;
+                    typeParam.Value = nameof(PageType.FreelistLeaf);
+                    command.ExecuteNonQuery();
+                }
+            }
+
+            transaction.Commit();
+        }
+        catch (NotImplementedException)
+        {
+            // Freelist chain walking isn't implemented yet; pages remain classified by
+            // their type-byte baseline (Unknown) until ReadFreelistChain is filled in.
+        }
+    }
+
     private static void InsertRows(SqliteConnection connection, TableSchema schema, IEnumerable<TableRow> rows)
     {
         using var transaction = connection.BeginTransaction();
@@ -113,6 +225,9 @@ public static class ShadowDatabaseBuilder
             INSERT INTO {QuoteIdentifier(OverflowTableName)}
                 (table_name, row_id, sequence, page_number, next_page_number, payload_length)
             VALUES (@table, @row_id, @sequence, @page, @next, @length)
+            """;
+        string pageTypeUpdateSql = $"""
+            UPDATE {QuoteIdentifier(PagesTableName)} SET page_type = @type, table_name = @table WHERE page_number = @page
             """;
 
         foreach (var row in rows)
@@ -149,6 +264,14 @@ public static class ShadowDatabaseBuilder
                 overflowCommand.Parameters.AddWithValue("@next", fragment.NextPageNumber);
                 overflowCommand.Parameters.AddWithValue("@length", fragment.PayloadLength);
                 overflowCommand.ExecuteNonQuery();
+
+                using var pageTypeCommand = connection.CreateCommand();
+                pageTypeCommand.Transaction = transaction;
+                pageTypeCommand.CommandText = pageTypeUpdateSql;
+                pageTypeCommand.Parameters.AddWithValue("@type", nameof(PageType.Overflow));
+                pageTypeCommand.Parameters.AddWithValue("@table", schema.TableName);
+                pageTypeCommand.Parameters.AddWithValue("@page", fragment.PageNumber);
+                pageTypeCommand.ExecuteNonQuery();
             }
         }
 

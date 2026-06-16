@@ -73,9 +73,43 @@ public class ShadowDatabaseBuilderTests
             shadow.Open();
 
             var tables = GetTableNames(shadow);
-            Assert.Equal(41, tables.Count); // 40 source tables + the _shard_overflow_pages side table
+            Assert.Equal(42, tables.Count); // 40 source tables + _shard_overflow_pages + _shard_pages
             Assert.Contains("_shard_overflow_pages", tables);
+            Assert.Contains("_shard_pages", tables);
             Assert.DoesNotContain(tables, t => t.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (File.Exists(shadowPath)) File.Delete(shadowPath);
+        }
+    }
+
+    [Fact]
+    public void Create_TagsSqliteMasterAndInteriorPages()
+    {
+        string shadowPath = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = SqliteForensicDatabase.Open(FixturePath("interior_no_overflow.db"));
+            ShadowDatabaseBuilder.Create(shadowPath, db);
+
+            using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+            shadow.Open();
+
+            // No page should be left untagged just because it belongs to sqlite_master
+            // (whose mirrored table is intentionally skipped) or because it's an interior page.
+            using var untaggedCommand = shadow.CreateCommand();
+            untaggedCommand.CommandText = "SELECT COUNT(*) FROM \"_shard_pages\" WHERE table_name IS NULL AND page_type != 'Unknown'";
+            long untaggedCount = (long)untaggedCommand.ExecuteScalar()!;
+            Assert.Equal(0, untaggedCount);
+
+            using var masterCommand = shadow.CreateCommand();
+            masterCommand.CommandText = "SELECT page_type FROM \"_shard_pages\" WHERE page_number = 1";
+            Assert.Equal("BTreeInteriorTable", (string)masterCommand.ExecuteScalar()!);
+
+            using var masterTableCommand = shadow.CreateCommand();
+            masterTableCommand.CommandText = "SELECT table_name FROM \"_shard_pages\" WHERE page_number = 1";
+            Assert.Equal("sqlite_master", (string)masterTableCommand.ExecuteScalar()!);
         }
         finally
         {
@@ -130,6 +164,53 @@ public class ShadowDatabaseBuilderTests
             }
             Assert.Equal(0, previousPage); // chain terminates with next_page_number = 0
             Assert.True(expectedSequence > 1); // at least one fragment was recorded
+        }
+        finally
+        {
+            if (File.Exists(shadowPath)) File.Delete(shadowPath);
+        }
+    }
+
+    [Fact]
+    public void Create_PersistsPageClassifications()
+    {
+        string shadowPath = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = SqliteForensicDatabase.Open(FixturePath("table_with_rows.db"));
+            ShadowDatabaseBuilder.Create(shadowPath, db);
+
+            using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+            shadow.Open();
+
+            using var countCommand = shadow.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM \"_shard_pages\"";
+            long pageRowCount = (long)countCommand.ExecuteScalar()!;
+            Assert.Equal(db.PageCount, (uint)pageRowCount);
+
+            using var overflowPageCommand = shadow.CreateCommand();
+            overflowPageCommand.CommandText = "SELECT page_number FROM \"_shard_overflow_pages\" WHERE table_name = 'people' AND row_id = 2 ORDER BY sequence LIMIT 1";
+            long overflowPage = (long)overflowPageCommand.ExecuteScalar()!;
+
+            using var typeCommand = shadow.CreateCommand();
+            typeCommand.CommandText = "SELECT page_type, table_name FROM \"_shard_pages\" WHERE page_number = @page";
+            typeCommand.Parameters.AddWithValue("@page", overflowPage);
+            using var typeReader = typeCommand.ExecuteReader();
+            Assert.True(typeReader.Read());
+            Assert.Equal("Overflow", typeReader.GetString(0));
+            Assert.Equal("people", typeReader.GetString(1)); // overflow page is still attributed to its owning table
+
+            using var leafPageCommand = shadow.CreateCommand();
+            leafPageCommand.CommandText = "SELECT _page_number FROM people WHERE id = 1";
+            long leafPage = (long)leafPageCommand.ExecuteScalar()!;
+
+            using var leafTypeCommand = shadow.CreateCommand();
+            leafTypeCommand.CommandText = "SELECT page_type, table_name FROM \"_shard_pages\" WHERE page_number = @page";
+            leafTypeCommand.Parameters.AddWithValue("@page", leafPage);
+            using var leafTypeReader = leafTypeCommand.ExecuteReader();
+            Assert.True(leafTypeReader.Read());
+            Assert.Equal("BTreeLeafTable", leafTypeReader.GetString(0));
+            Assert.Equal("people", leafTypeReader.GetString(1));
         }
         finally
         {
