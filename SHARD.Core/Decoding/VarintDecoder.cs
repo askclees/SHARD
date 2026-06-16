@@ -52,5 +52,17 @@ public sealed class Varint
     {
         return (other.Length == this.Length) && (other.Value == this.Value);
     }
-    
+
+    /// <summary>
+    /// Reads a varint starting at <paramref name="offset"/>, clamping the read window to
+    /// the end of <paramref name="data"/> if fewer than 9 bytes remain. The varint's true
+    /// length isn't known until it's decoded, so callers can't pre-validate the window —
+    /// a varint truncated by the clamp is itself a useful signal (e.g. a corrupt/boundary record).
+    /// </summary>
+    public static Varint ReadAt(ReadOnlySpan<byte> data, int offset)
+    {
+        int length = Math.Min(MAX_VARINT_LENGTH, data.Length - offset);
+        return new Varint(data.Slice(offset, length));
+    }
+
 }

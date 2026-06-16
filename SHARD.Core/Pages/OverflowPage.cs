@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using SHARD.Core.Enums;
 
 namespace SHARD.Core.Pages;
@@ -22,8 +23,7 @@ public sealed class OverflowPage : SqlitePage
     public OverflowPage(uint pageNumber, int pageSize, byte[] data)
         : base(pageNumber, pageSize, data)
     {
-        NextOverflowPage = default;
-        PayloadData      = ReadOnlyMemory<byte>.Empty;
-        throw new NotImplementedException();
+        NextOverflowPage = BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(0, 4));
+        PayloadData      = data.AsMemory(4);
     }
 }

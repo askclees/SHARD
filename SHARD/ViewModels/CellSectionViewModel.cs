@@ -25,7 +25,7 @@ public sealed class CellSectionViewModel
         for (int i = 0; i < cell.HeaderEntries.Count; i++)
         {
             var entry = cell.HeaderEntries[i];
-            var sv    = cell.FieldVaues[i];
+            var sv    = cell.FieldValues[i];
 
             string valStr = sv?.Value?.ToString()
                 ?? (entry.Kind == SerialTypeKind.Null ? "NULL" : "—");

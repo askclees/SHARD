@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using SHARD.Core.Decoding;
 using SHARD.Core.Enums;
 using SHARD.Core.Records;
@@ -10,20 +11,28 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
 
     public List<BTreeLeafCell> Cells { get; } = new();
 
-    public TableBTreeLeafPage(uint pageNumber, int pageSize, byte[] data)
+    public TableBTreeLeafPage(uint pageNumber, int pageSize, byte[] data, TextEncoding encoding, int reservedBytes)
         : base(pageNumber, pageSize, data)
     {
         foreach (int i in this.CellPointers)
         {
-            var varintData = new Varint(data.AsSpan(i..(i + 9)));
-            var rowId = new Varint(data.AsSpan((i + varintData.Length).. (i + varintData.Length + 9)));
+            var varintData = Varint.ReadAt(data, i);
+            var rowId = Varint.ReadAt(data, i + varintData.Length);
             int varlengths = varintData.Length + rowId.Length;
-            var recordData = data.AsSpan(i..(int)(i + varintData.Value+varlengths));
-            var leafCell = new BTreeLeafCell(recordData.ToArray(), varintData);
+
+            int localSize = PayloadSizeCalculator.GetLocalPayloadSize(varintData.Value, pageSize, reservedBytes);
+            bool hasOverflow = localSize < varintData.Value;
+
+            var recordData = data.AsSpan(i..(i + varlengths + localSize));
+            uint overflowPage = hasOverflow
+                ? BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(i + varlengths + localSize, 4))
+                : 0;
+
+            var leafCell = new BTreeLeafCell(recordData.ToArray(), varintData, encoding, overflowPage);
             Cells.Add((leafCell));
         }
-        
+
     }
-    
-    
+
+
 }

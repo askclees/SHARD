@@ -30,6 +30,18 @@ public partial class MainWindow : Window
         // Drag-and-drop
         AddHandler(DragDrop.DropEvent,     OnDrop);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
+
+        // Scroll hex view to selected schema row after bindings settle
+        DataContextChanged += (_, _) =>
+        {
+            if (DataContext is MainWindowViewModel vm)
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MainWindowViewModel.SelectedSchemaRow) && vm.SelectedSchemaRow is { } row)
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                            this.FindControl<HexView>("SchemaHexView")?.ScrollToByteOffset(row.CellOffset));
+                };
+        };
     }
 
     // ── File open ────────────────────────────────────────────────────────────

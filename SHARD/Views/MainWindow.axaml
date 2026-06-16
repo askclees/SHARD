@@ -3,6 +3,7 @@
         xmlns:vm="using:SHARD.ViewModels"
         xmlns:controls="using:SHARD.Controls"
         xmlns:conv="using:Avalonia.Data.Converters"
+        xmlns:core="using:SHARD.Core"
         x:Class="SHARD.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="SHARD — SQLite Forensic Analyser"
@@ -334,7 +335,111 @@
                         </Grid>
                     </TabItem>
 
-                    <!-- ── Tab 3: Search ── -->
+                    <!-- ── Tab 3: Schema ── -->
+                    <TabItem Header="Schema">
+                        <Grid ColumnDefinitions="*,4,*">
+
+                            <!-- Left: column headers + selectable row list -->
+                            <Grid Grid.Column="0" RowDefinitions="Auto,*">
+
+                                <Border Grid.Row="0"
+                                        Padding="10,6"
+                                        BorderThickness="0,0,0,1">
+                                    <Grid ColumnDefinitions="80,180,180,80,*">
+                                        <TextBlock Grid.Column="0" Text="Type"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                        <TextBlock Grid.Column="1" Text="Name"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                        <TextBlock Grid.Column="2" Text="Table"     FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                        <TextBlock Grid.Column="3" Text="Root Page" FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                        <TextBlock Grid.Column="4" Text="SQL"       FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                    </Grid>
+                                </Border>
+
+                                <ListBox Grid.Row="1"
+                                         ItemsSource="{Binding SchemaRows}"
+                                         SelectedItem="{Binding SelectedSchemaRow}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="core:SqliteMasterRow">
+                                            <Grid ColumnDefinitions="80,180,180,80,*" Margin="4,3">
+                                                <TextBlock Grid.Column="0" Text="{Binding ObjectType}" FontSize="12" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}"       FontSize="12" />
+                                                <TextBlock Grid.Column="2" Text="{Binding TableName}"  FontSize="12" />
+                                                <TextBlock Grid.Column="3" Text="{Binding RootPage}"   FontSize="12" />
+                                                <TextBlock Grid.Column="4"
+                                                           Text="{Binding Sql}"
+                                                           FontSize="12"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip.Tip="{Binding Sql}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                            </Grid>
+
+                            <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                            <!-- Right: hex view of the selected row's page -->
+                            <Grid Grid.Column="2">
+
+                                <TextBlock IsVisible="{Binding SelectedSchemaRow,
+                                                       Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                           Text="← Select a row to view its bytes"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Opacity="0.35"
+                                           FontSize="13" />
+
+                                <Grid IsVisible="{Binding SelectedSchemaRow,
+                                                  Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                      RowDefinitions="Auto,*">
+
+                                    <Border Grid.Row="0"
+                                            Padding="8,4"
+                                            BorderThickness="0,0,0,1">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ToggleButton x:Name="SchemaOffsetToggle"
+                                                          Content="Dec Offsets"
+                                                          IsChecked="False"
+                                                          Padding="8,2"
+                                                          FontSize="11" />
+                                            <ToggleButton x:Name="SchemaHighlightToggle"
+                                                          Content="Highlights"
+                                                          IsChecked="True"
+                                                          Padding="8,2"
+                                                          FontSize="11" />
+                                            <TextBlock Text="{Binding SelectedSchemaRow.PageNumber, StringFormat='Page {0}'}"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="11"
+                                                       Opacity="0.75"
+                                                       Margin="8,0,0,0" />
+                                            <TextBlock Text="{Binding #SchemaHexView.HoveredLabel}"
+                                                       IsVisible="{Binding #SchemaHexView.HoveredLabel,
+                                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="11"
+                                                       Opacity="0.75"
+                                                       Margin="8,0,0,0" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <ScrollViewer Grid.Row="1"
+                                                  VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Auto">
+                                        <controls:HexView x:Name="SchemaHexView"
+                                                          Margin="14,8,14,16"
+                                                          Data="{Binding SchemaPageBytes}"
+                                                          Highlights="{Binding SchemaHighlights}"
+                                                          UseDecimalOffsets="{Binding #SchemaOffsetToggle.IsChecked}"
+                                                          ShowHighlights="{Binding #SchemaHighlightToggle.IsChecked}" />
+                                    </ScrollViewer>
+
+                                </Grid>
+                            </Grid>
+
+                        </Grid>
+                    </TabItem>
+
+                    <!-- ── Tab 4: Search ── -->
                     <TabItem Header="Search">
                         <Grid RowDefinitions="Auto,Auto,Auto,*">
 

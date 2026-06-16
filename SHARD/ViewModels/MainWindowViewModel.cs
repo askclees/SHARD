@@ -60,6 +60,43 @@ public sealed class MainWindowViewModel : ViewModelBase
         private set => this.RaiseAndSetIfChanged(ref _headerHighlights, value);
     }
 
+    // ── Schema (sqlite_master) rows + selection ───────────────────────────
+    public ObservableCollection<SqliteMasterRow> SchemaRows { get; } = [];
+
+    private SqliteMasterRow? _selectedSchemaRow;
+    public SqliteMasterRow? SelectedSchemaRow
+    {
+        get => _selectedSchemaRow;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedSchemaRow, value);
+            if (value is not null && Database is not null)
+            {
+                SchemaPageBytes  = Database.ReadPage(value.PageNumber).Data;
+                SchemaHighlights = [new HexHighlight(value.CellOffset, value.CellLength, Color.FromRgb(78, 201, 176), value.Name)];
+            }
+            else
+            {
+                SchemaPageBytes  = [];
+                SchemaHighlights = [];
+            }
+        }
+    }
+
+    private byte[] _schemaPageBytes = [];
+    public byte[] SchemaPageBytes
+    {
+        get => _schemaPageBytes;
+        private set => this.RaiseAndSetIfChanged(ref _schemaPageBytes, value);
+    }
+
+    private IReadOnlyList<HexHighlight> _schemaHighlights = [];
+    public IReadOnlyList<HexHighlight> SchemaHighlights
+    {
+        get => _schemaHighlights;
+        private set => this.RaiseAndSetIfChanged(ref _schemaHighlights, value);
+    }
+
     // ── Search tab ────────────────────────────────────────────────────────────
     public SearchViewModel SearchTab { get; }
 
@@ -152,6 +189,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Offset 96
             DatabaseInfoRows.Add(new InfoRow("SQLite Version (96)",         $"{header.SqliteVersionNumber}  —  {FormatSqliteVersion(header.SqliteVersionNumber)}"));
 
+            foreach (var row in db.ReadSqliteMaster())
+                SchemaRows.Add(row);
+
             foreach (var page in db.ReadAllPages())
                 Pages.Add(new PageViewModel(page));
 
@@ -175,6 +215,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         Database = null;
         Pages.Clear();
         DatabaseInfoRows.Clear();
+        SchemaRows.Clear();
+        SelectedSchemaRow = null;
         HeaderBytes      = [];
         HeaderHighlights = [];
         SelectedPage = null;

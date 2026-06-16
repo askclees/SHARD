@@ -7,6 +7,8 @@ namespace SHARD.Core.Records;
 public sealed class SqliteValue
 {
     public SqliteStorageClass StorageClass { get; init; }
+    //note for string data, will be length in bytes not characters (for UTF16)
+    public int DataLength { get; init; }
 
     // ── Typed payloads (only one is set per instance) ─────────────────────
     public long?   IntegerValue { get; init; }
@@ -28,17 +30,26 @@ public sealed class SqliteValue
         _ => null
     };
 
-    public SqliteValue(int value)
+    public SqliteValue(int value, int length)
     {
         StorageClass = SqliteStorageClass.Integer;
         IntegerValue = value;
+        DataLength = length;
     }
     
-    public SqliteValue(long value)
+    public SqliteValue(long value, int length)
     {
         StorageClass = SqliteStorageClass.Integer;
         IntegerValue = value;
-    }    
+        DataLength = length;
+    }
+
+    public SqliteValue(string stringData, int length)
+    {
+        StorageClass = SqliteStorageClass.Text;
+        TextValue = stringData;
+        DataLength = length;
+    }
 
     // ── Static factories ─────────────────────────────────────────────────────
     //public static readonly SqliteValue Null = new() { StorageClass = SqliteStorageClass.Null };

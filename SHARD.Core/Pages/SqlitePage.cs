@@ -39,7 +39,7 @@ public abstract class SqlitePage
     /// Read and classify a page from the stream.
     /// Returns the appropriate subclass based on the type byte.
     /// </summary>
-    public static SqlitePage Read(Stream stream, uint pageNumber, int pageSize)
+    public static SqlitePage Read(Stream stream, uint pageNumber, int pageSize, TextEncoding encoding, int reservedBytes)
     {
         var data = new byte[pageSize];
         stream.Position = (long)(pageNumber - 1) * pageSize;
@@ -54,7 +54,7 @@ public abstract class SqlitePage
             {
                 PageType.BTreeInteriorTable => new TableBTreeInteriorPage(pageNumber, pageSize, data),
                 PageType.BTreeInteriorIndex => new IndexBTreeInteriorPage(pageNumber, pageSize, data),
-                PageType.BTreeLeafTable     => new TableBTreeLeafPage(pageNumber, pageSize, data),
+                PageType.BTreeLeafTable     => new TableBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
                 PageType.BTreeLeafIndex     => new IndexBTreeLeafPage(pageNumber, pageSize, data),
                 _                           => new UnknownPage(pageNumber, pageSize, data),
             };
@@ -63,6 +63,19 @@ public abstract class SqlitePage
         {
             return new UnknownPage(pageNumber, pageSize, data);
         }
+    }
+
+    /// <summary>
+    /// Reads a page known (by context, e.g. a cell's overflow pointer) to be an overflow page.
+    /// Overflow pages have no type byte — their first 4 bytes are the next-page pointer — so
+    /// they can't be classified through <see cref="Read"/>'s type-byte switch.
+    /// </summary>
+    public static OverflowPage ReadOverflowPage(Stream stream, uint pageNumber, int pageSize)
+    {
+        var data = new byte[pageSize];
+        stream.Position = (long)(pageNumber - 1) * pageSize;
+        stream.ReadExactly(data);
+        return new OverflowPage(pageNumber, pageSize, data);
     }
 }
 

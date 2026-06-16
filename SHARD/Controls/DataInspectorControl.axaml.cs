@@ -123,18 +123,10 @@ public partial class DataInspectorControl : UserControl
         }
 
         // SQLite Varint (variable, up to 9 bytes)
-        int remaining = Math.Min(9, data.Length - offset);
-        if (remaining > 0)
+        if (offset < data.Length)
         {
-            try
-            {
-                var varint = new Varint(data.AsSpan(offset, remaining));
-                rows.Add(new InfoRow("Varint", $"{varint.Value}  ({varint.Length}B)"));
-            }
-            catch
-            {
-                rows.Add(new InfoRow("Varint", "—"));
-            }
+            var varint = Varint.ReadAt(data, offset);
+            rows.Add(new InfoRow("Varint", $"{varint.Value}  ({varint.Length}B)"));
         }
         else rows.Add(new InfoRow("Varint", "—"));
 

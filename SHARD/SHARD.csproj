@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <ItemGroup>
       <ProjectReference Include="..\SHARD.Core\SHARD.Core.csproj" />
@@ -9,7 +9,7 @@
       <PackageReference Include="Avalonia.Desktop" Version="11.2.5" />
       <PackageReference Include="Avalonia.ReactiveUI" Version="11.2.5" />
       <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.5" />
-      <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.1" />
+      <PackageReference Include="Tmds.DBus.Protocol" Version="0.20.0" />
     </ItemGroup>
 
     <PropertyGroup>

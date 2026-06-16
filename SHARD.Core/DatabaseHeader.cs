@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
+using SHARD.Core.Enums;
 
 namespace SHARD.Core;
 
@@ -76,7 +77,7 @@ public sealed class DatabaseHeader
 
     // ── Encoding ─────────────────────────────────────────────────────────────
     /// <summary>Offset 56. 1 = UTF-8, 2 = UTF-16 LE, 3 = UTF-16 BE.</summary>
-    public uint TextEncoding { get; init; }
+    public TextEncoding TextEncoding { get; init; }
 
     // ── User / app metadata ──────────────────────────────────────────────────
     /// <summary>Offset 60. Set via PRAGMA user_version.</summary>
@@ -97,11 +98,22 @@ public sealed class DatabaseHeader
 
     public string TextEncodingName => TextEncoding switch
     {
-        1 => "UTF-8",
-        2 => "UTF-16 LE",
-        3 => "UTF-16 BE",
-        _ => $"Unknown ({TextEncoding})"
+        TextEncoding.Utf8    => "UTF-8",
+        TextEncoding.Utf16Le => "UTF-16 LE",
+        TextEncoding.Utf16Be => "UTF-16 BE",
+        _                    => $"Unknown ({TextEncoding})"
     };
+
+    public TextEncoding GetTextEncoding(uint value)
+    {
+        switch(value)
+        {
+            case 1: return TextEncoding.Utf8;
+            case 2: return TextEncoding.Utf16Le;
+            case 3: return TextEncoding.Utf16Be;
+            default: throw new InvalidDataException("Unknown Text Encoding value");
+        };
+    }
 
     public string WriteVersionName => WriteVersion switch
     {
@@ -149,7 +161,7 @@ public sealed class DatabaseHeader
         SchemaFormat =  BinaryPrimitives.ReadUInt32BigEndian(data[44..48]);
         DefaultPageCacheSize = BinaryPrimitives.ReadUInt32BigEndian(data[48..52]);
         LargestRootBTreePage = BinaryPrimitives.ReadUInt32BigEndian(data[52..56]);
-        TextEncoding = BinaryPrimitives.ReadUInt32BigEndian(data[56..60]);
+        TextEncoding = GetTextEncoding(BinaryPrimitives.ReadUInt32BigEndian(data[56..60]));
         UserVersion = BinaryPrimitives.ReadUInt32BigEndian(data[60..64]);
         IncrementalVacuumMode = BinaryPrimitives.ReadUInt32BigEndian(data[64..68]);
         ApplicationId = BinaryPrimitives.ReadUInt32BigEndian(data[68..72]);
