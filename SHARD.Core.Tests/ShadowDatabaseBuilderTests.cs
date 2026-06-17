@@ -31,6 +31,54 @@ public class ShadowDatabaseBuilderTests
     }
 
     [Fact]
+    public void Create_TagsIndexPages()
+    {
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"shard_evidence_{Guid.NewGuid():N}.db");
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            // Build a small database with an explicit index so we can verify the index
+            // root page ends up tagged with the index name in _shard_pages.
+            using (var setup = new SqliteConnection($"Data Source={evidencePath}"))
+            {
+                setup.Open();
+                using var cmd = setup.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT);
+                    INSERT INTO people (name) VALUES ('Alice'), ('Bob'), ('Charlie');
+                    CREATE INDEX idx_people_name ON people (name);
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            // Read the index root page from the evidence file's sqlite_master.
+            long indexRootPage;
+            using (var verify = new SqliteConnection($"Data Source={evidencePath};Mode=ReadOnly"))
+            {
+                verify.Open();
+                using var cmd = verify.CreateCommand();
+                cmd.CommandText = "SELECT rootpage FROM sqlite_master WHERE type='index' AND name='idx_people_name'";
+                indexRootPage = (long)cmd.ExecuteScalar()!;
+            }
+
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            ShadowDatabaseBuilder.Create(shadowPath, db);
+
+            using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+            shadow.Open();
+            using var pageCmd = shadow.CreateCommand();
+            pageCmd.CommandText = "SELECT table_name FROM \"_shard_pages\" WHERE page_number = @p";
+            pageCmd.Parameters.AddWithValue("@p", indexRootPage);
+            Assert.Equal("idx_people_name", (string)pageCmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
+        }
+    }
+
+    [Fact]
     public void Create_MirrorsWideTableColumns()
     {
         string shadowPath = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");

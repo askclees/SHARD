@@ -66,6 +66,14 @@ public static class ShadowDatabaseBuilder
             }
         }
 
+        foreach (var row in database.ReadSqliteMaster())
+        {
+            if (row.ObjectType != SqliteMasterObjectType.Index) continue;
+            if (row.RootPage is null) continue;
+
+            TagTablePages(connection, row.Name, database.GetTreePageNumbers(row.RootPage.Value));
+        }
+
         TagFreelistPages(connection, database);
     }
 

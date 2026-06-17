@@ -208,19 +208,27 @@ public sealed class SqliteForensicDatabase : IDisposable
     }
     
     /// <summary>
-    /// Enumerate every page number belonging to a table's B-tree (the root page itself,
-    /// plus every interior and leaf page reachable from it), so callers can attribute
-    /// pages to the table they belong to.
+    /// Enumerate every page number belonging to a B-tree (the root page itself,
+    /// plus every interior and leaf page reachable from it). Works for both table
+    /// and index B-trees — interior cells always lead with a 4-byte left-child pointer
+    /// regardless of B-tree type.
     /// </summary>
     public IEnumerable<uint> GetTreePageNumbers(uint rootPage)
     {
         yield return rootPage;
 
-        if (ReadPage(rootPage) is TableBTreeInteriorPage interior)
+        if (ReadPage(rootPage) is BTreeInteriorPage interior)
         {
-            foreach (var cell in interior.Cells)
-                foreach (uint pageNumber in GetTreePageNumbers(cell.PageNumber))
+            // All interior-page cells (table or index) start with a 4-byte big-endian
+            // left-child page pointer, so we can read child pointers without knowing
+            // the full cell format.
+            foreach (ushort cellOffset in interior.CellPointers)
+            {
+                uint childPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(
+                    interior.Data.AsSpan(cellOffset, 4));
+                foreach (uint pageNumber in GetTreePageNumbers(childPage))
                     yield return pageNumber;
+            }
 
             foreach (uint pageNumber in GetTreePageNumbers(interior.RightmostPointer))
                 yield return pageNumber;
