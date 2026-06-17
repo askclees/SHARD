@@ -146,6 +146,12 @@ public partial class MainWindow : Window
         this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
+    private void OnFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: FreeBlockSectionViewModel vm }) return;
+        this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
     // ── Search ───────────────────────────────────────────────────────────────
 
     private void OnSearchBoxKeyDown(object? sender, KeyEventArgs e)

@@ -39,6 +39,10 @@ public sealed class PageViewModel : ViewModelBase
     // ── Per-cell expanders (table leaf pages only) ────────────────────────
     public IReadOnlyList<CellSectionViewModel> CellSections { get; }
 
+    // ── Freeblock expanders (table leaf pages only) ───────────────────────
+    public IReadOnlyList<FreeBlockSectionViewModel> FreeBlockSections { get; }
+    public bool HasFreeBlocks => FreeBlockSections.Count > 0;
+
     public PageViewModel(SqlitePage page)
     {
         Page = page;
@@ -61,6 +65,11 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < tlp.Cells.Count; i++)
                 sections.Add(new CellSectionViewModel(tlp.Cells[i], i, tlp.CellPointers[i]));
             CellSections = sections;
+
+            var fbSections = new List<FreeBlockSectionViewModel>(tlp.FreeBlocks.Count);
+            for (int i = 0; i < tlp.FreeBlocks.Count; i++)
+                fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i));
+            FreeBlockSections = fbSections;
         }
         else if (page is IndexBTreeLeafPage ilp)
         {
@@ -68,10 +77,12 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < ilp.Cells.Count; i++)
                 sections.Add(new CellSectionViewModel(ilp.Cells[i], i, ilp.CellPointers[i]));
             CellSections = sections;
+            FreeBlockSections = [];
         }
         else
         {
-            CellSections = [];
+            CellSections      = [];
+            FreeBlockSections = [];
         }
     }
 
@@ -101,6 +112,9 @@ public sealed class PageViewModel : ViewModelBase
         sb.AppendLine($"Fragmented Bytes : {bp.FragmentedFreeBytes}");
         if (bp is BTreeInteriorPage ip)
             sb.AppendLine($"Rightmost Ptr    : {ip.RightmostPointer}");
+
+        if (page is TableBTreeLeafPage tlp)
+            sb.AppendLine($"Freeblocks       : {tlp.FreeBlocks.Count}");
 
         return sb.ToString();
     }
@@ -167,6 +181,19 @@ public sealed class PageViewModel : ViewModelBase
                         list.Add(new HexHighlight(fieldOffset, len, ColumnColour(i), $"Cell {j} · Col {i}"));
                     fieldOffset += len;
                 }
+            }
+        }
+
+        if (page is TableBTreeLeafPage tlpFb)
+        {
+            var headerColour  = Color.FromRgb(180,  80, 200);
+            var contentColour = Color.FromRgb(210, 150, 230);
+            foreach (var fb in tlpFb.FreeBlocks)
+            {
+                list.Add(new HexHighlight((int)fb.PageOffset,     4,                        headerColour,  $"Freeblock header"));
+                int contentLen = (int)fb.BlockSize - 4;
+                if (contentLen > 0)
+                    list.Add(new HexHighlight((int)fb.PageOffset + 4, contentLen, contentColour, $"Freeblock content"));
             }
         }
 

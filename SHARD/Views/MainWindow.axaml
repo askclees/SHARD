@@ -304,6 +304,38 @@
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
 
+                                            <!-- Freeblock expanders -->
+                                            <ItemsControl ItemsSource="{Binding SelectedPageDetail.FreeBlockSections}"
+                                                          IsVisible="{Binding SelectedPageDetail.HasFreeBlocks}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:FreeBlockSectionViewModel">
+                                                        <Expander Header="{Binding Header}"
+                                                                  IsExpanded="False"
+                                                                  Expanded="OnFreeBlockSectionExpanded"
+                                                                  Margin="0,2,0,0">
+                                                            <ItemsControl ItemsSource="{Binding Rows}"
+                                                                          Margin="8,4,0,4">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                            <TextBlock Grid.Column="0"
+                                                                                       Text="{Binding Label}"
+                                                                                       FontSize="12"
+                                                                                       FontWeight="SemiBold"
+                                                                                       Opacity="0.6" />
+                                                                            <TextBlock Grid.Column="1"
+                                                                                       Text="{Binding Value}"
+                                                                                       FontSize="12"
+                                                                                       TextWrapping="Wrap" />
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </Expander>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
                                         </StackPanel>
                                     </ScrollViewer>
 
