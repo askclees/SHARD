@@ -33,3 +33,6 @@ TestResults/
 
 # Publish output
 publish/
+
+# Claude Code
+.claude/
