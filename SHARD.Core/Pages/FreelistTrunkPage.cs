@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using SHARD.Core.Enums;
 
 namespace SHARD.Core.Pages;
@@ -11,7 +12,7 @@ namespace SHARD.Core.Pages;
 ///   +4 : 4 bytes — number of leaf entries on this trunk
 ///   +8 : 4 bytes each — leaf page numbers (up to (PageSize - 8) / 4 entries)
 /// </summary>
-public sealed class FreelistPage : SqlitePage
+public sealed class FreelistTrunkPage : SqlitePage
 {
     public override PageType PageType => PageType.FreelistTrunk;
 
@@ -24,12 +25,20 @@ public sealed class FreelistPage : SqlitePage
     /// <summary>Page numbers of freelist leaf pages recorded on this trunk.</summary>
     public uint[] LeafPageNumbers { get; }
 
-    public FreelistPage(uint pageNumber, int pageSize, byte[] data)
+    public FreelistTrunkPage(uint pageNumber, int pageSize, byte[] data)
         : base(pageNumber, pageSize, data)
     {
-        NextTrunkPageNumber = default;
-        LeafCount           = default;
-        LeafPageNumbers     = [];
-        throw new NotImplementedException();
+        NextTrunkPageNumber = BinaryPrimitives.ReadUInt32BigEndian(data[0..4].AsSpan());
+        LeafCount           = BinaryPrimitives.ReadUInt32BigEndian(data[4..8].AsSpan());
+        //Safety check to ensure that a corrupt value doesn't give us more than possible entries
+        uint maxEntries = (uint)((pageSize - 8) / 4);
+        uint safeCount  = Math.Min(LeafCount, maxEntries);
+        LeafPageNumbers = new uint[safeCount];
+        for (int i = 0; i < safeCount; i++)
+        {
+            LeafPageNumbers[i] = BinaryPrimitives.ReadUInt32BigEndian(data[(8 + (i * 4))..(12 + (i * 4))].AsSpan());
+        }
     }
+    
+    
 }

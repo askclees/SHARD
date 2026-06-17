@@ -79,6 +79,51 @@ public class ShadowDatabaseBuilderTests
     }
 
     [Fact]
+    public void Create_TagsInternalSqliteTables()
+    {
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"shard_evidence_{Guid.NewGuid():N}.db");
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            // AUTOINCREMENT causes SQLite to create sqlite_sequence automatically.
+            using (var setup = new SqliteConnection($"Data Source={evidencePath}"))
+            {
+                setup.Open();
+                using var cmd = setup.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
+                    INSERT INTO items (name) VALUES ('alpha'), ('beta');
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            long seqRootPage;
+            using (var verify = new SqliteConnection($"Data Source={evidencePath};Mode=ReadOnly"))
+            {
+                verify.Open();
+                using var cmd = verify.CreateCommand();
+                cmd.CommandText = "SELECT rootpage FROM sqlite_master WHERE name = 'sqlite_sequence'";
+                seqRootPage = (long)cmd.ExecuteScalar()!;
+            }
+
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            ShadowDatabaseBuilder.Create(shadowPath, db);
+
+            using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+            shadow.Open();
+            using var pageCmd = shadow.CreateCommand();
+            pageCmd.CommandText = "SELECT table_name FROM \"_shard_pages\" WHERE page_number = @p";
+            pageCmd.Parameters.AddWithValue("@p", seqRootPage);
+            Assert.Equal("sqlite_sequence", (string)pageCmd.ExecuteScalar()!);
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
+        }
+    }
+
+    [Fact]
     public void Create_MirrorsWideTableColumns()
     {
         string shadowPath = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
@@ -147,7 +192,7 @@ public class ShadowDatabaseBuilderTests
             // No page should be left untagged just because it belongs to sqlite_master
             // (whose mirrored table is intentionally skipped) or because it's an interior page.
             using var untaggedCommand = shadow.CreateCommand();
-            untaggedCommand.CommandText = "SELECT COUNT(*) FROM \"_shard_pages\" WHERE table_name IS NULL AND page_type != 'Unknown'";
+            untaggedCommand.CommandText = "SELECT COUNT(*) FROM \"_shard_pages\" WHERE table_name IS NULL AND page_type NOT IN ('Unknown', 'FreelistTrunk', 'FreelistLeaf')";
             long untaggedCount = (long)untaggedCommand.ExecuteScalar()!;
             Assert.Equal(0, untaggedCount);
 

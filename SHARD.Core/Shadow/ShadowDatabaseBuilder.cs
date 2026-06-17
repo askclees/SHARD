@@ -38,7 +38,11 @@ public static class ShadowDatabaseBuilder
         {
             if (row.ObjectType != SqliteMasterObjectType.Table) continue;
             if (row.Sql is null || row.RootPage is null) continue;
-            if (row.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase)) continue;
+            if (row.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase))
+            {
+                TagTablePages(connection, row.Name, database.GetTreePageNumbers(row.RootPage.Value));
+                continue;
+            }
             if (row.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase)) continue;
 
             var tableSchema = CreateTableParser.ExtractTableSchema(row.Sql);

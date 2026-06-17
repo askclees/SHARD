@@ -285,8 +285,32 @@ public sealed class SqliteForensicDatabase : IDisposable
     }
 
     /// <summary>Enumerate every freelist trunk and its leaf pages.</summary>
-    public IEnumerable<FreelistPage> ReadFreelistChain() =>
-        throw new NotImplementedException();
+    public IEnumerable<FreelistTrunkPage> ReadFreelistChain()
+    {
+        List<FreelistTrunkPage> retVal = new();
+        //Check we have freelist trunk pages
+        if (Header.FirstFreelistTrunkPage != 0 && Header.TotalFreelistPages != 0)
+        {
+            retVal.AddRange(GetFreelistPageNumbersFromTrunkPage(Header.FirstFreelistTrunkPage, Header.PageSize));
+        }
+        return retVal;
+    }
+
+    private IEnumerable<FreelistTrunkPage> GetFreelistPageNumbersFromTrunkPage(uint pageNum, int pageSize)
+    {
+        List<FreelistTrunkPage> retVal = new();
+        var data = new byte[pageSize];
+        _stream.Position = (long)(pageNum - 1) * pageSize;
+        _stream.ReadExactly(data);
+        FreelistTrunkPage trunk = new FreelistTrunkPage(pageNum, pageSize, data);
+        retVal.Add(trunk);
+        if (trunk.NextTrunkPageNumber != 0)
+        {
+            retVal.AddRange(GetFreelistPageNumbersFromTrunkPage(trunk.NextTrunkPageNumber, pageSize));
+        }
+        return retVal;
+    }
+        
 
     public void Dispose() => _stream.Dispose();
 }
