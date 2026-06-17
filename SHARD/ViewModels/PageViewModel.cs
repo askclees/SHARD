@@ -82,6 +82,15 @@ public sealed class PageViewModel : ViewModelBase
         sb.AppendLine($"Type       : {page.PageType}");
         sb.AppendLine($"Size       : {page.PageSize} bytes");
 
+        if (page is UnknownPage unknown)
+        {
+            if (unknown.DeclaredTypeByte != PageType.Unknown)
+                sb.AppendLine($"Type byte  : 0x{(byte)unknown.DeclaredTypeByte:X2} ({unknown.DeclaredTypeByte}) — parse failed");
+            if (unknown.ParseError is not null)
+                sb.AppendLine($"Parse error: {unknown.ParseError.GetType().Name}: {unknown.ParseError.Message}");
+            return sb.ToString();
+        }
+
         if (page is not BTreePage bp) return sb.ToString();
 
         sb.AppendLine();

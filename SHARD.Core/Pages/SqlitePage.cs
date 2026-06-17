@@ -59,9 +59,9 @@ public abstract class SqlitePage
                 _                           => new UnknownPage(pageNumber, pageSize, data),
             };
         }
-        catch
+        catch (Exception ex)
         {
-            return new UnknownPage(pageNumber, pageSize, data);
+            return new UnknownPage(pageNumber, pageSize, data, typeByte, ex);
         }
     }
 
@@ -79,9 +79,22 @@ public abstract class SqlitePage
     }
 }
 
-/// <summary>Catch-all for pages whose type byte is unrecognised.</summary>
-public sealed class UnknownPage(uint pageNumber, int pageSize, byte[] data)
-    : SqlitePage(pageNumber, pageSize, data)
+/// <summary>Catch-all for pages whose type byte is unrecognised or whose parsing threw.</summary>
+public sealed class UnknownPage : SqlitePage
 {
     public override PageType PageType => PageType.Unknown;
+
+    /// <summary>The type byte that was found in the page header (may differ from the classified PageType).</summary>
+    public PageType DeclaredTypeByte { get; }
+
+    /// <summary>Exception thrown during parsing, if any. Null for genuinely unrecognised type bytes.</summary>
+    public Exception? ParseError { get; }
+
+    public UnknownPage(uint pageNumber, int pageSize, byte[] data,
+        PageType declaredTypeByte = PageType.Unknown, Exception? parseError = null)
+        : base(pageNumber, pageSize, data)
+    {
+        DeclaredTypeByte = declaredTypeByte;
+        ParseError       = parseError;
+    }
 }
