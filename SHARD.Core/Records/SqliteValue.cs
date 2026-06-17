@@ -50,6 +50,20 @@ public sealed class SqliteValue
         TextValue = stringData;
         DataLength = length;
     }
+    
+    public SqliteValue(double value, int length)
+    {
+        StorageClass = SqliteStorageClass.Real;
+        RealValue = value;
+        DataLength = length;
+    }
+
+    public SqliteValue(byte[] byteData, int length)
+    {
+        StorageClass = SqliteStorageClass.Blob;
+        BlobValue = byteData;
+        DataLength = length;
+    }    
 
     // ── Static factories ─────────────────────────────────────────────────────
     //public static readonly SqliteValue Null = new() { StorageClass = SqliteStorageClass.Null };

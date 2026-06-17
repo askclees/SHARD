@@ -116,6 +116,14 @@ public class BTreeLeafCell
                     }
                     values.Add(GetIntegerValue(data[recordOffset..(recordOffset+entry.ContentLength) ]));
                     break;
+                case SerialTypeKind.Float:
+                    if (recordOffset + 8 > data.Length)
+                    {
+                        values.Add(null);
+                        break;
+                    }
+                    values.Add(new SqliteValue(BinaryPrimitives.ReadDoubleBigEndian(data.AsSpan(recordOffset, 8)), 8));
+                    break;
                 case SerialTypeKind.Text:
                     if (recordOffset + entry.ContentLength > data.Length)
                     {
@@ -127,6 +135,16 @@ public class BTreeLeafCell
                     string stringData = GetTextValue(stringByteData, _encoding);
                     values.Add(new SqliteValue(stringData, entry.ContentLength));
                     break;
+                case SerialTypeKind.Blob:
+                    if (recordOffset + entry.ContentLength > data.Length)
+                    {
+                        // Field content spills into the overflow page chain (OverflowPage), not yet followed.
+                        values.Add(null);
+                        break;
+                    }
+                    byte[] byteData = data[recordOffset..(recordOffset + entry.ContentLength)];
+                    values.Add(new SqliteValue(byteData, entry.ContentLength));
+                    break;                
                 default:
                     values.Add(null);
                     break;

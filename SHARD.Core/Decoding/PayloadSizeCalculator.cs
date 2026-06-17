@@ -23,12 +23,16 @@ public static class PayloadSizeCalculator
     /// <summary>
     /// Computes how many bytes of an index leaf or index/table interior cell's payload
     /// are stored locally. Index pages use a tighter local limit than table leaf pages:
-    /// X = M = ((usableSize-12)*32/255)-23, so any payload exceeding M bytes overflows.
+    /// X = ((usableSize-12)*64/255)-23 vs table leaf's X = usableSize-35.
     /// </summary>
     public static int GetIndexLocalPayloadSize(long payloadSize, int pageSize, int reservedBytes)
     {
         int usableSize = pageSize - reservedBytes;
+        int x = ((usableSize - 12) * 64 / 255) - 23;
+        if (payloadSize <= x) return (int)payloadSize;
+
         int m = ((usableSize - 12) * 32 / 255) - 23;
-        return payloadSize <= m ? (int)payloadSize : m;
+        int k = m + (int)((payloadSize - m) % (usableSize - 4));
+        return k <= x ? k : m;
     }
 }

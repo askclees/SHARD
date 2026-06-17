@@ -75,6 +75,28 @@ public sealed class SqliteForensicDatabase : IDisposable
     }
 
     /// <summary>
+    /// Follows the overflow chain for a table leaf cell and calls <see cref="BTreeLeafCell.ResolveOverflow"/>
+    /// so that fields that spilled past the local payload boundary are fully decoded.
+    /// </summary>
+    public void ResolveOverflow(BTreeLeafCell cell)
+    {
+        if (cell.OverflowPage == 0) return;
+        var (bytes, _) = ReadOverflowChain(cell.OverflowPage, cell.OverflowBytesNeeded);
+        cell.ResolveOverflow(bytes);
+    }
+
+    /// <summary>
+    /// Follows the overflow chain for an index leaf cell and calls <see cref="IndexBTreeLeafCell.ResolveOverflow"/>
+    /// so that fields that spilled past the local payload boundary are fully decoded.
+    /// </summary>
+    public void ResolveOverflow(IndexBTreeLeafCell cell)
+    {
+        if (cell.OverflowPage == 0) return;
+        var (bytes, _) = ReadOverflowChain(cell.OverflowPage, cell.OverflowBytesNeeded);
+        cell.ResolveOverflow(bytes);
+    }
+
+    /// <summary>
     /// Walks an overflow page chain starting at <paramref name="firstPage"/>, collecting up
     /// to <paramref name="totalBytesNeeded"/> bytes of payload data along with per-page
     /// fragment metadata (page number, next pointer, fragment length) for forensic display.

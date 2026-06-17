@@ -50,6 +50,19 @@ public sealed class IndexBTreeLeafCell
         FieldValues.AddRange(DecodeFieldValues(data, recordOffset));
     }
 
+    public void ResolveOverflow(byte[] overflowBytes)
+    {
+        if (OverflowPage == 0) return;
+
+        var fullData = new byte[_localData.Length + overflowBytes.Length];
+        _localData.CopyTo(fullData, 0);
+        overflowBytes.CopyTo(fullData, _localData.Length);
+
+        var recordOffset = SizeOfPayload.Length + (int)HeaderSize.Value;
+        FieldValues.Clear();
+        FieldValues.AddRange(DecodeFieldValues(fullData, recordOffset));
+    }
+
     private List<SqliteValue?> DecodeFieldValues(byte[] data, int recordOffset)
     {
         var values = new List<SqliteValue?>();
@@ -74,6 +87,14 @@ public sealed class IndexBTreeLeafCell
                     }
                     values.Add(GetIntegerValue(data[recordOffset..(recordOffset + entry.ContentLength)]));
                     break;
+                case SerialTypeKind.Float:
+                    if (recordOffset + 8 > data.Length)
+                    {
+                        values.Add(null);
+                        break;
+                    }
+                    values.Add(new SqliteValue(BinaryPrimitives.ReadDoubleBigEndian(data.AsSpan(recordOffset, 8)), 8));
+                    break;
                 case SerialTypeKind.Text:
                     if (recordOffset + entry.ContentLength > data.Length)
                     {
@@ -81,6 +102,14 @@ public sealed class IndexBTreeLeafCell
                         break;
                     }
                     values.Add(new SqliteValue(GetTextValue(data.AsSpan(recordOffset, entry.ContentLength), _encoding), entry.ContentLength));
+                    break;
+                case SerialTypeKind.Blob:
+                    if (recordOffset + entry.ContentLength > data.Length)
+                    {
+                        values.Add(null);
+                        break;
+                    }
+                    values.Add(new SqliteValue(data[recordOffset..(recordOffset + entry.ContentLength)], entry.ContentLength));
                     break;
                 default:
                     values.Add(null);
