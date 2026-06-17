@@ -55,7 +55,7 @@ public abstract class SqlitePage
                 PageType.BTreeInteriorTable => new TableBTreeInteriorPage(pageNumber, pageSize, data),
                 PageType.BTreeInteriorIndex => new IndexBTreeInteriorPage(pageNumber, pageSize, data),
                 PageType.BTreeLeafTable     => new TableBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
-                PageType.BTreeLeafIndex     => new IndexBTreeLeafPage(pageNumber, pageSize, data),
+                PageType.BTreeLeafIndex     => new IndexBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
                 _                           => new UnknownPage(pageNumber, pageSize, data),
             };
         }

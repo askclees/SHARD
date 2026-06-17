@@ -62,6 +62,13 @@ public sealed class PageViewModel : ViewModelBase
                 sections.Add(new CellSectionViewModel(tlp.Cells[i], i, tlp.CellPointers[i]));
             CellSections = sections;
         }
+        else if (page is IndexBTreeLeafPage ilp)
+        {
+            var sections = new List<CellSectionViewModel>(ilp.Cells.Count);
+            for (int i = 0; i < ilp.Cells.Count; i++)
+                sections.Add(new CellSectionViewModel(ilp.Cells[i], i, ilp.CellPointers[i]));
+            CellSections = sections;
+        }
         else
         {
             CellSections = [];
@@ -129,6 +136,26 @@ public sealed class PageViewModel : ViewModelBase
                     int len = cell.HeaderEntries[i].ContentLength;
                     if (len > 0)
                         list.Add(new HexHighlight(fieldOffset, len, ColumnColour(i), $"Row {cell.RowId.Value} · Col {i}"));
+                    fieldOffset += len;
+                }
+            }
+        }
+        else if (page is IndexBTreeLeafPage ilp)
+        {
+            for (int j = 0; j < ilp.Cells.Count; j++)
+            {
+                var cell      = ilp.Cells[j];
+                int cellStart = ilp.CellPointers[j];
+                int dataStart = cellStart
+                                + cell.SizeOfPayload.Length
+                                + (int)cell.HeaderSize.Value;
+
+                int fieldOffset = dataStart;
+                for (int i = 0; i < cell.HeaderEntries.Count; i++)
+                {
+                    int len = cell.HeaderEntries[i].ContentLength;
+                    if (len > 0)
+                        list.Add(new HexHighlight(fieldOffset, len, ColumnColour(i), $"Cell {j} · Col {i}"));
                     fieldOffset += len;
                 }
             }
