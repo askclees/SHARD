@@ -31,6 +31,10 @@
                 <MenuItem Header="_Open Project…"
                           Name="MenuOpenProject" />
                 <Separator />
+                <MenuItem Header="Load _WAL File…"
+                          Name="MenuLoadWal"
+                          IsEnabled="{Binding HasDatabase}" />
+                <Separator />
                 <MenuItem Header="E_xit"
                           Name="MenuExit" />
             </MenuItem>
@@ -744,6 +748,218 @@
 
                             </Grid>
 
+                        </Grid>
+                    </TabItem>
+
+                    <!-- ── Tab 6: WAL ── -->
+                    <TabItem Header="{Binding WalTab.TabHeader}"
+                             IsVisible="{Binding HasWal}">
+                        <Grid ColumnDefinitions="260,4,*">
+
+                            <!-- Left: WAL header fields -->
+                            <ScrollViewer Grid.Column="0"
+                                          Padding="16,12"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <ItemsControl ItemsSource="{Binding WalTab.HeaderRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:InfoRow">
+                                            <Grid ColumnDefinitions="180,*" Margin="0,4">
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding Label}"
+                                                           FontWeight="SemiBold"
+                                                           Opacity="0.6"
+                                                           FontSize="12" />
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding Value}"
+                                                           FontFamily="Courier New"
+                                                           FontSize="12" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+
+                            <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                            <!-- Right: frame list + frame detail -->
+                            <Grid Grid.Column="2" ColumnDefinitions="240,4,*">
+
+                                <!-- Frame list -->
+                                <ListBox Grid.Column="0"
+                                         ItemsSource="{Binding WalTab.Frames}"
+                                         SelectedItem="{Binding WalTab.SelectedFrame}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WalFrameEntryViewModel">
+                                            <Grid ColumnDefinitions="5,36,44,Auto,*,Auto" Height="26">
+                                                <Border Grid.Column="0"
+                                                        Background="{Binding TypeBrush}"
+                                                        CornerRadius="2,0,0,2" />
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding FrameIndex}"
+                                                           VerticalAlignment="Center"
+                                                           TextAlignment="Right"
+                                                           Padding="0,0,6,0"
+                                                           FontSize="11"
+                                                           Opacity="0.4" />
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding PageNumber}"
+                                                           VerticalAlignment="Center"
+                                                           TextAlignment="Right"
+                                                           Padding="0,0,8,0"
+                                                           FontSize="11"
+                                                           Opacity="0.55" />
+                                                <TextBlock Grid.Column="3"
+                                                           Text="{Binding TypeLabel}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="12" />
+                                                <TextBlock Grid.Column="5"
+                                                           Text="COMMIT"
+                                                           IsVisible="{Binding IsCommit}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="10"
+                                                           Opacity="0.55"
+                                                           Padding="6,0,8,0" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                                <!-- Frame detail -->
+                                <Grid Grid.Column="2">
+
+                                    <TextBlock IsVisible="{Binding WalTab.SelectedFrameDetail,
+                                                           Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                               Text="← Select a frame from the list"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Opacity="0.35"
+                                               FontSize="13" />
+
+                                    <Grid IsVisible="{Binding WalTab.SelectedFrameDetail,
+                                                      Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                          ColumnDefinitions="*,4,*">
+
+                                        <!-- Summary + expanders -->
+                                        <ScrollViewer Grid.Column="0"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled">
+                                            <StackPanel Margin="14,10" Spacing="6">
+                                                <TextBlock Text="{Binding WalTab.SelectedFrameDetail.Summary}"
+                                                           FontFamily="Courier New"
+                                                           FontSize="12"
+                                                           TextWrapping="Wrap" />
+                                                <Expander Header="{Binding WalTab.SelectedFrameDetail.CellPointerHeader}"
+                                                          IsExpanded="False"
+                                                          IsVisible="{Binding WalTab.SelectedFrameDetail.HasCellPointers}">
+                                                    <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.CellPointerRows}"
+                                                                  Margin="8,4,0,4">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:InfoRow">
+                                                                <Grid ColumnDefinitions="52,*" Margin="0,2">
+                                                                    <TextBlock Grid.Column="0" Text="{Binding Label}" FontFamily="Courier New" FontSize="11" Opacity="0.55" />
+                                                                    <TextBlock Grid.Column="1" Text="{Binding Value}"  FontFamily="Courier New" FontSize="11" />
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </Expander>
+                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.CellSections}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:CellSectionViewModel">
+                                                            <Expander Header="{Binding Header}"
+                                                                      IsExpanded="False"
+                                                                      Expanded="OnWalCellSectionExpanded"
+                                                                      Margin="0,2,0,0">
+                                                                <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                                            <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                            </Grid>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Expander>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.FreeBlockSections}"
+                                                              IsVisible="{Binding WalTab.SelectedFrameDetail.HasFreeBlocks}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:FreeBlockSectionViewModel">
+                                                            <Expander Header="{Binding Header}"
+                                                                      IsExpanded="False"
+                                                                      Expanded="OnWalFreeBlockSectionExpanded"
+                                                                      Margin="0,2,0,0">
+                                                                <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                                            <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                            </Grid>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Expander>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </ScrollViewer>
+
+                                        <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                                        <!-- Hex view -->
+                                        <Grid Grid.Column="2" RowDefinitions="Auto,*">
+                                            <Border Grid.Row="0"
+                                                    Padding="8,4"
+                                                    BorderThickness="0,0,0,1">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ToggleButton x:Name="WalOffsetToggle"
+                                                                  Content="Dec Offsets"
+                                                                  IsChecked="False"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <ToggleButton x:Name="WalHighlightToggle"
+                                                                  Content="Highlights"
+                                                                  IsChecked="True"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <TextBlock Text="{Binding #WalHexView.HoveredLabel}"
+                                                               IsVisible="{Binding #WalHexView.HoveredLabel,
+                                                                           Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11"
+                                                               Opacity="0.75"
+                                                               Margin="8,0,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                                <ScrollViewer Grid.Column="0"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <controls:HexView x:Name="WalHexView"
+                                                                      Margin="14,8,14,16"
+                                                                      Data="{Binding WalTab.SelectedFrameDetail.PageBytes}"
+                                                                      Highlights="{Binding WalTab.SelectedFrameDetail.PageHighlights}"
+                                                                      UseDecimalOffsets="{Binding #WalOffsetToggle.IsChecked}"
+                                                                      ShowHighlights="{Binding #WalHighlightToggle.IsChecked}" />
+                                                </ScrollViewer>
+                                                <controls:DataInspectorControl Grid.Column="1"
+                                                                               Data="{Binding #WalHexView.Data}"
+                                                                               Offset="{Binding #WalHexView.CursorOffset}" />
+                                            </Grid>
+                                        </Grid>
+
+                                    </Grid>
+                                </Grid>
+
+                            </Grid>
                         </Grid>
                     </TabItem>
 

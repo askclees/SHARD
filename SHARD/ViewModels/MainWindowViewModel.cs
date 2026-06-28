@@ -6,6 +6,7 @@ using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
 using SHARD.Core.Shadow;
+using SHARD.Core.WAL;
 
 namespace SHARD.ViewModels;
 
@@ -13,6 +14,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 {
     // ── Loaded database ───────────────────────────────────────────────────
     private string? _currentFilePath;
+    public string? CurrentFilePath => _currentFilePath;
 
     private SqliteForensicDatabase? _database;
     public SqliteForensicDatabase? Database
@@ -118,6 +120,19 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     // ── Query tab ─────────────────────────────────────────────────────────────
     public QueryViewModel QueryTab { get; }
+
+    // ── WAL file ──────────────────────────────────────────────────────────
+    private WalViewModel? _walTab;
+    public WalViewModel? WalTab
+    {
+        get => _walTab;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _walTab, value);
+            this.RaisePropertyChanged(nameof(HasWal));
+        }
+    }
+    public bool HasWal => WalTab is not null;
 
     // ── Shadow project ───────────────────────────────────────────────────
     private ShadowProject? _project;
@@ -233,6 +248,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             HasDatabase = true;
             StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}  ·  {db.PageCount:N0} pages";
+
+            string walPath = path + "-wal";
+            if (File.Exists(walPath))
+                LoadWalFile(walPath);
         }
         catch (InvalidDataException ex)
         {
@@ -258,6 +277,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         HeaderHighlights = [];
         SelectedPage = null;
         HasDatabase  = false;
+        WalTab       = null;
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";
         SearchTab.Clear();
@@ -342,6 +362,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             StatusText = $"Error reading persisted page classifications: {ex.Message}";
+        }
+    }
+
+    public void LoadWalFile(string walPath)
+    {
+        if (Database is null) return;
+        try
+        {
+            var wal = new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
+            WalTab = new WalViewModel(walPath, wal);
+            StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"WAL file could not be loaded: {ex.Message}";
         }
     }
 

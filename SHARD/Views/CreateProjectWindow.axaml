@@ -2,8 +2,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="SHARD.Views.CreateProjectWindow"
         Title="Create Project"
-        Width="520" Height="160"
-        MinWidth="420" MinHeight="160"
+        Width="520" Height="200"
+        MinWidth="420" MinHeight="200"
         CanResize="False"
         WindowStartupLocation="CenterOwner">
 
@@ -26,6 +26,10 @@
                         Content="Browse…"
                         Margin="6,0,0,0" />
             </Grid>
+            <CheckBox Name="WalCheckBox"
+                      IsVisible="False"
+                      IsChecked="True"
+                      FontSize="12" />
             <TextBlock Name="ErrorText"
                        Foreground="#E05C5C"
                        FontSize="11"

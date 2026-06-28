@@ -18,6 +18,11 @@ public partial class MainWindow : Window
         AppleUniformTypeIdentifiers = ["com.apple.sqlite3"],
     };
 
+    private static readonly FilePickerFileType WalFilter = new("SQLite WAL File")
+    {
+        Patterns = ["*.db-wal", "*.sqlite-wal", "*.wal"],
+    };
+
     public MainWindow()
     {
         InitializeComponent();
@@ -27,6 +32,7 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuClose")!.Click         += OnCloseClick;
         this.FindControl<MenuItem>("MenuCreateProject")!.Click += OnCreateProjectClick;
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
+        this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
 
@@ -99,13 +105,35 @@ public partial class MainWindow : Window
     private void OnCloseClick(object? sender, RoutedEventArgs e) =>
         Vm.CloseFile();
 
+    private async void OnLoadWalClick(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title          = "Open WAL File",
+            AllowMultiple  = false,
+            FileTypeFilter = [WalFilter, FilePickerFileTypes.All],
+        });
+
+        if (files is [var file])
+            Vm.LoadWalFile(file.Path.LocalPath);
+    }
+
     private async void OnCreateProjectClick(object? sender, RoutedEventArgs e)
     {
-        var dialog = new CreateProjectWindow();
-        var path = await dialog.ShowDialog<string?>(this);
+        string? candidate = Vm.CurrentFilePath + "-wal";
+        string? detectedWal = Vm.WalTab is null && System.IO.File.Exists(candidate)
+            ? candidate
+            : null; // already loaded or not found — no need to offer
 
-        if (path is not null)
-            Vm.CreateProject(path);
+        var dialog = new CreateProjectWindow(detectedWal);
+        var result = await dialog.ShowDialog<CreateProjectResult?>(this);
+
+        if (result is not null)
+        {
+            Vm.CreateProject(result.FolderPath);
+            if (result.WalPathToLoad is not null)
+                Vm.LoadWalFile(result.WalPathToLoad);
+        }
     }
 
     private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)
@@ -150,6 +178,18 @@ public partial class MainWindow : Window
     {
         if (sender is not Expander { DataContext: FreeBlockSectionViewModel vm }) return;
         this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnWalCellSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
+        this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnWalFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: FreeBlockSectionViewModel vm }) return;
+        this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
     // ── Search ───────────────────────────────────────────────────────────────

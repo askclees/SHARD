@@ -4,6 +4,8 @@ using Avalonia.Platform.Storage;
 
 namespace SHARD.Views;
 
+public record CreateProjectResult(string FolderPath, string? WalPathToLoad);
+
 /// <summary>
 /// Prompts the user for a project folder path. Offers a native folder picker via
 /// "Browse…" on a best-effort basis (it depends on a desktop portal that may not be
@@ -11,9 +13,20 @@ namespace SHARD.Views;
 /// </summary>
 public partial class CreateProjectWindow : Window
 {
-    public CreateProjectWindow()
+    private readonly string? _detectedWalPath;
+
+    public CreateProjectWindow(string? detectedWalPath = null)
     {
         InitializeComponent();
+        _detectedWalPath = detectedWalPath;
+
+        if (detectedWalPath is not null)
+        {
+            var checkBox = this.FindControl<CheckBox>("WalCheckBox")!;
+            checkBox.Content    = $"Load associated WAL file ({System.IO.Path.GetFileName(detectedWalPath)})";
+            checkBox.IsVisible  = true;
+            checkBox.IsChecked  = true;
+        }
 
         this.FindControl<Button>("BrowseButton")!.Click += OnBrowseClick;
         this.FindControl<Button>("CreateButton")!.Click += OnCreateClick;
@@ -51,6 +64,9 @@ public partial class CreateProjectWindow : Window
             return;
         }
 
-        Close(path);
+        bool loadWal = this.FindControl<CheckBox>("WalCheckBox")!.IsChecked == true;
+        string? walPath = loadWal ? _detectedWalPath : null;
+
+        Close(new CreateProjectResult(path, walPath));
     }
 }
