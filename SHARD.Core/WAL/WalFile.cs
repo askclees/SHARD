@@ -30,7 +30,7 @@ public class WalFile
                 throw new InvalidDataException($"WAL file has a partial frame at offset {pointer} — file may be corrupted");
             }
 
-            WalFrame newFrame = new(frameData, pageSize, encoding, reservedBytes);
+            WalFrame newFrame = new(frameData, pageSize, encoding, reservedBytes, Header.VerificationData);
             Frames.Add(newFrame);
             pointer += pageSize + 24;
         }

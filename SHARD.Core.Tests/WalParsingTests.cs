@@ -49,6 +49,10 @@ public class WalParsingTests
         return bytes;
     }
 
+    private static VerificationData MakeVerificationData(uint salt1 = 1, uint salt2 = 2,
+        uint checksum1 = 3, uint checksum2 = 4) =>
+        new(salt1, salt2, checksum1, checksum2);
+
     private static string CreateWalDatabase()
     {
         string path = Path.Combine(Path.GetTempPath(), $"shard_wal_{Guid.NewGuid():N}.db");
@@ -89,10 +93,10 @@ public class WalParsingTests
         Assert.Equal(3007000u,    header.FileFormatVersion);
         Assert.Equal(4096u,       header.DatabasePageSize);
         Assert.Equal(5u,          header.CheckpointSequenceNumber);
-        Assert.Equal(11u,         header.Salt1);
-        Assert.Equal(22u,         header.Salt2);
-        Assert.Equal(33u,         header.Checksum1);
-        Assert.Equal(44u,         header.Checksum2);
+        Assert.Equal(11u,         header.VerificationData.Salt1);
+        Assert.Equal(22u,         header.VerificationData.Salt2);
+        Assert.Equal(33u,         header.VerificationData.Checksum1);
+        Assert.Equal(44u,         header.VerificationData.Checksum2);
     }
 
     [Fact]
@@ -129,27 +133,53 @@ public class WalParsingTests
     {
         var bytes = MakeFrameHeader(pageNumber: 3, dbSizeInPages: 5,
             salt1: 10, salt2: 20, checksum1: 30, checksum2: 40);
+        var walChecksums = MakeVerificationData(salt1: 10, salt2: 20);
 
-        var header = new WalFrameHeader(bytes);
+        var header = new WalFrameHeader(bytes, walChecksums);
 
         Assert.Equal(3u,  header.PageNumber);
         Assert.Equal(5u,  header.SizeOfDatabaseInPages);
-        Assert.Equal(10u, header.Salt1);
-        Assert.Equal(20u, header.Salt2);
-        Assert.Equal(30u, header.Checksum1);
-        Assert.Equal(40u, header.Checksum2);
+        Assert.Equal(10u, header.VerificationData.Salt1);
+        Assert.Equal(20u, header.VerificationData.Salt2);
+        Assert.Equal(30u, header.VerificationData.Checksum1);
+        Assert.Equal(40u, header.VerificationData.Checksum2);
+    }
+
+    [Fact]
+    public void WalFrameHeader_IsCurrentWhenSaltsMatch()
+    {
+        var bytes = MakeFrameHeader(salt1: 42, salt2: 99, checksum1: 1, checksum2: 2);
+        // WAL header salts match frame salts — different checksums should not affect IsCurrent
+        var walChecksums = MakeVerificationData(salt1: 42, salt2: 99, checksum1: 999, checksum2: 888);
+
+        var header = new WalFrameHeader(bytes, walChecksums);
+
+        Assert.True(header.IsCurrent);
+    }
+
+    [Fact]
+    public void WalFrameHeader_IsNotCurrentWhenSaltsDiffer()
+    {
+        var bytes = MakeFrameHeader(salt1: 1, salt2: 2);
+        var walChecksums = MakeVerificationData(salt1: 99, salt2: 100);
+
+        var header = new WalFrameHeader(bytes, walChecksums);
+
+        Assert.False(header.IsCurrent);
     }
 
     [Fact]
     public void WalFrameHeader_ThrowsWhenTooShort()
     {
-        Assert.Throws<InvalidDataException>(() => new WalFrameHeader(new byte[23]));
+        var checksums = MakeVerificationData();
+        Assert.Throws<InvalidDataException>(() => new WalFrameHeader(new byte[23], checksums));
     }
 
     [Fact]
     public void WalFrameHeader_ThrowsWhenTooLong()
     {
-        Assert.Throws<InvalidDataException>(() => new WalFrameHeader(new byte[25]));
+        var checksums = MakeVerificationData();
+        Assert.Throws<InvalidDataException>(() => new WalFrameHeader(new byte[25], checksums));
     }
 
     // ── WalFrame unit tests ───────────────────────────────────────────────────
@@ -162,8 +192,9 @@ public class WalParsingTests
         BinaryPrimitives.WriteUInt32BigEndian(data.AsSpan(0), 7); // page number = 7
         data[24] = 0xAB;
         data[24 + (int)pageSize - 1] = 0xCD;
+        var checksums = MakeVerificationData();
 
-        var frame = new WalFrame(data, pageSize, TextEncoding.Utf8, 0);
+        var frame = new WalFrame(data, pageSize, TextEncoding.Utf8, 0, checksums);
 
         Assert.Equal(7u, frame.Header.PageNumber);
         Assert.Equal((int)pageSize, frame.PageData.Length);
@@ -175,7 +206,9 @@ public class WalParsingTests
     public void WalFrame_ThrowsWhenDataTooSmall()
     {
         uint pageSize = 4096;
-        Assert.Throws<InvalidDataException>(() => new WalFrame(new byte[24 + pageSize - 1], pageSize, TextEncoding.Utf8, 0));
+        var checksums = MakeVerificationData();
+        Assert.Throws<InvalidDataException>(() =>
+            new WalFrame(new byte[24 + pageSize - 1], pageSize, TextEncoding.Utf8, 0, checksums));
     }
 
     // ── WalFile integration tests ─────────────────────────────────────────────
@@ -221,6 +254,22 @@ public class WalParsingTests
                 Assert.True(frame.Header.PageNumber > 0);
                 Assert.Equal((int)wal.Header.DatabasePageSize, frame.PageData.Length);
             }
+        }
+        finally { DeleteWalDatabase(dbPath); }
+    }
+
+    [Fact]
+    public void WalFile_AllFramesFromRealWalAreCurrentByDefault()
+    {
+        string dbPath = CreateWalDatabase();
+        string walPath = dbPath + "-wal";
+        try
+        {
+            Assert.True(File.Exists(walPath), "WAL file was not created");
+
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            Assert.All(wal.Frames, f => Assert.True(f.Header.IsCurrent));
         }
         finally { DeleteWalDatabase(dbPath); }
     }

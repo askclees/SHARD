@@ -6,12 +6,10 @@ public class WalFrameHeader
 {
     public uint PageNumber { get; }
     public uint SizeOfDatabaseInPages { get;}
-    public uint Salt1 { get;}
-    public uint Salt2 { get;}
-    public uint Checksum1 { get;}
-    public uint Checksum2 { get;}
+    public VerificationData VerificationData { get; }
+    public bool IsCurrent { get; }
 
-    public WalFrameHeader(ReadOnlySpan<byte> headerBytes)
+    public WalFrameHeader(ReadOnlySpan<byte> headerBytes, VerificationData checksums)
     {
         //header is 24 bytes (always)
         if (headerBytes.Length != 24)
@@ -24,12 +22,7 @@ public class WalFrameHeader
         int pointer = 4;
         SizeOfDatabaseInPages = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
         pointer += 4;
-        Salt1 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
-        pointer += 4;
-        Salt2 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
-        pointer += 4;
-        Checksum1 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
-        pointer += 4;
-        Checksum2 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
+        VerificationData = new VerificationData(headerBytes[pointer..(pointer + 16)]);
+        IsCurrent = VerificationData.Salt1 == checksums.Salt1 && VerificationData.Salt2 == checksums.Salt2;
     }
 }

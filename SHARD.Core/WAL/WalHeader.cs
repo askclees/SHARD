@@ -8,10 +8,7 @@ public class WalHeader
     public uint FileFormatVersion { get;}
     public uint DatabasePageSize { get;}
     public uint CheckpointSequenceNumber { get;}
-    public uint Salt1 { get;}
-    public uint Salt2 { get;}
-    public uint Checksum1 { get;}
-    public uint Checksum2 { get;}
+    public VerificationData VerificationData { get; }
 
     private uint[] _validHeaders =
     {
@@ -42,13 +39,7 @@ public class WalHeader
         pointer += 4;
         CheckpointSequenceNumber = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
         pointer += 4;
-        Salt1 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
-        pointer += 4;
-        Salt2 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
-        pointer += 4;
-        Checksum1 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
-        pointer += 4;
-        Checksum2 = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
+        VerificationData = new VerificationData(headerBytes[pointer..(pointer + 16)]);
     }
     
     

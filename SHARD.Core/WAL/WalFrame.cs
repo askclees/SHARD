@@ -9,13 +9,14 @@ public class WalFrame
     public byte[] PageData { get; }
     public SqlitePage Page { get; }
 
-    public WalFrame(ReadOnlySpan<byte> data, uint pageSize, TextEncoding encoding, int reservedBytes)
+    public WalFrame(ReadOnlySpan<byte> data, uint pageSize, TextEncoding encoding, int reservedBytes, 
+        VerificationData checksums)
     {
         if (data.Length < 24 + pageSize)
         {
             throw new InvalidDataException("Data is smaller than required header size and minimum page size");
         }
-        Header = new WalFrameHeader(data[0..24]);
+        Header = new WalFrameHeader(data[0..24], checksums);
         PageData = data[24..(int)(pageSize + 24)].ToArray();
         Page = SqlitePage.FromBytes(Header.PageNumber, (int)pageSize, PageData, encoding, reservedBytes);
     }
