@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using Microsoft.Data.Sqlite;
+using SHARD.Core.Enums;
 using SHARD.Core.WAL;
 
 namespace SHARD.Core.Tests;
@@ -162,7 +163,7 @@ public class WalParsingTests
         data[24] = 0xAB;
         data[24 + (int)pageSize - 1] = 0xCD;
 
-        var frame = new WalFrame(data, pageSize);
+        var frame = new WalFrame(data, pageSize, TextEncoding.Utf8, 0);
 
         Assert.Equal(7u, frame.Header.PageNumber);
         Assert.Equal((int)pageSize, frame.PageData.Length);
@@ -174,7 +175,7 @@ public class WalParsingTests
     public void WalFrame_ThrowsWhenDataTooSmall()
     {
         uint pageSize = 4096;
-        Assert.Throws<InvalidDataException>(() => new WalFrame(new byte[24 + pageSize - 1], pageSize));
+        Assert.Throws<InvalidDataException>(() => new WalFrame(new byte[24 + pageSize - 1], pageSize, TextEncoding.Utf8, 0));
     }
 
     // ── WalFile integration tests ─────────────────────────────────────────────
@@ -183,7 +184,7 @@ public class WalParsingTests
     public void WalFile_ThrowsOnMissingFile()
     {
         string path = Path.Combine(Path.GetTempPath(), $"shard_wal_{Guid.NewGuid():N}_missing.db-wal");
-        Assert.Throws<FileNotFoundException>(() => new WalFile(path));
+        Assert.Throws<FileNotFoundException>(() => new WalFile(path, TextEncoding.Utf8, 0));
     }
 
     [Fact]
@@ -195,7 +196,7 @@ public class WalParsingTests
         {
             Assert.True(File.Exists(walPath), "WAL file was not created");
 
-            var wal = new WalFile(walPath);
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
 
             Assert.True(wal.Header.MagicNumber is 0x377f0682u or 0x377f0683u);
             Assert.Equal(4096u, wal.Header.DatabasePageSize);
@@ -212,7 +213,7 @@ public class WalParsingTests
         {
             Assert.True(File.Exists(walPath), "WAL file was not created");
 
-            var wal = new WalFile(walPath);
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
 
             Assert.NotEmpty(wal.Frames);
             foreach (var frame in wal.Frames)
@@ -235,7 +236,7 @@ public class WalParsingTests
             byte[] partial = new byte[10];
             File.WriteAllBytes(walPath, [..header, ..partial]);
 
-            Assert.Throws<InvalidDataException>(() => new WalFile(walPath));
+            Assert.Throws<InvalidDataException>(() => new WalFile(walPath, TextEncoding.Utf8, 0));
         }
         finally { if (File.Exists(walPath)) File.Delete(walPath); }
     }

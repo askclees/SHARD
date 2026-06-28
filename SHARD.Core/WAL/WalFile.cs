@@ -1,3 +1,5 @@
+using SHARD.Core.Enums;
+
 namespace SHARD.Core.WAL;
 
 public class WalFile
@@ -5,10 +7,10 @@ public class WalFile
     public WalHeader Header { get; }
     public List<WalFrame> Frames { get;} = new ();
 
-    public WalFile(string path)
+    public WalFile(string path, TextEncoding encoding, int reservedBytes)
     {
         using FileStream walFile = File.Open(path, FileMode.Open);
-        
+
         byte[] headerData = new byte[32];
         walFile.ReadExactly(headerData, 0, 32);
 
@@ -28,11 +30,9 @@ public class WalFile
                 throw new InvalidDataException($"WAL file has a partial frame at offset {pointer} — file may be corrupted");
             }
 
-            WalFrame newFrame = new(frameData, pageSize);
+            WalFrame newFrame = new(frameData, pageSize, encoding, reservedBytes);
             Frames.Add(newFrame);
             pointer += pageSize + 24;
         }
-        
     }
-    
 }
