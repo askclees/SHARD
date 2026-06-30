@@ -43,6 +43,10 @@ public sealed class PageViewModel : ViewModelBase
     public IReadOnlyList<FreeBlockSectionViewModel> FreeBlockSections { get; }
     public bool HasFreeBlocks => FreeBlockSections.Count > 0;
 
+    // ── Unallocated region expanders (table leaf pages only) ──────────────
+    public IReadOnlyList<UnallocatedRegionSectionViewModel> UnallocatedRegionSections { get; }
+    public bool HasUnallocatedRegions => UnallocatedRegionSections.Count > 0;
+
     public PageViewModel(SqlitePage page)
     {
         Page = page;
@@ -70,6 +74,11 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < tlp.FreeBlocks.Count; i++)
                 fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i));
             FreeBlockSections = fbSections;
+
+            var urSections = new List<UnallocatedRegionSectionViewModel>(tlp.UnallocatedRegions.Count);
+            for (int i = 0; i < tlp.UnallocatedRegions.Count; i++)
+                urSections.Add(new UnallocatedRegionSectionViewModel(tlp.UnallocatedRegions[i], i));
+            UnallocatedRegionSections = urSections;
         }
         else if (page is IndexBTreeLeafPage ilp)
         {
@@ -77,12 +86,14 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < ilp.Cells.Count; i++)
                 sections.Add(new CellSectionViewModel(ilp.Cells[i], i, ilp.CellPointers[i]));
             CellSections = sections;
-            FreeBlockSections = [];
+            FreeBlockSections         = [];
+            UnallocatedRegionSections = [];
         }
         else
         {
-            CellSections      = [];
-            FreeBlockSections = [];
+            CellSections              = [];
+            FreeBlockSections         = [];
+            UnallocatedRegionSections = [];
         }
     }
 
@@ -194,6 +205,14 @@ public sealed class PageViewModel : ViewModelBase
                 int contentLen = (int)fb.BlockSize - 4;
                 if (contentLen > 0)
                     list.Add(new HexHighlight((int)fb.PageOffset + 4, contentLen, contentColour, $"Freeblock content"));
+            }
+
+            var unallocColour = Color.FromRgb(255, 165, 0);
+            for (int i = 0; i < tlpFb.UnallocatedRegions.Count; i++)
+            {
+                var region = tlpFb.UnallocatedRegions[i];
+                if (region.Size > 0)
+                    list.Add(new HexHighlight(region.Offset, region.Size, unallocColour, $"Unallocated Region {i}"));
             }
         }
 

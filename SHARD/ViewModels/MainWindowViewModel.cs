@@ -5,6 +5,8 @@ using Avalonia.Media;
 using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
+using SHARD.Core.Enums;
+using SHARD.Core.Pages;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
 
@@ -37,7 +39,155 @@ public sealed class MainWindowViewModel : ViewModelBase
     public bool HasNoDatabase => !HasDatabase;
 
     // ── Page list (left panel) ────────────────────────────────────────────
-    public ObservableCollection<PageListEntryViewModel> Pages { get; } = [];
+    public ObservableCollection<PageListEntryViewModel> Pages         { get; } = [];
+    public ObservableCollection<PageListEntryViewModel> FilteredPages { get; } = [];
+
+    // ── Page filters ──────────────────────────────────────────────────────
+    private bool _filterHasUnallocated;
+    public bool FilterHasUnallocated
+    {
+        get => _filterHasUnallocated;
+        set { this.RaiseAndSetIfChanged(ref _filterHasUnallocated, value); RebuildFilteredPages(); }
+    }
+
+    private bool _filterMinSizeEnabled;
+    public bool FilterMinSizeEnabled
+    {
+        get => _filterMinSizeEnabled;
+        set { this.RaiseAndSetIfChanged(ref _filterMinSizeEnabled, value); RebuildFilteredPages(); }
+    }
+
+    private int _filterMinSize = 1;
+    public int FilterMinSize
+    {
+        get => _filterMinSize;
+        set { this.RaiseAndSetIfChanged(ref _filterMinSize, value); if (_filterMinSizeEnabled) RebuildFilteredPages(); }
+    }
+
+    private bool _filterMinNonZeroEnabled;
+    public bool FilterMinNonZeroEnabled
+    {
+        get => _filterMinNonZeroEnabled;
+        set { this.RaiseAndSetIfChanged(ref _filterMinNonZeroEnabled, value); RebuildFilteredPages(); }
+    }
+
+    private int _filterMinNonZero = 1;
+    public int FilterMinNonZero
+    {
+        get => _filterMinNonZero;
+        set { this.RaiseAndSetIfChanged(ref _filterMinNonZero, value); if (_filterMinNonZeroEnabled) RebuildFilteredPages(); }
+    }
+
+    private bool _useOrLogic;
+    public bool UseOrLogic
+    {
+        get => _useOrLogic;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _useOrLogic, value);
+            this.RaisePropertyChanged(nameof(LogicModeLabel));
+            RebuildFilteredPages();
+        }
+    }
+    public string LogicModeLabel => UseOrLogic ? "OR" : "AND";
+
+    private string _filterCountLabel = "";
+    public string FilterCountLabel
+    {
+        get => _filterCountLabel;
+        private set => this.RaiseAndSetIfChanged(ref _filterCountLabel, value);
+    }
+
+    private bool RegionMatchesFilter(int size, int nonZeroBytes)
+    {
+        var results = new List<bool>();
+        if (FilterHasUnallocated)    results.Add(size > 0);
+        if (FilterMinSizeEnabled)    results.Add(size >= FilterMinSize);
+        if (FilterMinNonZeroEnabled) results.Add(nonZeroBytes >= FilterMinNonZero);
+        return UseOrLogic ? results.Any(r => r) : results.All(r => r);
+    }
+
+    private void RebuildFilteredPages()
+    {
+        FilteredPages.Clear();
+        bool anyTypeSelected    = PageTypeFilters.Any(f => f.IsSelected);
+        bool anyUnallocActive   = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
+        bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
+
+        foreach (var page in Pages)
+        {
+            if (anyTypeSelected && !PageTypeFilters.Any(f => f.IsSelected && f.PageType == page.PageType))
+                continue;
+            if (hasTableFilter && page.TableName != _filterTableName)
+                continue;
+            if (anyUnallocActive && !page.UnallocatedRegions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
+                continue;
+            FilteredPages.Add(page);
+        }
+
+        FilterCountLabel = FilteredPages.Count == Pages.Count
+            ? $"{Pages.Count} pages"
+            : $"{FilteredPages.Count} of {Pages.Count} pages";
+
+        RebuildFilteredUnallocatedSections();
+    }
+
+    public ObservableCollection<UnallocatedRegionSectionViewModel> FilteredUnallocatedSections { get; } = [];
+    public bool HasFilteredUnallocatedSections => FilteredUnallocatedSections.Count > 0;
+
+    // ── Page type filter ──────────────────────────────────────────────────
+    public IReadOnlyList<PageTypeToggleViewModel> PageTypeFilters { get; } = [];
+
+    // ── Table filter ──────────────────────────────────────────────────────
+    private string? _filterTableName;
+    public string? FilterTableName
+    {
+        get => _filterTableName;
+        set
+        {
+            var actual = value == "All tables" ? null : value;
+            this.RaiseAndSetIfChanged(ref _filterTableName, actual);
+            RebuildFilteredPages();
+        }
+    }
+    public ObservableCollection<string> AvailableTableNames { get; } = [];
+    public bool HasAvailableTableNames => AvailableTableNames.Count > 0;
+
+    private void RebuildFilteredUnallocatedSections()
+    {
+        FilteredUnallocatedSections.Clear();
+        bool anyActive = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
+
+        if (SelectedPageDetail is null) return;
+
+        foreach (var section in SelectedPageDetail.UnallocatedRegionSections)
+        {
+            if (!anyActive || RegionMatchesFilter(section.Size, section.NonZeroBytes))
+                FilteredUnallocatedSections.Add(section);
+        }
+
+        this.RaisePropertyChanged(nameof(HasFilteredUnallocatedSections));
+    }
+
+    private void RefreshAvailableTableNames()
+    {
+        AvailableTableNames.Clear();
+        AvailableTableNames.Add("All tables");
+        foreach (var name in Pages.Select(p => p.TableName).Where(n => n != null).Distinct().OrderBy(n => n))
+            AvailableTableNames.Add(name!);
+        this.RaisePropertyChanged(nameof(HasAvailableTableNames));
+    }
+
+    private static PageListEntryViewModel MakePageListEntry(SqlitePage page, string? tableName = null)
+    {
+        var regions = new List<(int Size, int NonZeroBytes)>();
+        if (page is TableBTreeLeafPage tlp)
+        {
+            foreach (var r in tlp.UnallocatedRegions)
+                regions.Add((r.Size, r.NonZeroBytes));
+        }
+        return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions);
+    }
 
     // ── Selected page (left panel selection; right panel detail) ─────────
     private PageListEntryViewModel? _selectedPage;
@@ -57,7 +207,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     public PageViewModel? SelectedPageDetail
     {
         get => _selectedPageDetail;
-        private set => this.RaiseAndSetIfChanged(ref _selectedPageDetail, value);
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedPageDetail, value);
+            RebuildFilteredUnallocatedSections();
+        }
     }
 
     // ── Overview panel info rows ──────────────────────────────────────────
@@ -161,6 +315,18 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         SearchTab = new SearchViewModel(Pages, pageNumber => Database?.ReadPage(pageNumber).Data);
         QueryTab  = new QueryViewModel();
+
+        PageTypeFilters = new List<PageTypeToggleViewModel>
+        {
+            new(PageType.BTreeLeafTable,     RebuildFilteredPages),
+            new(PageType.BTreeLeafIndex,     RebuildFilteredPages),
+            new(PageType.BTreeInteriorTable, RebuildFilteredPages),
+            new(PageType.BTreeInteriorIndex, RebuildFilteredPages),
+            new(PageType.Overflow,           RebuildFilteredPages),
+            new(PageType.FreelistTrunk,      RebuildFilteredPages),
+            new(PageType.FreelistLeaf,       RebuildFilteredPages),
+            new(PageType.Unknown,            RebuildFilteredPages),
+        };
     }
 
     // ── Actions ───────────────────────────────────────────────────────────
@@ -244,7 +410,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                 SchemaRows.Add(row);
 
             foreach (var page in db.ReadAllPages())
-                Pages.Add(new PageListEntryViewModel(page.PageNumber, page.PageType));
+                Pages.Add(MakePageListEntry(page));
+            RefreshAvailableTableNames();
+            RebuildFilteredPages();
 
             HasDatabase = true;
             StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}  ·  {db.PageCount:N0} pages";
@@ -270,6 +438,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         Database = null;
         _currentFilePath = null;
         Pages.Clear();
+        FilteredPages.Clear();
+        FilterCountLabel = "";
+        AvailableTableNames.Clear();
+        FilterTableName = null;
+        foreach (var f in PageTypeFilters) f.IsSelected = false;
         DatabaseInfoRows.Clear();
         SchemaRows.Clear();
         SelectedSchemaRow = null;
@@ -357,7 +530,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             var pageTypes = Project.ReadPageTypes();
             Pages.Clear();
             foreach (var (pageNumber, type, tableName) in pageTypes)
-                Pages.Add(new PageListEntryViewModel(pageNumber, type, tableName));
+            {
+                var page = Database?.ReadPage(pageNumber);
+                var entry = page is not null
+                    ? MakePageListEntry(page, tableName)
+                    : new PageListEntryViewModel(pageNumber, type, tableName);
+                Pages.Add(entry);
+            }
+            RefreshAvailableTableNames();
+            RebuildFilteredPages();
         }
         catch (Exception ex)
         {

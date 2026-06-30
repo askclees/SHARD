@@ -10,6 +10,7 @@ public class BTreeLeafCell
     public Varint SizeOfPayload { get; }
     public Varint RowId { get; }
     public Varint HeaderSize { get; }
+    public int PageOffset { get; }
     public List<HeaderEntry> HeaderEntries { get; } = new();
     public List<SqliteValue?> FieldValues { get; } = new();
 
@@ -33,11 +34,12 @@ public class BTreeLeafCell
     /// </summary>
     public int CellByteLengthOnPage => _localData.Length + (OverflowPage != 0 ? 4 : 0);
 
-    public BTreeLeafCell(byte[] data, Varint payloadSize, TextEncoding encoding, uint overflowPage = 0)
+    public BTreeLeafCell(byte[] data, Varint payloadSize, TextEncoding encoding, int pageOffset, uint overflowPage = 0)
     {
         OverflowPage = overflowPage;
         _localData = data;
         _encoding = encoding;
+        PageOffset = pageOffset;
         int offset = 0;
         SizeOfPayload = Varint.ReadAt(data, offset);
         // Check payload sizes match

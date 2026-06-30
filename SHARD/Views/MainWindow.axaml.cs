@@ -192,6 +192,18 @@ public partial class MainWindow : Window
         this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
+    private void OnUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
+        this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnWalUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
+        this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
     // ── Search ───────────────────────────────────────────────────────────────
 
     private void OnSearchBoxKeyDown(object? sender, KeyEventArgs e)
