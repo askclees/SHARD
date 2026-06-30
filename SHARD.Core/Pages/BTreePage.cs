@@ -49,6 +49,8 @@ public abstract class BTreePage : SqlitePage
     /// </summary>
     public ushort[] CellPointers { get; }
 
+    public List<ushort> DeletedCellPointers { get; } = new();
+
     // ── Constructor ──────────────────────────────────────────────────────────
     /// <param name="cellPointerStart">
     /// Byte offset within <paramref name="data"/> where the cell pointer array begins.
@@ -69,7 +71,23 @@ public abstract class BTreePage : SqlitePage
         CellPointers = new ushort[CellCount];
         for (int i = 0; i < CellCount; i++)
             CellPointers[i] = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(cellPointerStart + i * 2, 2));
-        
-        
+
+        bool foundZeroBytes = false;
+        int pointer = cellPointerStart + (CellCount * 2);
+        int cellEnd = CellContentAreaStart == 0 ? 65536 : CellContentAreaStart;
+        while (!foundZeroBytes && pointer < cellEnd)
+        {
+            ushort deletedPointer = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(pointer, 2));
+            if (deletedPointer == 0)
+            {
+                foundZeroBytes = true;
+            }
+            else
+            {
+                if (!CellPointers.Contains(deletedPointer))
+                    DeletedCellPointers.Add(deletedPointer);
+            }
+            pointer += 2;
+        }
     }
 }
