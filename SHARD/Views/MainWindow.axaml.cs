@@ -36,6 +36,13 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
 
+        // Wire PageHexView cursor offset → ViewModel
+        this.FindControl<HexView>("PageHexView")!.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == HexView.CursorOffsetProperty && DataContext is MainWindowViewModel vm)
+                vm.SelectedByteOffset = (int)(e.NewValue ?? -1);
+        };
+
         // Drag-and-drop
         AddHandler(DragDrop.DropEvent,     OnDrop);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
@@ -223,6 +230,14 @@ public partial class MainWindow : Window
         if (sender is not Button { DataContext: SearchHitViewModel hit }) return;
         this.FindControl<HexView>("SearchHexView")?.ScrollToByteOffset(hit.Offset);
     }
+
+    // ── Record recovery ──────────────────────────────────────────────────────
+
+    private void OnTryRecoverRecordClicked(object? sender, RoutedEventArgs e) =>
+        Vm.TryRecoverRecordAtOffset();
+
+    private void OnDismissRecoveryClicked(object? sender, RoutedEventArgs e) =>
+        Vm.DismissRecoveryResult();
 
     // ── Convenience ──────────────────────────────────────────────────────────
 

@@ -259,6 +259,15 @@
                                         </StackPanel>
                                     </StackPanel>
 
+                                    <!-- Deleted pointers filter -->
+                                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                                Margin="10,0,10,0"
+                                                VerticalAlignment="Center">
+                                        <CheckBox IsChecked="{Binding FilterHasDeletedPointers}"
+                                                  Content="Has deleted pointers"
+                                                  FontSize="11"/>
+                                    </StackPanel>
+
                                     <!-- Logic toggle + count -->
                                     <StackPanel Orientation="Horizontal" Spacing="6"
                                                 Margin="4,0,0,0"
@@ -477,7 +486,7 @@
                                     <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
                                     <!-- Right: toolbar + hex view -->
-                                    <Grid Grid.Column="2" RowDefinitions="Auto,*">
+                                    <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto">
 
                                         <Border Grid.Row="0"
                                                 Padding="8,4"
@@ -514,12 +523,40 @@
                                                                   Data="{Binding SelectedPageDetail.PageBytes}"
                                                                   Highlights="{Binding SelectedPageDetail.PageHighlights}"
                                                                   UseDecimalOffsets="{Binding #PageOffsetToggle.IsChecked}"
-                                                                  ShowHighlights="{Binding #PageHighlightToggle.IsChecked}" />
+                                                                  ShowHighlights="{Binding #PageHighlightToggle.IsChecked}">
+                                                    <controls:HexView.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="Try recover as deleted record"
+                                                                      Click="OnTryRecoverRecordClicked" />
+                                                        </ContextMenu>
+                                                    </controls:HexView.ContextMenu>
+                                                </controls:HexView>
                                             </ScrollViewer>
                                             <controls:DataInspectorControl Grid.Column="1"
                                                                            Data="{Binding #PageHexView.Data}"
                                                                            Offset="{Binding #PageHexView.CursorOffset}" />
                                         </Grid>
+
+                                        <!-- Recovery result (always 28px tall to avoid layout jump) -->
+                                        <Border Grid.Row="2"
+                                                Height="28"
+                                                Padding="8,4"
+                                                BorderThickness="0,1,0,0">
+                                            <Grid ColumnDefinitions="*,Auto"
+                                                  IsVisible="{Binding HasRecoveryMessage}">
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding RecoveryMessage}"
+                                                           FontSize="11"
+                                                           TextWrapping="Wrap"
+                                                           VerticalAlignment="Center" />
+                                                <Button Grid.Column="1"
+                                                        Content="Dismiss"
+                                                        Click="OnDismissRecoveryClicked"
+                                                        Padding="8,2"
+                                                        Margin="8,0,0,0"
+                                                        FontSize="10" />
+                                            </Grid>
+                                        </Border>
 
                                     </Grid>
 
@@ -886,36 +923,39 @@
                     <!-- ── Tab 6: WAL ── -->
                     <TabItem Header="{Binding WalTab.TabHeader}"
                              IsVisible="{Binding HasWal}">
-                        <Grid ColumnDefinitions="260,4,*">
+                        <Grid RowDefinitions="Auto,*">
 
-                            <!-- Left: WAL header fields -->
-                            <ScrollViewer Grid.Column="0"
-                                          Padding="16,12"
-                                          VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
-                                <ItemsControl ItemsSource="{Binding WalTab.HeaderRows}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:InfoRow">
-                                            <Grid ColumnDefinitions="180,*" Margin="0,4">
-                                                <TextBlock Grid.Column="0"
-                                                           Text="{Binding Label}"
-                                                           FontWeight="SemiBold"
-                                                           Opacity="0.6"
-                                                           FontSize="12" />
-                                                <TextBlock Grid.Column="1"
-                                                           Text="{Binding Value}"
-                                                           FontFamily="Courier New"
-                                                           FontSize="12" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
+                            <!-- WAL header (collapsible) -->
+                            <Expander Grid.Row="0"
+                                      Header="WAL Header"
+                                      IsExpanded="False"
+                                      Padding="8,4">
+                                <ScrollViewer MaxHeight="200"
+                                              Padding="16,8"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding WalTab.HeaderRows}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:InfoRow">
+                                                <Grid ColumnDefinitions="180,*" Margin="0,4">
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding Label}"
+                                                               FontWeight="SemiBold"
+                                                               Opacity="0.6"
+                                                               FontSize="12" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding Value}"
+                                                               FontFamily="Courier New"
+                                                               FontSize="12" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Expander>
 
-                            <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
-
-                            <!-- Right: frame list + frame detail -->
-                            <Grid Grid.Column="2" ColumnDefinitions="240,4,*">
+                            <!-- Main area: frame list | tabbed detail | hex -->
+                            <Grid Grid.Row="1" ColumnDefinitions="240,4,*">
 
                                 <!-- Frame list -->
                                 <ListBox Grid.Column="0"
@@ -959,7 +999,7 @@
 
                                 <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
-                                <!-- Frame detail -->
+                                <!-- Frame detail area -->
                                 <Grid Grid.Column="2">
 
                                     <TextBlock IsVisible="{Binding WalTab.SelectedFrameDetail,
@@ -974,97 +1014,187 @@
                                                       Converter={x:Static conv:ObjectConverters.IsNotNull}}"
                                           ColumnDefinitions="*,4,*">
 
-                                        <!-- Summary + expanders -->
-                                        <ScrollViewer Grid.Column="0"
-                                                      VerticalScrollBarVisibility="Auto"
-                                                      HorizontalScrollBarVisibility="Disabled">
-                                            <StackPanel Margin="14,10" Spacing="6">
-                                                <TextBlock Text="{Binding WalTab.SelectedFrameDetail.Summary}"
-                                                           FontFamily="Courier New"
-                                                           FontSize="12"
-                                                           TextWrapping="Wrap" />
-                                                <Expander Header="{Binding WalTab.SelectedFrameDetail.CellPointerHeader}"
-                                                          IsExpanded="False"
-                                                          IsVisible="{Binding WalTab.SelectedFrameDetail.HasCellPointers}">
-                                                    <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.CellPointerRows}"
-                                                                  Margin="8,4,0,4">
-                                                        <ItemsControl.ItemTemplate>
-                                                            <DataTemplate x:DataType="vm:InfoRow">
-                                                                <Grid ColumnDefinitions="52,*" Margin="0,2">
-                                                                    <TextBlock Grid.Column="0" Text="{Binding Label}" FontFamily="Courier New" FontSize="11" Opacity="0.55" />
-                                                                    <TextBlock Grid.Column="1" Text="{Binding Value}"  FontFamily="Courier New" FontSize="11" />
-                                                                </Grid>
-                                                            </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                    </ItemsControl>
-                                                </Expander>
-                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.CellSections}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate x:DataType="vm:CellSectionViewModel">
-                                                            <Expander Header="{Binding Header}"
-                                                                      IsExpanded="False"
-                                                                      Expanded="OnWalCellSectionExpanded"
-                                                                      Margin="0,2,0,0">
-                                                                <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                        <!-- Left: tabbed detail -->
+                                        <TabControl Grid.Column="0" Padding="0">
+
+                                            <!-- Tab: Page Data -->
+                                            <TabItem Header="Page Data">
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <StackPanel Margin="14,10" Spacing="6">
+                                                        <TextBlock Text="{Binding WalTab.SelectedFrameDetail.Summary}"
+                                                                   FontFamily="Courier New"
+                                                                   FontSize="12"
+                                                                   TextWrapping="Wrap" />
+                                                        <Expander Header="{Binding WalTab.SelectedFrameDetail.CellPointerHeader}"
+                                                                  IsExpanded="False"
+                                                                  IsVisible="{Binding WalTab.SelectedFrameDetail.HasCellPointers}">
+                                                            <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.CellPointerRows}"
+                                                                          Margin="8,4,0,4">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                        <Grid ColumnDefinitions="52,*" Margin="0,2">
+                                                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontFamily="Courier New" FontSize="11" Opacity="0.55" />
+                                                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontFamily="Courier New" FontSize="11" />
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </Expander>
+                                                        <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.CellSections}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:CellSectionViewModel">
+                                                                    <Expander Header="{Binding Header}"
+                                                                              IsExpanded="False"
+                                                                              Expanded="OnWalCellSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                        <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.FreeBlockSections}"
+                                                                      IsVisible="{Binding WalTab.SelectedFrameDetail.HasFreeBlocks}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:FreeBlockSectionViewModel">
+                                                                    <Expander Header="{Binding Header}"
+                                                                              IsExpanded="False"
+                                                                              Expanded="OnWalFreeBlockSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                        <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.UnallocatedRegionSections}"
+                                                                      IsVisible="{Binding WalTab.SelectedFrameDetail.HasUnallocatedRegions}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:UnallocatedRegionSectionViewModel">
+                                                                    <Expander Header="{Binding Header}"
+                                                                              IsExpanded="False"
+                                                                              Expanded="OnWalUnallocatedRegionSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+                                                </ScrollViewer>
+                                            </TabItem>
+
+                                            <!-- Tab: Changes -->
+                                            <TabItem Header="Changes">
+                                                <Grid>
+                                                    <TextBlock IsVisible="{Binding WalTab.HasComparison,
+                                                                           Converter={x:Static conv:BoolConverters.Not}}"
+                                                               Text="No comparison available for this page type"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"
+                                                               Opacity="0.35"
+                                                               FontSize="13" />
+                                                    <ScrollViewer IsVisible="{Binding WalTab.HasComparison}"
+                                                                  VerticalScrollBarVisibility="Auto"
+                                                                  HorizontalScrollBarVisibility="Disabled">
+                                                        <StackPanel Margin="14,10" Spacing="4">
+                                                            <TextBlock Text="{Binding WalTab.SelectedFrameComparison.ComparedAgainst}"
+                                                                       FontSize="11"
+                                                                       FontWeight="SemiBold"
+                                                                       Opacity="0.6" />
+                                                            <TextBlock Text="No changes detected"
+                                                                       IsVisible="{Binding WalTab.SelectedFrameComparison.HasAnyChanges,
+                                                                                   Converter={x:Static conv:BoolConverters.Not}}"
+                                                                       FontSize="12"
+                                                                       Opacity="0.45"
+                                                                       Margin="4,4,0,0" />
+                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.AddedHeader}"
+                                                                      IsExpanded="True"
+                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasAdded}">
+                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.AddedRows}"
+                                                                              Margin="8,4,0,4">
                                                                     <ItemsControl.ItemTemplate>
                                                                         <DataTemplate x:DataType="vm:InfoRow">
-                                                                            <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
-                                                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
-                                                                            </Grid>
+                                                                            <TextBlock Text="{Binding Value}"
+                                                                                       FontSize="12"
+                                                                                       FontFamily="Courier New"
+                                                                                       Margin="0,2" />
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>
                                                                 </ItemsControl>
                                                             </Expander>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.FreeBlockSections}"
-                                                              IsVisible="{Binding WalTab.SelectedFrameDetail.HasFreeBlocks}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate x:DataType="vm:FreeBlockSectionViewModel">
-                                                            <Expander Header="{Binding Header}"
-                                                                      IsExpanded="False"
-                                                                      Expanded="OnWalFreeBlockSectionExpanded"
-                                                                      Margin="0,2,0,0">
-                                                                <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.RemovedHeader}"
+                                                                      IsExpanded="True"
+                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasRemoved}">
+                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.RemovedRows}"
+                                                                              Margin="8,4,0,4">
                                                                     <ItemsControl.ItemTemplate>
                                                                         <DataTemplate x:DataType="vm:InfoRow">
-                                                                            <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
-                                                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
-                                                                            </Grid>
+                                                                            <TextBlock Text="{Binding Value}"
+                                                                                       FontSize="12"
+                                                                                       FontFamily="Courier New"
+                                                                                       Margin="0,2" />
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>
                                                                 </ItemsControl>
                                                             </Expander>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameDetail.UnallocatedRegionSections}"
-                                                              IsVisible="{Binding WalTab.SelectedFrameDetail.HasUnallocatedRegions}">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate x:DataType="vm:UnallocatedRegionSectionViewModel">
-                                                            <Expander Header="{Binding Header}"
-                                                                      IsExpanded="False"
-                                                                      Expanded="OnWalUnallocatedRegionSectionExpanded"
-                                                                      Margin="0,2,0,0">
-                                                                <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.UpdatedHeader}"
+                                                                      IsExpanded="True"
+                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasUpdated}">
+                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.UpdatedSections}"
+                                                                              Margin="4,4,0,4">
                                                                     <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:InfoRow">
-                                                                            <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
-                                                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
-                                                                            </Grid>
+                                                                        <DataTemplate x:DataType="vm:UpdatedRecordSectionViewModel">
+                                                                            <Expander Header="{Binding Header}"
+                                                                                      IsExpanded="False"
+                                                                                      Margin="0,2,0,0">
+                                                                                <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                                    <ItemsControl.ItemTemplate>
+                                                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                                                            <Grid ColumnDefinitions="80,*" Margin="0,2">
+                                                                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                            </Grid>
+                                                                                        </DataTemplate>
+                                                                                    </ItemsControl.ItemTemplate>
+                                                                                </ItemsControl>
+                                                                            </Expander>
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>
                                                                 </ItemsControl>
                                                             </Expander>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                            </StackPanel>
-                                        </ScrollViewer>
+                                                        </StackPanel>
+                                                    </ScrollViewer>
+                                                </Grid>
+                                            </TabItem>
+
+                                        </TabControl>
 
                                         <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 

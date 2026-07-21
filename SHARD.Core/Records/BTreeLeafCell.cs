@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using SHARD.Core.Comparison;
 using SHARD.Core.Decoding;
 using SHARD.Core.Enums;
 
@@ -90,6 +91,21 @@ public class BTreeLeafCell
         var recordOffset = SizeOfPayload.Length + RowId.Length + (int)HeaderSize.Value;
         FieldValues.Clear();
         FieldValues.AddRange(DecodeFieldValues(fullData, recordOffset));
+    }
+
+    public BTreeLeafCellComparison Compare(BTreeLeafCell compareCell)
+    {
+        BTreeLeafCellComparison retVal = new(RowId.Value);
+        int fieldCount = Math.Min(FieldValues.Count, compareCell.FieldValues.Count);
+        for (int i = 0; i < fieldCount; i++)
+        {
+            var a = FieldValues[i];
+            var b = compareCell.FieldValues[i];
+            bool equal = (a is null && b is null) || (a is not null && a.Equals(b));
+            if (!equal)
+                retVal.Changes.Add(new FieldComparison(i, a, b));
+        }
+        return retVal;
     }
 
     private List<SqliteValue?> DecodeFieldValues(byte[] data, int recordOffset)

@@ -138,6 +138,23 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
         List<long> addedIds = RecordDifference(compareRecords, thisRecords);
         retVal.AddedRecords = comparePage.Cells.Where(x => addedIds.Contains(x.RowId.Value)).ToList();
         retVal.RemovedRecords = Cells.Where(x => removedIds.Contains(x.RowId.Value)).ToList();
+        //compare records to see if any modified
+        foreach (var recordId in thisRecords)
+        {
+            if (compareRecords.Contains((recordId)))
+            {
+                var firstRecord = Cells.FirstOrDefault(x => x.RowId.Value == recordId);
+                var secondRecord = comparePage.Cells.FirstOrDefault(x => x.RowId.Value == recordId);
+                if (firstRecord != null && secondRecord != null)
+                {
+                    var comparison = firstRecord.Compare(secondRecord);
+                    if (comparison.HasChanges)
+                    {
+                        retVal.UpdatedRecords.Add(comparison);
+                    }
+                }
+            }
+        }
         return retVal;
     }
 

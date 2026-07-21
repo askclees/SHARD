@@ -7,6 +7,7 @@ using SHARD.Controls;
 using SHARD.Core;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
+using SHARD.Core.Recovery;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
 
@@ -78,6 +79,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         set { this.RaiseAndSetIfChanged(ref _filterMinNonZero, value); if (_filterMinNonZeroEnabled) RebuildFilteredPages(); }
     }
 
+    private bool _filterHasDeletedPointers;
+    public bool FilterHasDeletedPointers
+    {
+        get => _filterHasDeletedPointers;
+        set { this.RaiseAndSetIfChanged(ref _filterHasDeletedPointers, value); RebuildFilteredPages(); }
+    }
+
     private bool _useOrLogic;
     public bool UseOrLogic
     {
@@ -112,6 +120,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         FilteredPages.Clear();
         bool anyTypeSelected    = PageTypeFilters.Any(f => f.IsSelected);
         bool anyUnallocActive   = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
+        bool deletedActive      = FilterHasDeletedPointers;
         bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
 
         foreach (var page in Pages)
@@ -121,6 +130,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (hasTableFilter && page.TableName != _filterTableName)
                 continue;
             if (anyUnallocActive && !page.UnallocatedRegions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
+                continue;
+            if (deletedActive && !page.HasDeletedPointers)
                 continue;
             FilteredPages.Add(page);
         }
@@ -186,7 +197,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             foreach (var r in tlp.UnallocatedRegions)
                 regions.Add((r.Size, r.NonZeroBytes));
         }
-        return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions);
+        bool hasDeletedPointers = page is BTreePage bp && bp.DeletedCellPointers.Count > 0;
+        return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions, hasDeletedPointers);
     }
 
     // ── Selected page (left panel selection; right panel detail) ─────────
@@ -200,6 +212,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             SelectedPageDetail = value is not null && Database is not null
                 ? new PageViewModel(Database.ReadPage(value.PageNumber))
                 : null;
+            RecoveryMessage    = null;
+            LastRecoveryResult = null;
+            this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
     }
 
@@ -298,10 +313,79 @@ public sealed class MainWindowViewModel : ViewModelBase
             this.RaiseAndSetIfChanged(ref _project, value);
             this.RaisePropertyChanged(nameof(HasProject));
             this.RaisePropertyChanged(nameof(ProjectFolderPath));
+            this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
     }
     public bool HasProject => Project is not null;
     public string? ProjectFolderPath => Project?.ProjectFolder;
+
+    // ── Record recovery ────────────────────────────────────────────────────
+    private int _selectedByteOffset = -1;
+    public int SelectedByteOffset
+    {
+        get => _selectedByteOffset;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedByteOffset, value);
+            this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
+        }
+    }
+
+    public bool CanTryRecoverRecord =>
+        HasProject &&
+        SelectedByteOffset >= 0 &&
+        SelectedPage?.PageType == PageType.BTreeLeafTable;
+
+    private string? _recoveryMessage;
+    public string? RecoveryMessage
+    {
+        get => _recoveryMessage;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _recoveryMessage, value);
+            this.RaisePropertyChanged(nameof(HasRecoveryMessage));
+        }
+    }
+    public bool HasRecoveryMessage => RecoveryMessage is not null;
+
+    private DeletedBTreeLeafCellResult? _lastRecoveryResult;
+    public DeletedBTreeLeafCellResult? LastRecoveryResult
+    {
+        get => _lastRecoveryResult;
+        private set => this.RaiseAndSetIfChanged(ref _lastRecoveryResult, value);
+    }
+
+    public void TryRecoverRecordAtOffset()
+    {
+        if (!HasProject)
+        {
+            RecoveryMessage = "A project must be open to recover records.";
+            return;
+        }
+        if (SelectedPage?.PageType != PageType.BTreeLeafTable)
+        {
+            RecoveryMessage = "Record recovery is only available on table leaf pages.";
+            return;
+        }
+        if (SelectedPageDetail is null || SelectedByteOffset < 0 || Database is null) return;
+
+        var result = DeletedRecordParser.RecoverBTreeLeafRecord(
+            SelectedPageDetail.PageBytes,
+            SelectedByteOffset,
+            Database.Header.TextEncoding,
+            null);
+
+        LastRecoveryResult = result;
+        RecoveryMessage = result.IsValid
+            ? $"Valid record at offset {SelectedByteOffset} — RowId: {result.Cell!.RowId.Value}, {result.Cell.FieldValues.Count} field(s)"
+            : $"Invalid record at offset {SelectedByteOffset}: {string.Join("; ", result.ValidationErrors)}";
+    }
+
+    public void DismissRecoveryResult()
+    {
+        RecoveryMessage    = null;
+        LastRecoveryResult = null;
+    }
 
     // ── Status bar ────────────────────────────────────────────────────────
     private string _statusText = "Open a SQLite database to begin.";
@@ -552,7 +636,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         try
         {
             var wal = new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
-            WalTab = new WalViewModel(walPath, wal);
+            WalTab = new WalViewModel(walPath, wal, Database);
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
         }
         catch (Exception ex)

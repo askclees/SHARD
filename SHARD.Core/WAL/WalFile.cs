@@ -7,6 +7,13 @@ public class WalFile
     public WalHeader Header { get; }
     public List<WalFrame> Frames { get;} = new ();
 
+    public WalFrame? GetPreviousFrame(WalFrame frame)
+    {
+        int idx = Frames.IndexOf(frame);
+        if (idx <= 0) return null;
+        return Frames.Take(idx).LastOrDefault(f => f.Header.PageNumber == frame.Header.PageNumber);
+    }
+
     public WalFile(string path, TextEncoding encoding, int reservedBytes)
     {
         using FileStream walFile = File.Open(path, FileMode.Open);

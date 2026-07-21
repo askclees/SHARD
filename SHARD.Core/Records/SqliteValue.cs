@@ -63,7 +63,30 @@ public sealed class SqliteValue
         StorageClass = SqliteStorageClass.Blob;
         BlobValue = byteData;
         DataLength = length;
-    }    
+    }
+
+    public bool Equals(SqliteValue? obj)
+    {
+        if (!(StorageClass == obj?.StorageClass))
+        {
+            return false;
+        }
+
+        switch (StorageClass)
+        {
+            case SqliteStorageClass.Integer:
+                return IntegerValue == obj?.IntegerValue;
+            case SqliteStorageClass.Real:
+                return RealValue == obj.RealValue;
+            case SqliteStorageClass.Null:
+                return true;
+            case SqliteStorageClass.Text:
+                return String.Equals(TextValue, obj?.TextValue);
+            case SqliteStorageClass.Blob:
+                return BlobValue.SequenceEqual(obj?.BlobValue);
+        }
+        return true;
+    }
 
     // ── Static factories ─────────────────────────────────────────────────────
     //public static readonly SqliteValue Null = new() { StorageClass = SqliteStorageClass.Null };
