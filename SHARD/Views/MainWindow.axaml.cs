@@ -1,7 +1,10 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using SHARD.Controls;
 using SHARD.Core.Records;
@@ -241,6 +244,13 @@ public partial class MainWindow : Window
 
     private async void OnTryRecoverRecordClicked(object? sender, RoutedEventArgs e)
     {
+        var overlap = Vm.FindLiveCellAtOffset(Vm.SelectedByteOffset);
+        if (overlap is not null)
+        {
+            bool proceed = await ShowLiveRecordWarning(overlap);
+            if (!proceed) return;
+        }
+
         string? preconditionError = Vm.TryRecoverRecordAtOffset();
         if (preconditionError is not null)
         {
@@ -300,6 +310,52 @@ public partial class MainWindow : Window
                 rows.Add(new RecoveryFieldRow($"Field {i}", cell.FieldValues[i]?.Value?.ToString() ?? "NULL"));
         }
         return rows;
+    }
+
+    // ── Dialogs ───────────────────────────────────────────────────────────────
+
+    private Task<bool> ShowLiveRecordWarning(BTreeLeafCell overlap)
+    {
+        var dlg = new Window
+        {
+            Title                  = "Offset inside live record",
+            Width                  = 440,
+            SizeToContent          = SizeToContent.Height,
+            WindowStartupLocation  = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar          = false,
+            CanResize              = false,
+        };
+
+        var text = new TextBlock
+        {
+            Text = $"The selected offset falls inside live record RowId {overlap.RowId.Value} " +
+                   $"(bytes {overlap.PageOffset}–{overlap.PageOffset + overlap.CellByteLengthOnPage - 1}).\n\n" +
+                   "Decoding at this position is unlikely to produce a valid deleted record. " +
+                   "Do you want to proceed anyway?",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize     = 12,
+            Margin       = new Thickness(0, 0, 0, 16),
+        };
+
+        var proceedBtn = new Button { Content = "Proceed anyway", Margin = new Thickness(0, 0, 8, 0) };
+        var cancelBtn  = new Button { Content = "Cancel" };
+        proceedBtn.Click += (_, _) => dlg.Close(true);
+        cancelBtn.Click  += (_, _) => dlg.Close(false);
+
+        var buttons = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        buttons.Children.Add(proceedBtn);
+        buttons.Children.Add(cancelBtn);
+
+        var root = new StackPanel { Margin = new Thickness(16) };
+        root.Children.Add(text);
+        root.Children.Add(buttons);
+        dlg.Content = root;
+
+        return dlg.ShowDialog<bool>(this);
     }
 
     // ── Convenience ──────────────────────────────────────────────────────────

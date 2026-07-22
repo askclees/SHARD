@@ -7,6 +7,7 @@ using SHARD.Controls;
 using SHARD.Core;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
+using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
@@ -349,6 +350,17 @@ public sealed class MainWindowViewModel : ViewModelBase
             this.RaiseAndSetIfChanged(ref _lastRecoveryResult, value);
             this.RaisePropertyChanged(nameof(CanSaveRecoveryToProject));
         }
+    }
+
+    /// <summary>
+    /// Returns the live cell whose byte range contains <paramref name="offset"/>,
+    /// or null if the offset does not fall inside any cell on the current page.
+    /// </summary>
+    public BTreeLeafCell? FindLiveCellAtOffset(int offset)
+    {
+        if (SelectedPageDetail?.Page is not TableBTreeLeafPage leafPage) return null;
+        return leafPage.Cells.FirstOrDefault(c =>
+            offset >= c.PageOffset && offset < c.PageOffset + c.CellByteLengthOnPage);
     }
 
     /// <summary>
