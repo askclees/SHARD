@@ -236,6 +236,13 @@ public sealed class HexView : Control
         _parentSv.SetCurrentValue(ScrollViewer.OffsetProperty, new Vector(0, row * _lh));
     }
 
+    /// <summary>Moves the cursor to <paramref name="byteOffset"/> without scrolling.</summary>
+    public void SetCursorOffset(int byteOffset)
+    {
+        CursorOffset = byteOffset;
+        InvalidateVisual();
+    }
+
     // ── Pointer input ─────────────────────────────────────────────────────────
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)

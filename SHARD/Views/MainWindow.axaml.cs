@@ -180,7 +180,9 @@ public partial class MainWindow : Window
     private void OnCellSectionExpanded(object? sender, RoutedEventArgs e)
     {
         if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
-        this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
+        var hexView = this.FindControl<HexView>("PageHexView");
+        hexView?.ScrollToByteOffset(vm.ByteOffset);
+        hexView?.SetCursorOffset(vm.ByteOffset);
     }
 
     private void OnFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
@@ -192,7 +194,9 @@ public partial class MainWindow : Window
     private void OnWalCellSectionExpanded(object? sender, RoutedEventArgs e)
     {
         if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
-        this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+        var hexView = this.FindControl<HexView>("WalHexView");
+        hexView?.ScrollToByteOffset(vm.ByteOffset);
+        hexView?.SetCursorOffset(vm.ByteOffset);
     }
 
     private void OnWalFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
