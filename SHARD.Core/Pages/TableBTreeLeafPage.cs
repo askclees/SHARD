@@ -13,6 +13,7 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     public override PageType PageType => PageType.BTreeLeafTable;
     public List<BTreeLeafCell> Cells { get; } = new();
     public List<BTreeLeafCell> DeletedCells { get; } = new();
+    public List<(ushort Pointer, string Error)> DeletedCellParseErrors { get; } = new();
     public List<PageFreeBlock> FreeBlocks { get; } = new();
     public List<PageUnallocatedRegion> UnallocatedRegions { get; } = new();
 
@@ -45,15 +46,20 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
         UnallocatedRegions = MapUnallocatedSpace(data, HeaderOffset);
     }
 
-    private List<BTreeLeafCell> ExtractDeletedCells(byte[] data,List<ushort> deletedCellPointers, TextEncoding encoding)
+    private List<BTreeLeafCell> ExtractDeletedCells(byte[] data, List<ushort> deletedCellPointers, TextEncoding encoding)
     {
         List<BTreeLeafCell> retVal = new();
         foreach (var pointer in deletedCellPointers)
         {
-            var result = DeletedRecordParser.RecoverBTreeLeafRecord(data, pointer, encoding);
-            if (result.IsValid)
+            try
             {
-                retVal.Add(result.Cell!);
+                var result = DeletedRecordParser.RecoverBTreeLeafRecord(data, pointer, encoding);
+                if (result.IsValid)
+                    retVal.Add(result.Cell!);
+            }
+            catch (Exception ex)
+            {
+                DeletedCellParseErrors.Add((pointer, $"{ex.GetType().Name}: {ex.Message}"));
             }
         }
         return retVal;
