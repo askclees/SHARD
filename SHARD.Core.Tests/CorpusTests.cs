@@ -15,7 +15,7 @@ public class CorpusTests
 {
     private static readonly string CorpusRoot =
         Environment.GetEnvironmentVariable("SQLITE_CORPUS_PATH")
-        ?? "/tmp/sqlite_corpus/sqlite_forensic_corpus_v2.0";
+        ?? Path.Combine(AppContext.BaseDirectory, "TestData", "Corpus");
 
     private static readonly bool CorpusAvailable = Directory.Exists(CorpusRoot);
 

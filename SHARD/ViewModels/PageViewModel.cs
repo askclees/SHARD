@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Text;
 using Avalonia.Media;
 using SHARD.Controls;
+using SHARD.Core.Decoding;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
@@ -223,6 +224,30 @@ public sealed class PageViewModel : ViewModelBase
                         list.Add(new HexHighlight(fieldOffset, len, ColumnColour(i), $"Cell {j} · Col {i}"));
                     fieldOffset += len;
                 }
+            }
+        }
+
+        if (page is TableBTreeInteriorPage tip)
+        {
+            var childPtrColour   = Color.FromRgb(205,  92,  92); // same red as rightmost pointer
+            var dividerKeyColour = Color.FromRgb(218, 165,  32); // same gold as leaf rowid
+            for (int i = 0; i < tip.Cells.Count; i++)
+            {
+                int cellOff   = tip.CellPointers[i];
+                uint childPage = tip.Cells[i].PageNumber;
+                list.Add(new HexHighlight(cellOff, 4, childPtrColour, $"Cell {i} · Child Page {childPage}"));
+                var divider = Varint.ReadAt(tip.Data, cellOff + 4);
+                list.Add(new HexHighlight(cellOff + 4, divider.Length, dividerKeyColour, $"Cell {i} · Divider Key {divider.Value}"));
+            }
+        }
+        else if (page is IndexBTreeInteriorPage iip)
+        {
+            var childPtrColour = Color.FromRgb(205, 92, 92);
+            for (int i = 0; i < iip.CellPointers.Length; i++)
+            {
+                int cellOff    = iip.CellPointers[i];
+                uint childPage = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(iip.Data.AsSpan(cellOff, 4));
+                list.Add(new HexHighlight(cellOff, 4, childPtrColour, $"Cell {i} · Child Page {childPage}"));
             }
         }
 
