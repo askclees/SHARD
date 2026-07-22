@@ -11,6 +11,7 @@ public sealed class WalViewModel : ViewModelBase
     private readonly WalFile _walFile;
     private readonly SqliteForensicDatabase _database;
 
+    public WalFile WalFile  => _walFile;
     public string WalPath   { get; }
     public string TabHeader => $"WAL ({Frames.Count} frames)";
 

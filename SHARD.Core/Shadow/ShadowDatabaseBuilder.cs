@@ -136,6 +136,44 @@ public static class ShadowDatabaseBuilder
     }
 
     /// <summary>
+    /// Inserts a B-tree leaf cell from a WAL frame into the live shadow table using
+    /// <c>INSERT OR IGNORE</c>, so records already present from the baseline database
+    /// are not duplicated.
+    /// </summary>
+    public static void InsertWalRecord(
+        SqliteConnection connection,
+        TableSchema schema,
+        BTreeLeafCell cell,
+        uint pageNumber,
+        int cellOffset)
+    {
+        var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));   placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn));   placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
+
+        string sql = $"INSERT OR IGNORE INTO {QuoteIdentifier(schema.TableName)} " +
+                     $"({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        for (int i = 0; i < schema.Columns.Count; i++)
+        {
+            object value = schema.Columns[i].IsRowIdAlias
+                ? cell.RowId.Value
+                : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+            command.Parameters.AddWithValue($"@p{i}", value);
+        }
+
+        command.Parameters.AddWithValue("@p_page",    (long)pageNumber);
+        command.Parameters.AddWithValue("@p_offset",  cellOffset);
+        command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Inserts a recovered (deleted) B-tree leaf cell into the
     /// <c>_shard_recovered_{tableName}</c> table of the already-open shadow connection.
     /// </summary>

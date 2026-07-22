@@ -575,6 +575,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
             StatusText = $"Project created at {folderPath}";
+            SyncWalToProject();
         }
         catch (Exception ex)
         {
@@ -614,6 +615,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
             StatusText = $"Project opened from {projectFolder}";
+            SyncWalToProject();
         }
         catch (Exception ex)
         {
@@ -658,10 +660,30 @@ public sealed class MainWindowViewModel : ViewModelBase
             var wal = new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
             WalTab = new WalViewModel(walPath, wal, Database);
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
+
+            // If a project is already open sync immediately; if not, CreateProject/OpenProject
+            // will call SyncWalToProject once the project is set (WAL loads before the project
+            // is created/opened in both flows).
+            SyncWalToProject();
         }
         catch (Exception ex)
         {
             StatusText = $"WAL file could not be loaded: {ex.Message}";
+        }
+    }
+
+    private void SyncWalToProject()
+    {
+        if (Project is null || WalTab is null || Database is null) return;
+        try
+        {
+            int added = Project.SyncWalFramesToShadow(WalTab.WalFile, Database);
+            if (added > 0)
+                StatusText += $"  ·  {added} WAL record{(added == 1 ? "" : "s")} synced";
+        }
+        catch (Exception ex)
+        {
+            StatusText += $"  ·  WAL sync failed: {ex.Message}";
         }
     }
 
