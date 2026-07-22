@@ -448,8 +448,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         SearchTab = new SearchViewModel(
             Pages,
-            pageNumber => Database?.ReadPage(pageNumber).Data,
-            pageNumber => _pageTableMap?.GetValueOrDefault(pageNumber));
+            pageNumber => Database?.ReadPage(pageNumber),
+            pageNumber => _pageTableMap?.GetValueOrDefault(pageNumber),
+            tableName => Database?.GetTableSchema(tableName));
         QueryTab  = new QueryViewModel();
 
         PageTypeFilters = new List<PageTypeToggleViewModel>

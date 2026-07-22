@@ -822,7 +822,7 @@
                             <!-- Results: grouped list + hex view -->
                             <Grid Grid.Row="3"
                                   IsVisible="{Binding SearchTab.HasResults}"
-                                  ColumnDefinitions="260,4,*">
+                                  ColumnDefinitions="455,4,*">
 
                                 <!-- Left: page groups -->
                                 <ScrollViewer Grid.Column="0"

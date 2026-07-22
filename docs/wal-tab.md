@@ -27,6 +27,7 @@ A collapsible section at the top of the tab shows the parsed WAL file header:
 Lists every frame in the WAL. Each entry shows:
 - Frame index and the database page number it covers.
 - Page type (where parseable).
+- The name of the table or index that owns the page (e.g. `messages`, `sqlite_master`). Pages not reachable from any known B-tree root show no label.
 - A **COMMIT** label on frames that carry a non-zero database size in their header, indicating a transaction boundary.
 
 Select a frame to view its contents on the right.

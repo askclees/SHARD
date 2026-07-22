@@ -14,7 +14,12 @@ Results are grouped by page number. The summary line shows the total number of m
 
 ## Navigating results
 
-Each page group is a collapsible expander. Expanding it reveals individual hits, each showing a short preview of the bytes surrounding the match.
+Each page group is a collapsible expander labelled with the page number, the owning table name (e.g. `[messages]`), and the hit count. Expanding it reveals individual hits.
+
+Each hit shows:
+- The byte offset and match length.
+- A short ASCII preview of the matched bytes.
+- Where the match falls within a table record: the row ID and field name (e.g. `Row 42 · display_name`). Falls back to a field index if the schema is unavailable, or `header` if the offset is in the cell header rather than a field value.
 
 Click a hit to scroll the hex view on the right to that offset.
 

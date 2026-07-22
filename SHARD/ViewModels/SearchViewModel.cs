@@ -7,14 +7,17 @@ using System.Text.RegularExpressions;
 using System.Windows.Input;
 using ReactiveUI;
 using SHARD.Controls;
+using SHARD.Core.Pages;
+using SHARD.Core.Schema;
 
 namespace SHARD.ViewModels;
 
 public sealed class SearchViewModel : ViewModelBase
 {
     private readonly IReadOnlyList<PageListEntryViewModel> _pages;
-    private readonly Func<uint, byte[]?> _readPageBytes;
+    private readonly Func<uint, Core.Pages.SqlitePage?> _readPage;
     private readonly Func<uint, string?> _getTableName;
+    private readonly Func<string, TableSchema?> _getTableSchema;
 
     // ── Input ─────────────────────────────────────────────────────────────────
 
@@ -92,12 +95,17 @@ public sealed class SearchViewModel : ViewModelBase
 
     // ── Constructor ───────────────────────────────────────────────────────────
 
-    public SearchViewModel(IReadOnlyList<PageListEntryViewModel> pages, Func<uint, byte[]?> readPageBytes, Func<uint, string?> getTableName)
+    public SearchViewModel(
+        IReadOnlyList<PageListEntryViewModel> pages,
+        Func<uint, Core.Pages.SqlitePage?> readPage,
+        Func<uint, string?> getTableName,
+        Func<string, TableSchema?> getTableSchema)
     {
-        _pages         = pages;
-        _readPageBytes = readPageBytes;
-        _getTableName  = getTableName;
-        SearchCommand  = ReactiveCommand.Create(RunSearch);
+        _pages          = pages;
+        _readPage       = readPage;
+        _getTableName   = getTableName;
+        _getTableSchema = getTableSchema;
+        SearchCommand   = ReactiveCommand.Create(RunSearch);
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
@@ -132,7 +140,9 @@ public sealed class SearchViewModel : ViewModelBase
 
         foreach (var pageVm in _pages)
         {
-            var data = _readPageBytes(pageVm.PageNumber);
+            var page = _readPage(pageVm.PageNumber);
+            if (page is null) continue;
+            var data = page.Data;
             if (data is not { Length: > 0 }) continue;
 
             // Latin-1 gives a 1:1 byte↔char mapping, so match indices == byte offsets
@@ -140,8 +150,31 @@ public sealed class SearchViewModel : ViewModelBase
             var matches = regex.Matches(text);
             if (matches.Count == 0) continue;
 
-            var hits      = matches.Select(m => new SearchHitViewModel(m.Index, m.Length, data)).ToList();
             var tableName = _getTableName(pageVm.PageNumber);
+            var schema    = tableName is not null ? _getTableSchema(tableName) : null;
+            var tlp       = page as TableBTreeLeafPage;
+
+            var hits = new List<SearchHitViewModel>(matches.Count);
+            foreach (System.Text.RegularExpressions.Match m in matches)
+            {
+                string? context = null;
+                if (tlp is not null)
+                {
+                    var hit = tlp.FindHitContext(m.Index);
+                    if (hit.HasValue)
+                    {
+                        var (rowId, fieldIndex) = hit.Value;
+                        string fieldLabel = fieldIndex.HasValue
+                            ? (schema is not null && fieldIndex.Value < schema.Columns.Count
+                                ? schema.Columns[fieldIndex.Value].Name
+                                : $"field[{fieldIndex.Value}]")
+                            : "header";
+                        context = $"Row {rowId} · {fieldLabel}";
+                    }
+                }
+                hits.Add(new SearchHitViewModel(m.Index, m.Length, data, context));
+            }
+
             Results.Add(new SearchPageGroupViewModel(pageVm.PageNumber, data, hits, tableName));
         }
 
