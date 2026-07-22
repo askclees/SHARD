@@ -297,9 +297,19 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// <summary>
     /// Read and return all rows from a table's B-tree given its root page, resolving overflow
     /// chains and decorating each row with the forensic provenance of its primary cell.
+    /// Handles both ordinary (rowid) tables and WITHOUT ROWID tables, which SQLite stores as
+    /// index B-trees (leaf page type 0x0A) rather than table B-trees (0x0D).
     /// </summary>
     public IEnumerable<TableRow> ReadTableRows(uint rootPage)
     {
+        // WITHOUT ROWID tables are stored as index B-trees
+        if (ReadPage(rootPage) is IndexBTreeLeafPage or IndexBTreeInteriorPage)
+        {
+            foreach (var row in ReadWithoutRowidTableRows(rootPage))
+                yield return row;
+            yield break;
+        }
+
         foreach (var (cell, pageNum, cellOffset) in ReadTableCells(rootPage))
         {
             List<OverflowFragment> fragments = [];
@@ -319,6 +329,34 @@ public sealed class SqliteForensicDatabase : IDisposable
                 CellLength        = cell.CellByteLengthOnPage,
                 OverflowFragments = fragments,
             };
+        }
+    }
+
+    private IEnumerable<TableRow> ReadWithoutRowidTableRows(uint rootPage)
+    {
+        foreach (uint pageNum in GetTreePageNumbers(rootPage))
+        {
+            if (ReadPage(pageNum) is not IndexBTreeLeafPage leaf) continue;
+            for (int i = 0; i < leaf.Cells.Count; i++)
+            {
+                var cell = leaf.Cells[i];
+                List<OverflowFragment> fragments = [];
+                if (cell.OverflowPage != 0)
+                {
+                    var (overflowBytes, frags) = ReadOverflowChain(cell.OverflowPage, cell.OverflowBytesNeeded);
+                    cell.ResolveOverflow(overflowBytes);
+                    fragments = frags;
+                }
+                yield return new TableRow
+                {
+                    RowId             = 0, // WITHOUT ROWID tables have no rowid
+                    FieldValues       = cell.FieldValues,
+                    PageNumber        = pageNum,
+                    CellOffset        = leaf.CellPointers[i],
+                    CellLength        = cell.CellByteLengthOnPage,
+                    OverflowFragments = fragments,
+                };
+            }
         }
     }
 
