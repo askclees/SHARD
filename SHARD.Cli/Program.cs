@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using SHARD.Core;
-using SHARD.Core.CorpusAnalysis;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Schema;
@@ -24,7 +23,6 @@ if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
     return 0;
 }
 
-// Collect global options that may appear anywhere
 string? outputPath = null;
 string  format     = "json";
 var     positional = new List<string>();
@@ -62,7 +60,6 @@ return command switch
     "schema"  => RunSchema(positional, outputPath, format),
     "pages"   => RunPages(positional, outputPath, format),
     "header"  => RunHeader(positional, outputPath, format),
-    "corpus"  => RunCorpus(positional, outputPath, format, args),
     _         => Die($"Unknown command '{command}'. Run 'shard-cli --help' for usage."),
 };
 
@@ -92,11 +89,11 @@ int RunRows(List<string> pos, string? outPath, string fmt)
         rows    = rows.Select(r => RowToDict(r.FieldValues, r.RowId, r.PageNumber, r.CellOffset, columns, schema)),
     };
 
-    Write(outPath, fmt, doc, rows =>
+    Write(outPath, fmt, doc, d =>
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Table: {tableName}  ({rows.count} rows)");
-        foreach (var r in (IEnumerable<object>)rows.rows)
+        sb.AppendLine($"Table: {tableName}  ({d.count} rows)");
+        foreach (var r in (IEnumerable<object>)d.rows)
             sb.AppendLine(JsonSerializer.Serialize(r));
         return sb.ToString();
     });
@@ -252,82 +249,6 @@ int RunHeader(List<string> pos, string? outPath, string fmt)
     return 0;
 }
 
-// ── corpus ────────────────────────────────────────────────────────────────────
-
-int RunCorpus(List<string> pos, string? outPath, string fmt, string[] allArgs)
-{
-    if (pos.Count < 2) Die("Usage: shard-cli corpus <corpus-path> [-s sections] [--no-deleted]");
-    string corpusPath = pos[1];
-    if (!Directory.Exists(corpusPath)) Die($"Corpus path not found: {corpusPath}");
-
-    string[]? sections  = null;
-    bool      noDeleted = false;
-    for (int i = 0; i < allArgs.Length; i++)
-    {
-        if (allArgs[i] is "-s" or "--sections" && i + 1 < allArgs.Length)
-            sections = allArgs[++i].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (allArgs[i] == "--no-deleted")
-            noDeleted = true;
-    }
-
-    var progress = new Progress<string>(msg => Console.Error.Write($"\r  {msg}...{new string(' ', 10)}"));
-    var results  = CorpusAnalyser.Analyse(corpusPath, sections, !noDeleted, progress).ToList();
-    Console.Error.Write($"\r{new string(' ', 60)}\r");
-
-    int passed  = results.Count(r => r.IsPass);
-    int failed  = results.Count(r => r.IsFail);
-    int skipped = results.Count(r => r.IsSkipped);
-
-    var doc = new
-    {
-        corpus   = corpusPath,
-        sections = sections ?? CorpusAnalyser.DefaultSections,
-        summary  = new { total = results.Count, passed, failed, skipped },
-        results  = results.Select(r => new
-        {
-            section    = r.Section,
-            file       = r.FileName,
-            status     = r.IsSkipped ? "skip" : r.IsPass ? "pass" : "fail",
-            parseError = r.ParseError,
-            tables     = r.Tables.Select(t => new
-            {
-                name            = t.TableName,
-                expectedLive    = t.ExpectedLive,
-                actualLive      = t.ActualLive,
-                expectedDeleted = t.ExpectedDeleted,
-                actualDeleted   = t.ActualDeleted,
-                error           = t.Error,
-                pass            = t.IsPass,
-            }),
-        }),
-    };
-
-    Write(outPath, fmt, doc, d =>
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Corpus: {d.corpus}");
-        string? sec = null;
-        foreach (var r in d.results)
-        {
-            if (r.section != sec) { sec = r.section; sb.AppendLine($"── Section {sec} ──"); }
-            if (r.status == "skip") { sb.AppendLine($"  [SKIP] {r.file}  ({r.parseError})"); continue; }
-            if (r.status == "pass") { sb.AppendLine($"  [PASS] {r.file}"); continue; }
-            sb.AppendLine($"  [FAIL] {r.file}");
-            foreach (var t in r.tables.Where(t => !t.pass))
-            {
-                string live = t.actualLive == t.expectedLive ? $"live {t.actualLive}/{t.expectedLive} ✓" : $"live {t.actualLive}/{t.expectedLive} ✗";
-                string del  = t.expectedDeleted == 0 ? "" : t.actualDeleted == t.expectedDeleted ? $"  deleted {t.actualDeleted}/{t.expectedDeleted} ✓" : $"  deleted {t.actualDeleted}/{t.expectedDeleted} ✗";
-                sb.AppendLine($"    {t.name}: {live}{del}{(t.error is not null ? $"  ERROR: {t.error}" : "")}");
-            }
-        }
-        sb.AppendLine(new string('─', 60));
-        sb.AppendLine($"Total: {d.summary.total}  Passed: {d.summary.passed}  Failed: {d.summary.failed}  Skipped: {d.summary.skipped}");
-        return sb.ToString();
-    });
-
-    return failed > 0 ? 1 : 0;
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 SqliteForensicDatabase OpenDb(string path)
@@ -356,11 +277,8 @@ void Write<T>(string? outPath, string fmt, T doc, Func<T, string> textRenderer)
     }
 }
 
-List<string> BuildColumnNames(TableSchema? schema)
-{
-    if (schema is null) return [];
-    return schema.Columns.Select(c => c.Name).ToList();
-}
+List<string> BuildColumnNames(TableSchema? schema) =>
+    schema is null ? [] : schema.Columns.Select(c => c.Name).ToList();
 
 Dictionary<string, object?> RowToDict(
     IList<SHARD.Core.Records.SqliteValue?> fields,
@@ -371,14 +289,12 @@ Dictionary<string, object?> RowToDict(
     int fieldIdx = 0;
     for (int i = 0; i < (schema?.Columns.Count ?? fields.Count); i++)
     {
-        string colName = i < columns.Count ? columns[i] : $"col{i}";
-        bool isRowIdAlias = schema?.Columns[i].IsRowIdAlias ?? false;
+        string colName       = i < columns.Count ? columns[i] : $"col{i}";
+        bool   isRowIdAlias  = schema?.Columns[i].IsRowIdAlias ?? false;
         dict[colName] = isRowIdAlias ? rowId : fields.ElementAtOrDefault(fieldIdx++)?.Value;
-        if (!isRowIdAlias) { /* fieldIdx already advanced above */ }
     }
-    if (fields.Count > (schema?.Columns.Count ?? 0))
-        for (int i = schema?.Columns.Count ?? 0; i < fields.Count; i++)
-            dict[$"col{i}"] = fields[i]?.Value;
+    for (int i = schema?.Columns.Count ?? 0; i < fields.Count; i++)
+        dict[$"col{i}"] = fields[i]?.Value;
 
     dict["_rowid"]  = rowId;
     dict["_page"]   = pageNumber;
@@ -407,9 +323,6 @@ static void PrintHelp() => Console.WriteLine("""
       schema  <db>           List all sqlite_master entries
       pages   <db>           List all pages with type and table assignment
       header  <db>           Dump database header fields
-      corpus  <path>         Run SQLite Forensic Corpus regression tests
-                             [-s 01,02,0C]  sections to include
-                             [--no-deleted] skip deleted record checks
 
     Global options:
       -f, --format json|text   Output format (default: json)
@@ -417,8 +330,7 @@ static void PrintHelp() => Console.WriteLine("""
       -h, --help               Show this help
 
     Exit codes:
-      0  Success (or all corpus checks passed)
-      1  Corpus checks failed
+      0  Success
       2  Usage or file error
 
     Examples:
@@ -427,6 +339,5 @@ static void PrintHelp() => Console.WriteLine("""
       shard-cli schema  mydb.sqlite
       shard-cli pages   mydb.sqlite -f text
       shard-cli header  mydb.sqlite
-      shard-cli corpus  /data/corpus -f text -s 0C,0D,0E
       shard-cli rows    mydb.sqlite users -o rows.json
     """);
