@@ -153,18 +153,29 @@ public sealed class PageViewModel : ViewModelBase
         for (int i = 0; i < bp.CellPointers.Length; i++)
             list.Add(new(cellPtrStart + i * 2, 2, Color.FromRgb(106, 153, 85), $"Cell Pointer {i}"));
 
+        var payloadSizeColour = Color.FromRgb(180,  80,  80);
+        var rowIdColour       = Color.FromRgb(218, 165,  32);
+        var headerColourCell  = Color.FromRgb( 70, 170, 210);
+
         if (page is TableBTreeLeafPage tlp)
         {
             for (int j = 0; j < tlp.Cells.Count; j++)
             {
                 var cell      = tlp.Cells[j];
                 int cellStart = tlp.CellPointers[j];
-                int dataStart = cellStart
-                                + cell.SizeOfPayload.Length
-                                + cell.RowId.Length
-                                + (int)cell.HeaderSize.Value;
 
-                int fieldOffset = dataStart;
+                list.Add(new HexHighlight(cellStart, cell.SizeOfPayload.Length,
+                    payloadSizeColour, $"Row {cell.RowId.Value} · Payload Size"));
+
+                int rowIdStart = cellStart + cell.SizeOfPayload.Length;
+                list.Add(new HexHighlight(rowIdStart, cell.RowId.Length,
+                    rowIdColour, $"Row {cell.RowId.Value} · Row ID"));
+
+                int headerStart = rowIdStart + cell.RowId.Length;
+                list.Add(new HexHighlight(headerStart, (int)cell.HeaderSize.Value,
+                    headerColourCell, $"Row {cell.RowId.Value} · Record Header"));
+
+                int fieldOffset = headerStart + (int)cell.HeaderSize.Value;
                 for (int i = 0; i < cell.HeaderEntries.Count; i++)
                 {
                     int len = cell.HeaderEntries[i].ContentLength;
@@ -180,11 +191,15 @@ public sealed class PageViewModel : ViewModelBase
             {
                 var cell      = ilp.Cells[j];
                 int cellStart = ilp.CellPointers[j];
-                int dataStart = cellStart
-                                + cell.SizeOfPayload.Length
-                                + (int)cell.HeaderSize.Value;
 
-                int fieldOffset = dataStart;
+                list.Add(new HexHighlight(cellStart, cell.SizeOfPayload.Length,
+                    payloadSizeColour, $"Cell {j} · Payload Size"));
+
+                int headerStart = cellStart + cell.SizeOfPayload.Length;
+                list.Add(new HexHighlight(headerStart, (int)cell.HeaderSize.Value,
+                    headerColourCell, $"Cell {j} · Record Header"));
+
+                int fieldOffset = headerStart + (int)cell.HeaderSize.Value;
                 for (int i = 0; i < cell.HeaderEntries.Count; i++)
                 {
                     int len = cell.HeaderEntries[i].ContentLength;
