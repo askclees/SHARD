@@ -18,6 +18,7 @@ public static class CreateTableParser
 
     public static TableSchema? ExtractTableSchema(string sql)
     {
+        sql = StripLineComments(sql);
         int openParen = FindTableBodyStart(sql);
         if (openParen < 0) return null;
 
@@ -254,6 +255,34 @@ public static class CreateTableParser
             }
         }
         return s;
+    }
+
+    private static string StripLineComments(string sql)
+    {
+        var sb = new System.Text.StringBuilder(sql.Length);
+        int i = 0;
+        while (i < sql.Length)
+        {
+            // Skip quoted/bracketed identifiers and string literals verbatim
+            if (sql[i] is '\'' or '"' or '`' or '[')
+            {
+                int end = SkipQuotedOrBracketed(sql, i);
+                sb.Append(sql, i, end - i);
+                i = end;
+                continue;
+            }
+
+            // Line comment — skip to end of line
+            if (i + 1 < sql.Length && sql[i] == '-' && sql[i + 1] == '-')
+            {
+                while (i < sql.Length && sql[i] != '\n') i++;
+                continue;
+            }
+
+            sb.Append(sql[i]);
+            i++;
+        }
+        return sb.ToString();
     }
 
     private static int SkipQuotedOrBracketed(string s, int i)
