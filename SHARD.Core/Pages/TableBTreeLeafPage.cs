@@ -45,15 +45,20 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
         UnallocatedRegions = MapUnallocatedSpace(data, HeaderOffset);
     }
 
-    private List<BTreeLeafCell> ExtractDeletedCells(byte[] data,List<ushort> deletedCellPointers, TextEncoding encoding)
+    private List<BTreeLeafCell> ExtractDeletedCells(byte[] data, List<ushort> deletedCellPointers, TextEncoding encoding)
     {
         List<BTreeLeafCell> retVal = new();
         foreach (var pointer in deletedCellPointers)
         {
-            var result = DeletedRecordParser.RecoverBTreeLeafRecord(data, pointer, encoding);
-            if (result.IsValid)
+            try
             {
-                retVal.Add(result.Cell!);
+                var result = DeletedRecordParser.RecoverBTreeLeafRecord(data, pointer, encoding);
+                if (result.IsValid)
+                    retVal.Add(result.Cell!);
+            }
+            catch
+            {
+                // A bad pointer must not corrupt the rest of the page parse
             }
         }
         return retVal;
