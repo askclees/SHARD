@@ -38,6 +38,7 @@ public sealed class PageViewModel : ViewModelBase
 
     // ── Per-cell expanders (table leaf pages only) ────────────────────────
     public IReadOnlyList<CellSectionViewModel> CellSections { get; }
+    public IReadOnlyList<CellSectionViewModel> DeletedCellSections { get; }
 
     // ── Freeblock expanders (table leaf pages only) ───────────────────────
     public IReadOnlyList<FreeBlockSectionViewModel> FreeBlockSections { get; }
@@ -48,7 +49,8 @@ public sealed class PageViewModel : ViewModelBase
     public bool HasUnallocatedRegions => UnallocatedRegionSections.Count > 0;
 
     // ── Tab headers with counts ───────────────────────────────────────────
-    public string CellsTabHeader      => CellSections.Count > 0      ? $"Cells ({CellSections.Count})"            : "Cells";
+    public string CellsTabHeader         => CellSections.Count > 0        ? $"Cells ({CellSections.Count})"               : "Cells";
+    public string DeletedCellsTabHeader  => DeletedCellSections.Count > 0 ? $"Potential Deleted ({DeletedCellSections.Count})" : "Potential Deleted";
     public string FreeBlocksTabHeader  => FreeBlockSections.Count > 0 ? $"Freeblocks ({FreeBlockSections.Count})"  : "Freeblocks";
     public string UnallocatedTabHeader => UnallocatedRegionSections.Count > 0
         ? $"Unallocated ({UnallocatedRegionSections.Count})"
@@ -77,6 +79,11 @@ public sealed class PageViewModel : ViewModelBase
                 sections.Add(new CellSectionViewModel(tlp.Cells[i], i, tlp.CellPointers[i]));
             CellSections = sections;
 
+            var deletedSections = new List<CellSectionViewModel>(tlp.DeletedCells.Count);
+            for (int i = 0; i < tlp.DeletedCells.Count; i++)
+                deletedSections.Add(new CellSectionViewModel(tlp.DeletedCells[i], i, tlp.DeletedCells[i].PageOffset));
+            DeletedCellSections = deletedSections;
+
             var fbSections = new List<FreeBlockSectionViewModel>(tlp.FreeBlocks.Count);
             for (int i = 0; i < tlp.FreeBlocks.Count; i++)
                 fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i));
@@ -92,13 +99,15 @@ public sealed class PageViewModel : ViewModelBase
             var sections = new List<CellSectionViewModel>(ilp.Cells.Count);
             for (int i = 0; i < ilp.Cells.Count; i++)
                 sections.Add(new CellSectionViewModel(ilp.Cells[i], i, ilp.CellPointers[i]));
-            CellSections = sections;
+            CellSections              = sections;
+            DeletedCellSections       = [];
             FreeBlockSections         = [];
             UnallocatedRegionSections = [];
         }
         else
         {
             CellSections              = [];
+            DeletedCellSections       = [];
             FreeBlockSections         = [];
             UnallocatedRegionSections = [];
         }

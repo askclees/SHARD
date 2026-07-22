@@ -10,6 +10,7 @@ public sealed class PageListEntryViewModel
     public PageType PageType            { get; }
     public string?  TableName           { get; }
     public bool     HasDeletedPointers  { get; }
+    public bool     HasDeletedRecords   { get; }
     public IReadOnlyList<(int Size, int NonZeroBytes)> UnallocatedRegions { get; }
 
     public string TypeLabel => PageType.ToString();
@@ -17,12 +18,14 @@ public sealed class PageListEntryViewModel
 
     public PageListEntryViewModel(uint pageNumber, PageType pageType, string? tableName = null,
         IReadOnlyList<(int Size, int NonZeroBytes)>? unallocatedRegions = null,
-        bool hasDeletedPointers = false)
+        bool hasDeletedPointers = false,
+        bool hasDeletedRecords = false)
     {
         PageNumber         = pageNumber;
         PageType           = pageType;
         TableName          = tableName;
         UnallocatedRegions = unallocatedRegions ?? [];
         HasDeletedPointers = hasDeletedPointers;
+        HasDeletedRecords  = hasDeletedRecords;
     }
 }

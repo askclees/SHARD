@@ -179,16 +179,14 @@
                     <TabItem Header="Pages">
                         <Grid RowDefinitions="Auto,*">
 
-                            <!-- Horizontal filter panel -->
+                            <!-- Filter panel: two rows -->
                             <Border Grid.Row="0"
-                                    Padding="6,5"
+                                    Padding="6,4"
                                     BorderThickness="0,0,0,1">
-                                <WrapPanel Orientation="Horizontal">
+                                <StackPanel Spacing="4">
 
-                                    <!-- Page type toggles -->
-                                    <StackPanel Orientation="Horizontal" Spacing="4"
-                                                Margin="0,0,10,0"
-                                                VerticalAlignment="Center">
+                                    <!-- Row 1: Page type toggles -->
+                                    <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                         <TextBlock Text="Type:"
                                                    FontSize="11"
                                                    Opacity="0.6"
@@ -218,71 +216,88 @@
                                         </ItemsControl>
                                     </StackPanel>
 
-                                    <!-- Table filter -->
-                                    <StackPanel Orientation="Horizontal" Spacing="4"
-                                                Margin="10,0,10,0"
-                                                VerticalAlignment="Center"
-                                                IsVisible="{Binding HasAvailableTableNames}">
-                                        <TextBlock Text="Table:"
-                                                   FontSize="11"
-                                                   Opacity="0.6"
-                                                   VerticalAlignment="Center"/>
-                                        <ComboBox ItemsSource="{Binding AvailableTableNames}"
-                                                  SelectedItem="{Binding FilterTableName}"
-                                                  FontSize="11"
-                                                  Width="140"
-                                                  Padding="4,2"/>
-                                    </StackPanel>
+                                    <!-- Row 2: Remaining filters -->
+                                    <WrapPanel Orientation="Horizontal">
 
-                                    <!-- Unallocated filters -->
-                                    <StackPanel Orientation="Horizontal" Spacing="8"
-                                                Margin="10,0,10,0"
-                                                VerticalAlignment="Center">
-                                        <CheckBox IsChecked="{Binding FilterHasUnallocated}"
-                                                  Content="Has unallocated"
-                                                  FontSize="11"/>
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <CheckBox IsChecked="{Binding FilterMinSizeEnabled}" FontSize="11"/>
-                                            <TextBlock Text="Unalloc ≥" FontSize="11" VerticalAlignment="Center"/>
-                                            <TextBox Text="{Binding FilterMinSize}"
-                                                     IsEnabled="{Binding FilterMinSizeEnabled}"
-                                                     Width="50" FontSize="11" Padding="4,2"/>
-                                            <TextBlock Text="bytes" FontSize="11" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <CheckBox IsChecked="{Binding FilterMinNonZeroEnabled}" FontSize="11"/>
-                                            <TextBlock Text="Non-zero ≥" FontSize="11" VerticalAlignment="Center"/>
-                                            <TextBox Text="{Binding FilterMinNonZero}"
-                                                     IsEnabled="{Binding FilterMinNonZeroEnabled}"
-                                                     Width="50" FontSize="11" Padding="4,2"/>
-                                            <TextBlock Text="bytes" FontSize="11" VerticalAlignment="Center"/>
-                                        </StackPanel>
-                                    </StackPanel>
-
-                                    <!-- Deleted pointers filter -->
-                                    <StackPanel Orientation="Horizontal" Spacing="8"
-                                                Margin="10,0,10,0"
-                                                VerticalAlignment="Center">
-                                        <CheckBox IsChecked="{Binding FilterHasDeletedPointers}"
-                                                  Content="Has deleted pointers"
-                                                  FontSize="11"/>
-                                    </StackPanel>
-
-                                    <!-- Logic toggle + count -->
-                                    <StackPanel Orientation="Horizontal" Spacing="6"
-                                                Margin="4,0,0,0"
-                                                VerticalAlignment="Center">
-                                        <ToggleButton IsChecked="{Binding UseOrLogic}"
-                                                      Content="{Binding LogicModeLabel}"
+                                        <!-- Table filter -->
+                                        <StackPanel Orientation="Horizontal" Spacing="4"
+                                                    Margin="0,0,10,0"
+                                                    VerticalAlignment="Center"
+                                                    IsVisible="{Binding HasAvailableTableNames}">
+                                            <TextBlock Text="Table:"
+                                                       FontSize="11"
+                                                       Opacity="0.6"
+                                                       VerticalAlignment="Center"/>
+                                            <ComboBox ItemsSource="{Binding AvailableTableNames}"
+                                                      SelectedItem="{Binding FilterTableName}"
                                                       FontSize="11"
-                                                      Padding="6,2"/>
-                                        <TextBlock Text="{Binding FilterCountLabel}"
-                                                   FontSize="11"
-                                                   Opacity="0.6"
-                                                   VerticalAlignment="Center"/>
-                                    </StackPanel>
+                                                      Width="196"
+                                                      MaxWidth="196"
+                                                      Padding="4,2">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="x:String">
+                                                        <TextBlock Text="{Binding}"
+                                                                   Width="176"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   ToolTip.Tip="{Binding}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </StackPanel>
 
-                                </WrapPanel>
+                                        <!-- Unallocated filters -->
+                                        <StackPanel Orientation="Horizontal" Spacing="8"
+                                                    Margin="0,0,10,0"
+                                                    VerticalAlignment="Center">
+                                            <CheckBox IsChecked="{Binding FilterHasUnallocated}"
+                                                      Content="Has unallocated"
+                                                      FontSize="11"/>
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <CheckBox IsChecked="{Binding FilterMinSizeEnabled}" FontSize="11"/>
+                                                <TextBlock Text="Unalloc ≥" FontSize="11" VerticalAlignment="Center"/>
+                                                <TextBox Text="{Binding FilterMinSize}"
+                                                         IsEnabled="{Binding FilterMinSizeEnabled}"
+                                                         Width="50" FontSize="11" Padding="4,2"/>
+                                                <TextBlock Text="bytes" FontSize="11" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <CheckBox IsChecked="{Binding FilterMinNonZeroEnabled}" FontSize="11"/>
+                                                <TextBlock Text="Non-zero ≥" FontSize="11" VerticalAlignment="Center"/>
+                                                <TextBox Text="{Binding FilterMinNonZero}"
+                                                         IsEnabled="{Binding FilterMinNonZeroEnabled}"
+                                                         Width="50" FontSize="11" Padding="4,2"/>
+                                                <TextBlock Text="bytes" FontSize="11" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </StackPanel>
+
+                                        <!-- Deleted filters -->
+                                        <StackPanel Orientation="Horizontal" Spacing="8"
+                                                    Margin="0,0,10,0"
+                                                    VerticalAlignment="Center">
+                                            <CheckBox IsChecked="{Binding FilterHasDeletedPointers}"
+                                                      Content="Has deleted pointers"
+                                                      FontSize="11"/>
+                                            <CheckBox IsChecked="{Binding FilterHasDeletedRecords}"
+                                                      Content="Has deleted records"
+                                                      FontSize="11"/>
+                                        </StackPanel>
+
+                                        <!-- Logic toggle + count -->
+                                        <StackPanel Orientation="Horizontal" Spacing="6"
+                                                    VerticalAlignment="Center">
+                                            <ToggleButton IsChecked="{Binding UseOrLogic}"
+                                                          Content="{Binding LogicModeLabel}"
+                                                          FontSize="11"
+                                                          Padding="6,2"/>
+                                            <TextBlock Text="{Binding FilterCountLabel}"
+                                                       FontSize="11"
+                                                       Opacity="0.6"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
+
+                                    </WrapPanel>
+
+                                </StackPanel>
                             </Border>
 
                             <!-- Page list + detail -->
@@ -480,7 +495,56 @@
                                             </Grid>
                                         </TabItem>
 
-                                        <!-- Tab 4: Unallocated Regions -->
+                                        <!-- Tab 4: Potential Deleted -->
+                                        <TabItem Header="{Binding SelectedPageDetail.DeletedCellsTabHeader}">
+                                            <Grid>
+                                                <TextBlock IsVisible="{Binding SelectedPageDetail.DeletedCellSections.Count,
+                                                                       Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                                           Text="No recoverable deleted records found on this page"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Opacity="0.35"
+                                                           FontSize="12"
+                                                           TextWrapping="Wrap"
+                                                           MaxWidth="260"
+                                                           TextAlignment="Center" />
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <ItemsControl ItemsSource="{Binding SelectedPageDetail.DeletedCellSections}"
+                                                                  Margin="14,10">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:CellSectionViewModel">
+                                                                <Expander Header="{Binding Header}"
+                                                                          IsExpanded="False"
+                                                                          Expanded="OnCellSectionExpanded"
+                                                                          Margin="0,2,0,0">
+                                                                    <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                  Margin="8,4,0,4">
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate x:DataType="vm:InfoRow">
+                                                                                <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                    <TextBlock Grid.Column="0"
+                                                                                               Text="{Binding Label}"
+                                                                                               FontSize="12"
+                                                                                               FontWeight="SemiBold"
+                                                                                               Opacity="0.6" />
+                                                                                    <TextBlock Grid.Column="1"
+                                                                                               Text="{Binding Value}"
+                                                                                               FontSize="12"
+                                                                                               TextWrapping="Wrap" />
+                                                                                </Grid>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </Expander>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </TabItem>
+
+                                        <!-- Tab 5: Unallocated Regions -->
                                         <TabItem Header="{Binding FilteredUnallocatedTabHeader}">
                                             <Grid>
                                                 <TextBlock IsVisible="{Binding HasFilteredUnallocatedSections,
