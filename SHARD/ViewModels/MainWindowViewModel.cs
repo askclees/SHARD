@@ -27,6 +27,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         private set => this.RaiseAndSetIfChanged(ref _database, value);
     }
 
+    private Dictionary<uint, string>? _pageTableMap;
+
     // ── Open / empty state ────────────────────────────────────────────────
     private bool _hasDatabase;
     public bool HasDatabase
@@ -444,7 +446,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public MainWindowViewModel()
     {
-        SearchTab = new SearchViewModel(Pages, pageNumber => Database?.ReadPage(pageNumber).Data);
+        SearchTab = new SearchViewModel(
+            Pages,
+            pageNumber => Database?.ReadPage(pageNumber).Data,
+            pageNumber => _pageTableMap?.GetValueOrDefault(pageNumber));
         QueryTab  = new QueryViewModel();
 
         PageTypeFilters = new List<PageTypeToggleViewModel>
@@ -478,6 +483,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             var db = SqliteForensicDatabase.Open(path);
             Database = db;
             _currentFilePath = path;
+            _pageTableMap = db.BuildPageTableMap();
 
             var page1 = db.ReadPage(1);
             HeaderBytes      = page1.Data[..100];
@@ -568,6 +574,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         Database?.Dispose();
         Database = null;
         _currentFilePath = null;
+        _pageTableMap = null;
         Pages.Clear();
         FilteredPages.Clear();
         FilterCountLabel = "";

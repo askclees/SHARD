@@ -14,6 +14,7 @@ public sealed class SearchViewModel : ViewModelBase
 {
     private readonly IReadOnlyList<PageListEntryViewModel> _pages;
     private readonly Func<uint, byte[]?> _readPageBytes;
+    private readonly Func<uint, string?> _getTableName;
 
     // ── Input ─────────────────────────────────────────────────────────────────
 
@@ -91,10 +92,11 @@ public sealed class SearchViewModel : ViewModelBase
 
     // ── Constructor ───────────────────────────────────────────────────────────
 
-    public SearchViewModel(IReadOnlyList<PageListEntryViewModel> pages, Func<uint, byte[]?> readPageBytes)
+    public SearchViewModel(IReadOnlyList<PageListEntryViewModel> pages, Func<uint, byte[]?> readPageBytes, Func<uint, string?> getTableName)
     {
         _pages         = pages;
         _readPageBytes = readPageBytes;
+        _getTableName  = getTableName;
         SearchCommand  = ReactiveCommand.Create(RunSearch);
     }
 
@@ -138,8 +140,9 @@ public sealed class SearchViewModel : ViewModelBase
             var matches = regex.Matches(text);
             if (matches.Count == 0) continue;
 
-            var hits  = matches.Select(m => new SearchHitViewModel(m.Index, m.Length, data)).ToList();
-            Results.Add(new SearchPageGroupViewModel(pageVm.PageNumber, data, hits));
+            var hits      = matches.Select(m => new SearchHitViewModel(m.Index, m.Length, data)).ToList();
+            var tableName = _getTableName(pageVm.PageNumber);
+            Results.Add(new SearchPageGroupViewModel(pageVm.PageNumber, data, hits, tableName));
         }
 
         HasSearched = true;
