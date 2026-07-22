@@ -14,16 +14,16 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-            artifact: SHARD-win-x64.zip
+            ext: zip
           - os: ubuntu-latest
             rid: linux-x64
-            artifact: SHARD-linux-x64.tar.gz
+            ext: tar.gz
           - os: macos-latest
             rid: osx-x64
-            artifact: SHARD-osx-x64.tar.gz
+            ext: tar.gz
           - os: macos-latest
             rid: osx-arm64
-            artifact: SHARD-osx-arm64.tar.gz
+            ext: tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -43,20 +43,25 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true
           -o publish/${{ matrix.rid }}
 
+      - name: Set artifact name
+        id: name
+        shell: bash
+        run: echo "artifact=SHARD-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
+
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: Compress-Archive -Path publish/${{ matrix.rid }}/* -DestinationPath ${{ matrix.artifact }}
+        run: Compress-Archive -Path publish/${{ matrix.rid }}/* -DestinationPath ${{ steps.name.outputs.artifact }}
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
-        run: tar -czf ${{ matrix.artifact }} -C publish/${{ matrix.rid }} .
+        run: tar -czf ${{ steps.name.outputs.artifact }} -C publish/${{ matrix.rid }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: ${{ steps.name.outputs.artifact }}
+          path: ${{ steps.name.outputs.artifact }}
 
   release:
     name: Create GitHub Release
