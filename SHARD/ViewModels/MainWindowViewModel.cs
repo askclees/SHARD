@@ -334,7 +334,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
     public bool HasProject => Project is not null;
-    public string? ProjectFolderPath => Project?.ProjectFolder;
+    public string? ProjectFolderPath => Project?.IsUnsaved == true ? "(unsaved)" : Project?.ProjectFolder;
 
     // ── Record recovery ────────────────────────────────────────────────────
     private int _selectedByteOffset = -1;
@@ -349,7 +349,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     public bool CanTryRecoverRecord =>
-        HasProject &&
+        Project is not null &&
         SelectedByteOffset >= 0 &&
         SelectedPage?.PageType == PageType.BTreeLeafTable;
 
@@ -387,7 +387,6 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     public string? TryRecoverRecordAtOffset()
     {
-        if (!HasProject)         return "A project must be open to recover records.";
         if (SelectedPage?.PageType != PageType.BTreeLeafTable)
                                  return "Record recovery is only available on table leaf pages.";
         if (SelectedPageDetail is null || SelectedByteOffset < 0 || Database is null)
@@ -555,6 +554,25 @@ public sealed class MainWindowViewModel : ViewModelBase
             HasDatabase = true;
             StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}  ·  {db.PageCount:N0} pages";
 
+            // Build shadow DB immediately so Query and recovery work without a saved project.
+            try
+            {
+                var (project, warnings) = ShadowProject.CreateTemporary(_currentFilePath!, Database);
+                Project = project;
+                QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
+                RefreshPagesFromShadowDatabase();
+                if (warnings.Count > 0)
+                {
+                    string logPath = path + ".warnings.log";
+                    File.WriteAllText(logPath, string.Join("\n\n", warnings));
+                    StatusText += $"  ·  {warnings.Count} table(s) skipped";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText += $"  ·  Shadow DB failed: {ex.Message}";
+            }
+
             string walPath = path + "-wal";
             if (File.Exists(walPath))
                 LoadWalFile(walPath);
@@ -590,6 +608,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SelectedPage = null;
         HasDatabase  = false;
         WalTab       = null;
+        _project?.Dispose();
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";
         SearchTab.Clear();
@@ -597,44 +616,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Create a project folder containing a manifest and a shadow database mirroring
-    /// the currently-loaded evidence file's table structure.
+    /// Save the current temporary project to <paramref name="folderPath"/> on disk,
+    /// writing the manifest and persisting the shadow database.
     /// </summary>
-    public void CreateProject(string folderPath)
+    public void SaveProject(string folderPath)
     {
-        if (Database is null || _currentFilePath is null) return;
-
+        if (Project is null) return;
         try
         {
-            var (project, warnings) = ShadowProject.Create(folderPath, _currentFilePath, Database);
-            Project = project;
-            QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
-            RefreshPagesFromShadowDatabase();
-            if (warnings.Count > 0)
-            {
-                string logPath = Path.Combine(folderPath, "warnings.log");
-                File.WriteAllText(logPath, string.Join("\n\n", warnings));
-                StatusText = $"Project created with {warnings.Count} skipped table(s) — see warnings.log";
-            }
-            else
-            {
-                StatusText = $"Project created at {folderPath}";
-            }
-            SyncWalToProject();
+            Project.SaveTo(folderPath);
+            this.RaisePropertyChanged(nameof(ProjectFolderPath));
+            StatusText = $"Project saved to {folderPath}";
         }
         catch (Exception ex)
         {
-            string logPath = Path.Combine(folderPath, "error.log");
-            try
-            {
-                File.WriteAllText(logPath, ex.ToString());
-                StatusText = $"Error creating project: {ex.Message} (see {logPath})";
-            }
-            catch
-            {
-                // Folder may not exist yet (e.g. failed before Directory.CreateDirectory) — fall back to status text only.
-                StatusText = $"Error creating project: {ex.Message}";
-            }
+            StatusText = $"Error saving project: {ex.Message}";
         }
     }
 
@@ -656,6 +652,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 return;
             }
 
+            // Replace the temporary shadow project created by LoadFile with the saved one.
+            _project?.Dispose();
             Project = project;
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
