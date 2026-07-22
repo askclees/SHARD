@@ -349,139 +349,188 @@
                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
                                       ColumnDefinitions="*,4,*">
 
-                                    <!-- Left: summary + expandable sections -->
-                                    <ScrollViewer Grid.Column="0"
-                                                  VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Disabled">
-                                        <StackPanel Margin="14,10" Spacing="6">
+                                    <!-- Left: tabbed detail sections -->
+                                    <TabControl Grid.Column="0" Padding="0">
 
-                                            <!-- Basic page info -->
-                                            <TextBlock Text="{Binding SelectedPageDetail.Summary}"
-                                                       FontFamily="Courier New"
-                                                       FontSize="12"
-                                                       TextWrapping="Wrap" />
+                                        <!-- Tab 1: Page Information -->
+                                        <TabItem Header="Page Information">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <StackPanel Margin="14,10" Spacing="6">
+                                                    <TextBlock Text="{Binding SelectedPageDetail.Summary}"
+                                                               FontFamily="Courier New"
+                                                               FontSize="12"
+                                                               TextWrapping="Wrap" />
+                                                    <Expander Header="{Binding SelectedPageDetail.CellPointerHeader}"
+                                                              IsExpanded="False"
+                                                              IsVisible="{Binding SelectedPageDetail.HasCellPointers}">
+                                                        <ItemsControl ItemsSource="{Binding SelectedPageDetail.CellPointerRows}"
+                                                                      Margin="8,4,0,4">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                    <Grid ColumnDefinitions="52,*" Margin="0,2">
+                                                                        <TextBlock Grid.Column="0"
+                                                                                   Text="{Binding Label}"
+                                                                                   FontFamily="Courier New"
+                                                                                   FontSize="11"
+                                                                                   Opacity="0.55" />
+                                                                        <TextBlock Grid.Column="1"
+                                                                                   Text="{Binding Value}"
+                                                                                   FontFamily="Courier New"
+                                                                                   FontSize="11" />
+                                                                    </Grid>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </Expander>
+                                                </StackPanel>
+                                            </ScrollViewer>
+                                        </TabItem>
 
-                                            <!-- Cell pointers -->
-                                            <Expander Header="{Binding SelectedPageDetail.CellPointerHeader}"
-                                                      IsExpanded="False"
-                                                      IsVisible="{Binding SelectedPageDetail.HasCellPointers}">
-                                                <ItemsControl ItemsSource="{Binding SelectedPageDetail.CellPointerRows}"
-                                                              Margin="8,4,0,4">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate x:DataType="vm:InfoRow">
-                                                            <Grid ColumnDefinitions="52,*" Margin="0,2">
-                                                                <TextBlock Grid.Column="0"
-                                                                           Text="{Binding Label}"
-                                                                           FontFamily="Courier New"
-                                                                           FontSize="11"
-                                                                           Opacity="0.55" />
-                                                                <TextBlock Grid.Column="1"
-                                                                           Text="{Binding Value}"
-                                                                           FontFamily="Courier New"
-                                                                           FontSize="11" />
-                                                            </Grid>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
-                                            </Expander>
+                                        <!-- Tab 2: Cells -->
+                                        <TabItem Header="{Binding SelectedPageDetail.CellsTabHeader}">
+                                            <Grid>
+                                                <TextBlock IsVisible="{Binding SelectedPageDetail.CellSections.Count,
+                                                                       Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                                           Text="No cells on this page"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Opacity="0.35"
+                                                           FontSize="12" />
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <ItemsControl ItemsSource="{Binding SelectedPageDetail.CellSections}"
+                                                                  Margin="14,10">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:CellSectionViewModel">
+                                                                <Expander Header="{Binding Header}"
+                                                                          IsExpanded="False"
+                                                                          Expanded="OnCellSectionExpanded"
+                                                                          Margin="0,2,0,0">
+                                                                    <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                  Margin="8,4,0,4">
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate x:DataType="vm:InfoRow">
+                                                                                <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                    <TextBlock Grid.Column="0"
+                                                                                               Text="{Binding Label}"
+                                                                                               FontSize="12"
+                                                                                               FontWeight="SemiBold"
+                                                                                               Opacity="0.6" />
+                                                                                    <TextBlock Grid.Column="1"
+                                                                                               Text="{Binding Value}"
+                                                                                               FontSize="12"
+                                                                                               TextWrapping="Wrap" />
+                                                                                </Grid>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </Expander>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </TabItem>
 
-                                            <!-- Per-cell expanders (table leaf pages only) -->
-                                            <ItemsControl ItemsSource="{Binding SelectedPageDetail.CellSections}">
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate x:DataType="vm:CellSectionViewModel">
-                                                        <Expander Header="{Binding Header}"
-                                                                  IsExpanded="False"
-                                                                  Expanded="OnCellSectionExpanded"
-                                                                  Margin="0,2,0,0">
-                                                            <ItemsControl ItemsSource="{Binding Rows}"
-                                                                          Margin="8,4,0,4">
-                                                                <ItemsControl.ItemTemplate>
-                                                                    <DataTemplate x:DataType="vm:InfoRow">
-                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                            <TextBlock Grid.Column="0"
-                                                                                       Text="{Binding Label}"
-                                                                                       FontSize="12"
-                                                                                       FontWeight="SemiBold"
-                                                                                       Opacity="0.6" />
-                                                                            <TextBlock Grid.Column="1"
-                                                                                       Text="{Binding Value}"
-                                                                                       FontSize="12"
-                                                                                       TextWrapping="Wrap" />
-                                                                        </Grid>
-                                                                    </DataTemplate>
-                                                                </ItemsControl.ItemTemplate>
-                                                            </ItemsControl>
-                                                        </Expander>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
+                                        <!-- Tab 3: Freeblocks -->
+                                        <TabItem Header="{Binding SelectedPageDetail.FreeBlocksTabHeader}">
+                                            <Grid>
+                                                <TextBlock IsVisible="{Binding SelectedPageDetail.HasFreeBlocks,
+                                                                       Converter={x:Static conv:BoolConverters.Not}}"
+                                                           Text="No freeblocks on this page"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Opacity="0.35"
+                                                           FontSize="12" />
+                                                <ScrollViewer IsVisible="{Binding SelectedPageDetail.HasFreeBlocks}"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <ItemsControl ItemsSource="{Binding SelectedPageDetail.FreeBlockSections}"
+                                                                  Margin="14,10">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:FreeBlockSectionViewModel">
+                                                                <Expander Header="{Binding Header}"
+                                                                          IsExpanded="False"
+                                                                          Expanded="OnFreeBlockSectionExpanded"
+                                                                          Margin="0,2,0,0">
+                                                                    <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                  Margin="8,4,0,4">
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate x:DataType="vm:InfoRow">
+                                                                                <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                    <TextBlock Grid.Column="0"
+                                                                                               Text="{Binding Label}"
+                                                                                               FontSize="12"
+                                                                                               FontWeight="SemiBold"
+                                                                                               Opacity="0.6" />
+                                                                                    <TextBlock Grid.Column="1"
+                                                                                               Text="{Binding Value}"
+                                                                                               FontSize="12"
+                                                                                               TextWrapping="Wrap" />
+                                                                                </Grid>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </Expander>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </TabItem>
 
-                                            <!-- Freeblock expanders -->
-                                            <ItemsControl ItemsSource="{Binding SelectedPageDetail.FreeBlockSections}"
-                                                          IsVisible="{Binding SelectedPageDetail.HasFreeBlocks}">
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate x:DataType="vm:FreeBlockSectionViewModel">
-                                                        <Expander Header="{Binding Header}"
-                                                                  IsExpanded="False"
-                                                                  Expanded="OnFreeBlockSectionExpanded"
-                                                                  Margin="0,2,0,0">
-                                                            <ItemsControl ItemsSource="{Binding Rows}"
-                                                                          Margin="8,4,0,4">
-                                                                <ItemsControl.ItemTemplate>
-                                                                    <DataTemplate x:DataType="vm:InfoRow">
-                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                            <TextBlock Grid.Column="0"
-                                                                                       Text="{Binding Label}"
-                                                                                       FontSize="12"
-                                                                                       FontWeight="SemiBold"
-                                                                                       Opacity="0.6" />
-                                                                            <TextBlock Grid.Column="1"
-                                                                                       Text="{Binding Value}"
-                                                                                       FontSize="12"
-                                                                                       TextWrapping="Wrap" />
-                                                                        </Grid>
-                                                                    </DataTemplate>
-                                                                </ItemsControl.ItemTemplate>
-                                                            </ItemsControl>
-                                                        </Expander>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
+                                        <!-- Tab 4: Unallocated Regions -->
+                                        <TabItem Header="{Binding FilteredUnallocatedTabHeader}">
+                                            <Grid>
+                                                <TextBlock IsVisible="{Binding HasFilteredUnallocatedSections,
+                                                                       Converter={x:Static conv:BoolConverters.Not}}"
+                                                           Text="No unallocated regions (or none pass current filters)"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Opacity="0.35"
+                                                           FontSize="12"
+                                                           TextWrapping="Wrap"
+                                                           MaxWidth="260"
+                                                           TextAlignment="Center" />
+                                                <ScrollViewer IsVisible="{Binding HasFilteredUnallocatedSections}"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <ItemsControl ItemsSource="{Binding FilteredUnallocatedSections}"
+                                                                  Margin="14,10">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:UnallocatedRegionSectionViewModel">
+                                                                <Expander Header="{Binding Header}"
+                                                                          IsExpanded="False"
+                                                                          Expanded="OnUnallocatedRegionSectionExpanded"
+                                                                          Margin="0,2,0,0">
+                                                                    <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                  Margin="8,4,0,4">
+                                                                        <ItemsControl.ItemTemplate>
+                                                                            <DataTemplate x:DataType="vm:InfoRow">
+                                                                                <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                    <TextBlock Grid.Column="0"
+                                                                                               Text="{Binding Label}"
+                                                                                               FontSize="12"
+                                                                                               FontWeight="SemiBold"
+                                                                                               Opacity="0.6" />
+                                                                                    <TextBlock Grid.Column="1"
+                                                                                               Text="{Binding Value}"
+                                                                                               FontSize="12"
+                                                                                               TextWrapping="Wrap" />
+                                                                                </Grid>
+                                                                            </DataTemplate>
+                                                                        </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </Expander>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </TabItem>
 
-                                            <!-- Unallocated region expanders -->
-                                            <ItemsControl ItemsSource="{Binding FilteredUnallocatedSections}"
-                                                          IsVisible="{Binding HasFilteredUnallocatedSections}">
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate x:DataType="vm:UnallocatedRegionSectionViewModel">
-                                                        <Expander Header="{Binding Header}"
-                                                                  IsExpanded="False"
-                                                                  Expanded="OnUnallocatedRegionSectionExpanded"
-                                                                  Margin="0,2,0,0">
-                                                            <ItemsControl ItemsSource="{Binding Rows}"
-                                                                          Margin="8,4,0,4">
-                                                                <ItemsControl.ItemTemplate>
-                                                                    <DataTemplate x:DataType="vm:InfoRow">
-                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                            <TextBlock Grid.Column="0"
-                                                                                       Text="{Binding Label}"
-                                                                                       FontSize="12"
-                                                                                       FontWeight="SemiBold"
-                                                                                       Opacity="0.6" />
-                                                                            <TextBlock Grid.Column="1"
-                                                                                       Text="{Binding Value}"
-                                                                                       FontSize="12"
-                                                                                       TextWrapping="Wrap" />
-                                                                        </Grid>
-                                                                    </DataTemplate>
-                                                                </ItemsControl.ItemTemplate>
-                                                            </ItemsControl>
-                                                        </Expander>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-
-                                        </StackPanel>
-                                    </ScrollViewer>
+                                    </TabControl>
 
                                     <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 

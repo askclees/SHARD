@@ -47,6 +47,13 @@ public sealed class PageViewModel : ViewModelBase
     public IReadOnlyList<UnallocatedRegionSectionViewModel> UnallocatedRegionSections { get; }
     public bool HasUnallocatedRegions => UnallocatedRegionSections.Count > 0;
 
+    // ── Tab headers with counts ───────────────────────────────────────────
+    public string CellsTabHeader      => CellSections.Count > 0      ? $"Cells ({CellSections.Count})"            : "Cells";
+    public string FreeBlocksTabHeader  => FreeBlockSections.Count > 0 ? $"Freeblocks ({FreeBlockSections.Count})"  : "Freeblocks";
+    public string UnallocatedTabHeader => UnallocatedRegionSections.Count > 0
+        ? $"Unallocated ({UnallocatedRegionSections.Count})"
+        : "Unallocated";
+
     public PageViewModel(SqlitePage page)
     {
         Page = page;

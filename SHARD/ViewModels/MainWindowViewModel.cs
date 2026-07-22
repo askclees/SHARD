@@ -146,6 +146,9 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public ObservableCollection<UnallocatedRegionSectionViewModel> FilteredUnallocatedSections { get; } = [];
     public bool HasFilteredUnallocatedSections => FilteredUnallocatedSections.Count > 0;
+    public string FilteredUnallocatedTabHeader => FilteredUnallocatedSections.Count > 0
+        ? $"Unallocated ({FilteredUnallocatedSections.Count})"
+        : "Unallocated";
 
     // ── Page type filter ──────────────────────────────────────────────────
     public IReadOnlyList<PageTypeToggleViewModel> PageTypeFilters { get; } = [];
@@ -179,6 +182,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         this.RaisePropertyChanged(nameof(HasFilteredUnallocatedSections));
+        this.RaisePropertyChanged(nameof(FilteredUnallocatedTabHeader));
     }
 
     private void RefreshAvailableTableNames()
