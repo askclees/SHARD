@@ -21,8 +21,9 @@ public static class ShadowDatabaseBuilder
 
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
     public const string InternalTablePrefix = "_shard_";
+    public const string RecoveredTablePrefix = InternalTablePrefix + "recovered_";
     private const string OverflowTableName = InternalTablePrefix + "overflow_pages";
-    private const string PagesTableName = InternalTablePrefix + "pages";
+    private const string PagesTableName    = InternalTablePrefix + "pages";
 
     public static void Create(string shadowDbPath, SqliteForensicDatabase database)
     {
@@ -55,6 +56,12 @@ public static class ShadowDatabaseBuilder
                 {
                     createCommand.CommandText = createTableSql;
                     createCommand.ExecuteNonQuery();
+                }
+
+                using (var createRecoveredCommand = connection.CreateCommand())
+                {
+                    createRecoveredCommand.CommandText = BuildCreateRecoveredTableSql(tableSchema);
+                    createRecoveredCommand.ExecuteNonQuery();
                 }
 
                 InsertRows(connection, tableSchema, database.ReadTableRows(row.RootPage.Value));
@@ -104,6 +111,103 @@ public static class ShadowDatabaseBuilder
             columnSql.Add($"PRIMARY KEY ({string.Join(", ", compositeKey.Select(QuoteIdentifier))})");
 
         return $"CREATE TABLE {QuoteIdentifier(schema.TableName)} (\n  {string.Join(",\n  ", columnSql)}\n)";
+    }
+
+    /// <summary>
+    /// Same columns as <see cref="BuildCreateTableSql"/> but without any constraints
+    /// (no PRIMARY KEY, UNIQUE, NOT NULL), so recovered records with unknown or
+    /// duplicate keys can always be inserted.
+    /// </summary>
+    public static string BuildCreateRecoveredTableSql(TableSchema schema)
+    {
+        var columnSql = schema.Columns.Select(c =>
+        {
+            var parts = new List<string> { QuoteIdentifier(c.Name) };
+            if (!string.IsNullOrEmpty(c.DeclaredType)) parts.Add(c.DeclaredType);
+            return string.Join(' ', parts);
+        }).ToList();
+
+        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}  INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)} INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)} INTEGER NOT NULL DEFAULT 0");
+
+        string tableName = RecoveredTablePrefix + schema.TableName;
+        return $"CREATE TABLE {QuoteIdentifier(tableName)} (\n  {string.Join(",\n  ", columnSql)}\n)";
+    }
+
+    /// <summary>
+    /// Inserts a B-tree leaf cell from a WAL frame into the live shadow table using
+    /// <c>INSERT OR IGNORE</c>, so records already present from the baseline database
+    /// are not duplicated.
+    /// </summary>
+    public static void InsertWalRecord(
+        SqliteConnection connection,
+        TableSchema schema,
+        BTreeLeafCell cell,
+        uint pageNumber,
+        int cellOffset)
+    {
+        var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));   placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn));   placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
+
+        string sql = $"INSERT OR IGNORE INTO {QuoteIdentifier(schema.TableName)} " +
+                     $"({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        for (int i = 0; i < schema.Columns.Count; i++)
+        {
+            object value = schema.Columns[i].IsRowIdAlias
+                ? cell.RowId.Value
+                : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+            command.Parameters.AddWithValue($"@p{i}", value);
+        }
+
+        command.Parameters.AddWithValue("@p_page",    (long)pageNumber);
+        command.Parameters.AddWithValue("@p_offset",  cellOffset);
+        command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Inserts a recovered (deleted) B-tree leaf cell into the
+    /// <c>_shard_recovered_{tableName}</c> table of the already-open shadow connection.
+    /// </summary>
+    public static void InsertRecoveredRecord(
+        SqliteConnection connection,
+        TableSchema schema,
+        BTreeLeafCell cell,
+        uint pageNumber,
+        int cellOffset)
+    {
+        string recoveredTable = RecoveredTablePrefix + schema.TableName;
+
+        var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));  placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn)); placeholders.Add("@p_offset");
+
+        string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} " +
+                     $"({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+
+        for (int i = 0; i < schema.Columns.Count; i++)
+        {
+            object value = schema.Columns[i].IsRowIdAlias
+                ? cell.RowId.Value
+                : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+            command.Parameters.AddWithValue($"@p{i}", value);
+        }
+
+        command.Parameters.AddWithValue("@p_page",   (long)pageNumber);
+        command.Parameters.AddWithValue("@p_offset", cellOffset);
+        command.ExecuteNonQuery();
     }
 
     private static void CreateOverflowTable(SqliteConnection connection)

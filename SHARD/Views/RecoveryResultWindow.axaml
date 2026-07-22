@@ -1,0 +1,81 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SHARD.ViewModels"
+        xmlns:conv="using:Avalonia.Data.Converters"
+        xmlns:dg="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.DataGrid"
+        x:Class="SHARD.Views.RecoveryResultWindow"
+        x:DataType="vm:RecoveryResultViewModel"
+        Title="Record Decoder"
+        Width="520" Height="380"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        ShowInTaskbar="False">
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Spacing="3" Margin="0,0,0,12">
+            <TextBlock Text="{Binding Title}"
+                       FontWeight="SemiBold"
+                       FontSize="13" />
+            <TextBlock Text="{Binding Subtitle}"
+                       FontSize="11"
+                       Opacity="0.6"
+                       IsVisible="{Binding Subtitle,
+                                   Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
+
+        <!-- Field table — shown for valid results -->
+        <dg:DataGrid Grid.Row="1"
+                     ItemsSource="{Binding Fields}"
+                     IsVisible="{Binding IsValid}"
+                     IsReadOnly="True"
+                     AutoGenerateColumns="False"
+                     GridLinesVisibility="All"
+                     CanUserSortColumns="False"
+                     CanUserResizeColumns="True"
+                     FontSize="12">
+            <dg:DataGrid.Columns>
+                <dg:DataGridTextColumn Header="Column"
+                                       Binding="{Binding Column}"
+                                       Width="*" />
+                <dg:DataGridTextColumn Header="Value"
+                                       Binding="{Binding Value}"
+                                       Width="2*" />
+            </dg:DataGrid.Columns>
+        </dg:DataGrid>
+
+        <!-- Error list — shown for invalid results -->
+        <ScrollViewer Grid.Row="1"
+                      IsVisible="{Binding !IsValid}"
+                      VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Errors}" Margin="0,4">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                        <TextBlock Text="{Binding}"
+                                   FontSize="12"
+                                   Foreground="#E05C5C"
+                                   TextWrapping="Wrap"
+                                   Margin="0,3" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,12,0,0">
+            <Button Content="Add to project"
+                    IsVisible="{Binding CanAdd}"
+                    Click="OnAddClicked"
+                    Padding="14,6" />
+            <Button Content="Close"
+                    Click="OnCloseClicked"
+                    Padding="14,6" />
+        </StackPanel>
+
+    </Grid>
+</Window>

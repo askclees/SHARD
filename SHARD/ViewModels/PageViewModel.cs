@@ -43,6 +43,17 @@ public sealed class PageViewModel : ViewModelBase
     public IReadOnlyList<FreeBlockSectionViewModel> FreeBlockSections { get; }
     public bool HasFreeBlocks => FreeBlockSections.Count > 0;
 
+    // ── Unallocated region expanders (table leaf pages only) ──────────────
+    public IReadOnlyList<UnallocatedRegionSectionViewModel> UnallocatedRegionSections { get; }
+    public bool HasUnallocatedRegions => UnallocatedRegionSections.Count > 0;
+
+    // ── Tab headers with counts ───────────────────────────────────────────
+    public string CellsTabHeader      => CellSections.Count > 0      ? $"Cells ({CellSections.Count})"            : "Cells";
+    public string FreeBlocksTabHeader  => FreeBlockSections.Count > 0 ? $"Freeblocks ({FreeBlockSections.Count})"  : "Freeblocks";
+    public string UnallocatedTabHeader => UnallocatedRegionSections.Count > 0
+        ? $"Unallocated ({UnallocatedRegionSections.Count})"
+        : "Unallocated";
+
     public PageViewModel(SqlitePage page)
     {
         Page = page;
@@ -70,6 +81,11 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < tlp.FreeBlocks.Count; i++)
                 fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i));
             FreeBlockSections = fbSections;
+
+            var urSections = new List<UnallocatedRegionSectionViewModel>(tlp.UnallocatedRegions.Count);
+            for (int i = 0; i < tlp.UnallocatedRegions.Count; i++)
+                urSections.Add(new UnallocatedRegionSectionViewModel(tlp.UnallocatedRegions[i], i));
+            UnallocatedRegionSections = urSections;
         }
         else if (page is IndexBTreeLeafPage ilp)
         {
@@ -77,12 +93,14 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < ilp.Cells.Count; i++)
                 sections.Add(new CellSectionViewModel(ilp.Cells[i], i, ilp.CellPointers[i]));
             CellSections = sections;
-            FreeBlockSections = [];
+            FreeBlockSections         = [];
+            UnallocatedRegionSections = [];
         }
         else
         {
-            CellSections      = [];
-            FreeBlockSections = [];
+            CellSections              = [];
+            FreeBlockSections         = [];
+            UnallocatedRegionSections = [];
         }
     }
 
@@ -142,18 +160,29 @@ public sealed class PageViewModel : ViewModelBase
         for (int i = 0; i < bp.CellPointers.Length; i++)
             list.Add(new(cellPtrStart + i * 2, 2, Color.FromRgb(106, 153, 85), $"Cell Pointer {i}"));
 
+        var payloadSizeColour = Color.FromRgb(180,  80,  80);
+        var rowIdColour       = Color.FromRgb(218, 165,  32);
+        var headerColourCell  = Color.FromRgb( 70, 170, 210);
+
         if (page is TableBTreeLeafPage tlp)
         {
             for (int j = 0; j < tlp.Cells.Count; j++)
             {
                 var cell      = tlp.Cells[j];
                 int cellStart = tlp.CellPointers[j];
-                int dataStart = cellStart
-                                + cell.SizeOfPayload.Length
-                                + cell.RowId.Length
-                                + (int)cell.HeaderSize.Value;
 
-                int fieldOffset = dataStart;
+                list.Add(new HexHighlight(cellStart, cell.SizeOfPayload.Length,
+                    payloadSizeColour, $"Row {cell.RowId.Value} · Payload Size"));
+
+                int rowIdStart = cellStart + cell.SizeOfPayload.Length;
+                list.Add(new HexHighlight(rowIdStart, cell.RowId.Length,
+                    rowIdColour, $"Row {cell.RowId.Value} · Row ID"));
+
+                int headerStart = rowIdStart + cell.RowId.Length;
+                list.Add(new HexHighlight(headerStart, (int)cell.HeaderSize.Value,
+                    headerColourCell, $"Row {cell.RowId.Value} · Record Header"));
+
+                int fieldOffset = headerStart + (int)cell.HeaderSize.Value;
                 for (int i = 0; i < cell.HeaderEntries.Count; i++)
                 {
                     int len = cell.HeaderEntries[i].ContentLength;
@@ -169,11 +198,15 @@ public sealed class PageViewModel : ViewModelBase
             {
                 var cell      = ilp.Cells[j];
                 int cellStart = ilp.CellPointers[j];
-                int dataStart = cellStart
-                                + cell.SizeOfPayload.Length
-                                + (int)cell.HeaderSize.Value;
 
-                int fieldOffset = dataStart;
+                list.Add(new HexHighlight(cellStart, cell.SizeOfPayload.Length,
+                    payloadSizeColour, $"Cell {j} · Payload Size"));
+
+                int headerStart = cellStart + cell.SizeOfPayload.Length;
+                list.Add(new HexHighlight(headerStart, (int)cell.HeaderSize.Value,
+                    headerColourCell, $"Cell {j} · Record Header"));
+
+                int fieldOffset = headerStart + (int)cell.HeaderSize.Value;
                 for (int i = 0; i < cell.HeaderEntries.Count; i++)
                 {
                     int len = cell.HeaderEntries[i].ContentLength;
@@ -194,6 +227,14 @@ public sealed class PageViewModel : ViewModelBase
                 int contentLen = (int)fb.BlockSize - 4;
                 if (contentLen > 0)
                     list.Add(new HexHighlight((int)fb.PageOffset + 4, contentLen, contentColour, $"Freeblock content"));
+            }
+
+            var unallocColour = Color.FromRgb(255, 165, 0);
+            for (int i = 0; i < tlpFb.UnallocatedRegions.Count; i++)
+            {
+                var region = tlpFb.UnallocatedRegions[i];
+                if (region.Size > 0)
+                    list.Add(new HexHighlight(region.Offset, region.Size, unallocColour, $"Unallocated Region {i}"));
             }
         }
 

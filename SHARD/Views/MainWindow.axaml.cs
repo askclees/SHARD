@@ -1,9 +1,14 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using SHARD.Controls;
+using SHARD.Core.Records;
+using SHARD.Core.Schema;
 using SHARD.ViewModels;
 
 namespace SHARD.Views;
@@ -18,6 +23,11 @@ public partial class MainWindow : Window
         AppleUniformTypeIdentifiers = ["com.apple.sqlite3"],
     };
 
+    private static readonly FilePickerFileType WalFilter = new("SQLite WAL File")
+    {
+        Patterns = ["*.db-wal", "*.sqlite-wal", "*.wal"],
+    };
+
     public MainWindow()
     {
         InitializeComponent();
@@ -27,8 +37,16 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuClose")!.Click         += OnCloseClick;
         this.FindControl<MenuItem>("MenuCreateProject")!.Click += OnCreateProjectClick;
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
+        this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
+
+        // Wire PageHexView cursor offset → ViewModel
+        this.FindControl<HexView>("PageHexView")!.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == HexView.CursorOffsetProperty && DataContext is MainWindowViewModel vm)
+                vm.SelectedByteOffset = (int)(e.NewValue ?? -1);
+        };
 
         // Drag-and-drop
         AddHandler(DragDrop.DropEvent,     OnDrop);
@@ -99,13 +117,35 @@ public partial class MainWindow : Window
     private void OnCloseClick(object? sender, RoutedEventArgs e) =>
         Vm.CloseFile();
 
+    private async void OnLoadWalClick(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title          = "Open WAL File",
+            AllowMultiple  = false,
+            FileTypeFilter = [WalFilter, FilePickerFileTypes.All],
+        });
+
+        if (files is [var file])
+            Vm.LoadWalFile(file.Path.LocalPath);
+    }
+
     private async void OnCreateProjectClick(object? sender, RoutedEventArgs e)
     {
-        var dialog = new CreateProjectWindow();
-        var path = await dialog.ShowDialog<string?>(this);
+        string? candidate = Vm.CurrentFilePath + "-wal";
+        string? detectedWal = Vm.WalTab is null && System.IO.File.Exists(candidate)
+            ? candidate
+            : null; // already loaded or not found — no need to offer
 
-        if (path is not null)
-            Vm.CreateProject(path);
+        var dialog = new CreateProjectWindow(detectedWal);
+        var result = await dialog.ShowDialog<CreateProjectResult?>(this);
+
+        if (result is not null)
+        {
+            Vm.CreateProject(result.FolderPath);
+            if (result.WalPathToLoad is not null)
+                Vm.LoadWalFile(result.WalPathToLoad);
+        }
     }
 
     private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)
@@ -143,13 +183,41 @@ public partial class MainWindow : Window
     private void OnCellSectionExpanded(object? sender, RoutedEventArgs e)
     {
         if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
-        this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
+        var hexView = this.FindControl<HexView>("PageHexView");
+        hexView?.ScrollToByteOffset(vm.ByteOffset);
+        hexView?.SetCursorOffset(vm.ByteOffset);
     }
 
     private void OnFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
     {
         if (sender is not Expander { DataContext: FreeBlockSectionViewModel vm }) return;
         this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnWalCellSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
+        var hexView = this.FindControl<HexView>("WalHexView");
+        hexView?.ScrollToByteOffset(vm.ByteOffset);
+        hexView?.SetCursorOffset(vm.ByteOffset);
+    }
+
+    private void OnWalFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: FreeBlockSectionViewModel vm }) return;
+        this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
+        this.FindControl<HexView>("PageHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnWalUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
+        this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
@@ -170,6 +238,124 @@ public partial class MainWindow : Window
     {
         if (sender is not Button { DataContext: SearchHitViewModel hit }) return;
         this.FindControl<HexView>("SearchHexView")?.ScrollToByteOffset(hit.Offset);
+    }
+
+    // ── Record recovery ──────────────────────────────────────────────────────
+
+    private async void OnTryRecoverRecordClicked(object? sender, RoutedEventArgs e)
+    {
+        var overlap = Vm.FindLiveCellAtOffset(Vm.SelectedByteOffset);
+        if (overlap is not null)
+        {
+            bool proceed = await ShowLiveRecordWarning(overlap);
+            if (!proceed) return;
+        }
+
+        string? preconditionError = Vm.TryRecoverRecordAtOffset();
+        if (preconditionError is not null)
+        {
+            var errDlg = new RecoveryResultWindow(new RecoveryResultViewModel
+            {
+                IsValid = false,
+                Title   = "Cannot decode record",
+                Errors  = [preconditionError],
+            });
+            await errDlg.ShowDialog(this);
+            return;
+        }
+
+        var result = Vm.LastRecoveryResult!;
+
+        TableSchema? schema = null;
+        if (Vm.SelectedPage?.TableName is { } tableName && Vm.Database is not null)
+            schema = Vm.Database.GetTableSchema(tableName);
+
+        var vm = new RecoveryResultViewModel
+        {
+            IsValid  = result.IsValid,
+            Title    = result.IsValid
+                ? $"Valid record — RowId: {result.Cell!.RowId.Value}"
+                : "Could not decode record at this location",
+            Subtitle = result.IsValid
+                ? $"Offset {Vm.SelectedByteOffset} on page {Vm.SelectedPage?.PageNumber}" +
+                  (Vm.SelectedPage?.TableName is { } tn ? $", table: {tn}" : "")
+                : $"Offset {Vm.SelectedByteOffset} on page {Vm.SelectedPage?.PageNumber}",
+            Fields   = result.IsValid ? BuildFieldRows(result.Cell!, schema) : [],
+            Errors   = result.ValidationErrors,
+            CanAdd   = Vm.CanSaveRecoveryToProject,
+        };
+
+        bool save = await new RecoveryResultWindow(vm).ShowDialog<bool>(this);
+        if (save) Vm.SaveRecoveryToProject();
+    }
+
+    private static List<RecoveryFieldRow> BuildFieldRows(BTreeLeafCell cell, TableSchema? schema)
+    {
+        var rows = new List<RecoveryFieldRow>();
+        if (schema is not null)
+        {
+            for (int i = 0; i < schema.Columns.Count; i++)
+            {
+                var col = schema.Columns[i];
+                string value = col.IsRowIdAlias
+                    ? cell.RowId.Value.ToString()
+                    : (i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value?.ToString() : null) ?? "NULL";
+                rows.Add(new RecoveryFieldRow(col.Name, value));
+            }
+        }
+        else
+        {
+            rows.Add(new RecoveryFieldRow("RowId", cell.RowId.Value.ToString()));
+            for (int i = 0; i < cell.FieldValues.Count; i++)
+                rows.Add(new RecoveryFieldRow($"Field {i}", cell.FieldValues[i]?.Value?.ToString() ?? "NULL"));
+        }
+        return rows;
+    }
+
+    // ── Dialogs ───────────────────────────────────────────────────────────────
+
+    private Task<bool> ShowLiveRecordWarning(BTreeLeafCell overlap)
+    {
+        var dlg = new Window
+        {
+            Title                  = "Offset inside live record",
+            Width                  = 440,
+            SizeToContent          = SizeToContent.Height,
+            WindowStartupLocation  = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar          = false,
+            CanResize              = false,
+        };
+
+        var text = new TextBlock
+        {
+            Text = $"The selected offset falls inside live record RowId {overlap.RowId.Value} " +
+                   $"(bytes {overlap.PageOffset}–{overlap.PageOffset + overlap.CellByteLengthOnPage - 1}).\n\n" +
+                   "Decoding at this position is unlikely to produce a valid deleted record. " +
+                   "Do you want to proceed anyway?",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize     = 12,
+            Margin       = new Thickness(0, 0, 0, 16),
+        };
+
+        var proceedBtn = new Button { Content = "Proceed anyway", Margin = new Thickness(0, 0, 8, 0) };
+        var cancelBtn  = new Button { Content = "Cancel" };
+        proceedBtn.Click += (_, _) => dlg.Close(true);
+        cancelBtn.Click  += (_, _) => dlg.Close(false);
+
+        var buttons = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        buttons.Children.Add(proceedBtn);
+        buttons.Children.Add(cancelBtn);
+
+        var root = new StackPanel { Margin = new Thickness(16) };
+        root.Children.Add(text);
+        root.Children.Add(buttons);
+        dlg.Content = root;
+
+        return dlg.ShowDialog<bool>(this);
     }
 
     // ── Convenience ──────────────────────────────────────────────────────────

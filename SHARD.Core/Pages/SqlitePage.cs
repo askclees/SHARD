@@ -66,6 +66,31 @@ public abstract class SqlitePage
     }
 
     /// <summary>
+    /// Classify a page from an already-read byte array (e.g. a WAL frame where the data
+    /// is extracted before the stream position is known).
+    /// </summary>
+    public static SqlitePage FromBytes(uint pageNumber, int pageSize, byte[] data, TextEncoding encoding, int reservedBytes)
+    {
+        int headerOffset = pageNumber == 1 ? 100 : 0;
+        var typeByte = (PageType)data[headerOffset];
+        try
+        {
+            return typeByte switch
+            {
+                PageType.BTreeInteriorTable => new TableBTreeInteriorPage(pageNumber, pageSize, data),
+                PageType.BTreeInteriorIndex => new IndexBTreeInteriorPage(pageNumber, pageSize, data),
+                PageType.BTreeLeafTable     => new TableBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
+                PageType.BTreeLeafIndex     => new IndexBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
+                _                           => new UnknownPage(pageNumber, pageSize, data),
+            };
+        }
+        catch (Exception ex)
+        {
+            return new UnknownPage(pageNumber, pageSize, data, typeByte, ex);
+        }
+    }
+
+    /// <summary>
     /// Reads a page known (by context, e.g. a cell's overflow pointer) to be an overflow page.
     /// Overflow pages have no type byte — their first 4 bytes are the next-page pointer — so
     /// they can't be classified through <see cref="Read"/>'s type-byte switch.

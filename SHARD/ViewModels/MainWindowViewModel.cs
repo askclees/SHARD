@@ -5,7 +5,12 @@ using Avalonia.Media;
 using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
+using SHARD.Core.Enums;
+using SHARD.Core.Pages;
+using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 using SHARD.Core.Shadow;
+using SHARD.Core.WAL;
 
 namespace SHARD.ViewModels;
 
@@ -13,6 +18,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 {
     // ── Loaded database ───────────────────────────────────────────────────
     private string? _currentFilePath;
+    public string? CurrentFilePath => _currentFilePath;
 
     private SqliteForensicDatabase? _database;
     public SqliteForensicDatabase? Database
@@ -35,7 +41,170 @@ public sealed class MainWindowViewModel : ViewModelBase
     public bool HasNoDatabase => !HasDatabase;
 
     // ── Page list (left panel) ────────────────────────────────────────────
-    public ObservableCollection<PageListEntryViewModel> Pages { get; } = [];
+    public ObservableCollection<PageListEntryViewModel> Pages         { get; } = [];
+    public ObservableCollection<PageListEntryViewModel> FilteredPages { get; } = [];
+
+    // ── Page filters ──────────────────────────────────────────────────────
+    private bool _filterHasUnallocated;
+    public bool FilterHasUnallocated
+    {
+        get => _filterHasUnallocated;
+        set { this.RaiseAndSetIfChanged(ref _filterHasUnallocated, value); RebuildFilteredPages(); }
+    }
+
+    private bool _filterMinSizeEnabled;
+    public bool FilterMinSizeEnabled
+    {
+        get => _filterMinSizeEnabled;
+        set { this.RaiseAndSetIfChanged(ref _filterMinSizeEnabled, value); RebuildFilteredPages(); }
+    }
+
+    private int _filterMinSize = 1;
+    public int FilterMinSize
+    {
+        get => _filterMinSize;
+        set { this.RaiseAndSetIfChanged(ref _filterMinSize, value); if (_filterMinSizeEnabled) RebuildFilteredPages(); }
+    }
+
+    private bool _filterMinNonZeroEnabled;
+    public bool FilterMinNonZeroEnabled
+    {
+        get => _filterMinNonZeroEnabled;
+        set { this.RaiseAndSetIfChanged(ref _filterMinNonZeroEnabled, value); RebuildFilteredPages(); }
+    }
+
+    private int _filterMinNonZero = 1;
+    public int FilterMinNonZero
+    {
+        get => _filterMinNonZero;
+        set { this.RaiseAndSetIfChanged(ref _filterMinNonZero, value); if (_filterMinNonZeroEnabled) RebuildFilteredPages(); }
+    }
+
+    private bool _filterHasDeletedPointers;
+    public bool FilterHasDeletedPointers
+    {
+        get => _filterHasDeletedPointers;
+        set { this.RaiseAndSetIfChanged(ref _filterHasDeletedPointers, value); RebuildFilteredPages(); }
+    }
+
+    private bool _useOrLogic;
+    public bool UseOrLogic
+    {
+        get => _useOrLogic;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _useOrLogic, value);
+            this.RaisePropertyChanged(nameof(LogicModeLabel));
+            RebuildFilteredPages();
+        }
+    }
+    public string LogicModeLabel => UseOrLogic ? "OR" : "AND";
+
+    private string _filterCountLabel = "";
+    public string FilterCountLabel
+    {
+        get => _filterCountLabel;
+        private set => this.RaiseAndSetIfChanged(ref _filterCountLabel, value);
+    }
+
+    private bool RegionMatchesFilter(int size, int nonZeroBytes)
+    {
+        var results = new List<bool>();
+        if (FilterHasUnallocated)    results.Add(size > 0);
+        if (FilterMinSizeEnabled)    results.Add(size >= FilterMinSize);
+        if (FilterMinNonZeroEnabled) results.Add(nonZeroBytes >= FilterMinNonZero);
+        return UseOrLogic ? results.Any(r => r) : results.All(r => r);
+    }
+
+    private void RebuildFilteredPages()
+    {
+        FilteredPages.Clear();
+        bool anyTypeSelected    = PageTypeFilters.Any(f => f.IsSelected);
+        bool anyUnallocActive   = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
+        bool deletedActive      = FilterHasDeletedPointers;
+        bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
+
+        foreach (var page in Pages)
+        {
+            if (anyTypeSelected && !PageTypeFilters.Any(f => f.IsSelected && f.PageType == page.PageType))
+                continue;
+            if (hasTableFilter && page.TableName != _filterTableName)
+                continue;
+            if (anyUnallocActive && !page.UnallocatedRegions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
+                continue;
+            if (deletedActive && !page.HasDeletedPointers)
+                continue;
+            FilteredPages.Add(page);
+        }
+
+        FilterCountLabel = FilteredPages.Count == Pages.Count
+            ? $"{Pages.Count} pages"
+            : $"{FilteredPages.Count} of {Pages.Count} pages";
+
+        RebuildFilteredUnallocatedSections();
+    }
+
+    public ObservableCollection<UnallocatedRegionSectionViewModel> FilteredUnallocatedSections { get; } = [];
+    public bool HasFilteredUnallocatedSections => FilteredUnallocatedSections.Count > 0;
+    public string FilteredUnallocatedTabHeader => FilteredUnallocatedSections.Count > 0
+        ? $"Unallocated ({FilteredUnallocatedSections.Count})"
+        : "Unallocated";
+
+    // ── Page type filter ──────────────────────────────────────────────────
+    public IReadOnlyList<PageTypeToggleViewModel> PageTypeFilters { get; } = [];
+
+    // ── Table filter ──────────────────────────────────────────────────────
+    private string? _filterTableName;
+    public string? FilterTableName
+    {
+        get => _filterTableName;
+        set
+        {
+            var actual = value == "All tables" ? null : value;
+            this.RaiseAndSetIfChanged(ref _filterTableName, actual);
+            RebuildFilteredPages();
+        }
+    }
+    public ObservableCollection<string> AvailableTableNames { get; } = [];
+    public bool HasAvailableTableNames => AvailableTableNames.Count > 0;
+
+    private void RebuildFilteredUnallocatedSections()
+    {
+        FilteredUnallocatedSections.Clear();
+        bool anyActive = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
+
+        if (SelectedPageDetail is null) return;
+
+        foreach (var section in SelectedPageDetail.UnallocatedRegionSections)
+        {
+            if (!anyActive || RegionMatchesFilter(section.Size, section.NonZeroBytes))
+                FilteredUnallocatedSections.Add(section);
+        }
+
+        this.RaisePropertyChanged(nameof(HasFilteredUnallocatedSections));
+        this.RaisePropertyChanged(nameof(FilteredUnallocatedTabHeader));
+    }
+
+    private void RefreshAvailableTableNames()
+    {
+        AvailableTableNames.Clear();
+        AvailableTableNames.Add("All tables");
+        foreach (var name in Pages.Select(p => p.TableName).Where(n => n != null).Distinct().OrderBy(n => n))
+            AvailableTableNames.Add(name!);
+        this.RaisePropertyChanged(nameof(HasAvailableTableNames));
+    }
+
+    private static PageListEntryViewModel MakePageListEntry(SqlitePage page, string? tableName = null)
+    {
+        var regions = new List<(int Size, int NonZeroBytes)>();
+        if (page is TableBTreeLeafPage tlp)
+        {
+            foreach (var r in tlp.UnallocatedRegions)
+                regions.Add((r.Size, r.NonZeroBytes));
+        }
+        bool hasDeletedPointers = page is BTreePage bp && bp.DeletedCellPointers.Count > 0;
+        return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions, hasDeletedPointers);
+    }
 
     // ── Selected page (left panel selection; right panel detail) ─────────
     private PageListEntryViewModel? _selectedPage;
@@ -48,6 +217,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             SelectedPageDetail = value is not null && Database is not null
                 ? new PageViewModel(Database.ReadPage(value.PageNumber))
                 : null;
+            LastRecoveryResult = null;
+            this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
     }
 
@@ -55,7 +226,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     public PageViewModel? SelectedPageDetail
     {
         get => _selectedPageDetail;
-        private set => this.RaiseAndSetIfChanged(ref _selectedPageDetail, value);
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedPageDetail, value);
+            RebuildFilteredUnallocatedSections();
+        }
     }
 
     // ── Overview panel info rows ──────────────────────────────────────────
@@ -119,6 +294,19 @@ public sealed class MainWindowViewModel : ViewModelBase
     // ── Query tab ─────────────────────────────────────────────────────────────
     public QueryViewModel QueryTab { get; }
 
+    // ── WAL file ──────────────────────────────────────────────────────────
+    private WalViewModel? _walTab;
+    public WalViewModel? WalTab
+    {
+        get => _walTab;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _walTab, value);
+            this.RaisePropertyChanged(nameof(HasWal));
+        }
+    }
+    public bool HasWal => WalTab is not null;
+
     // ── Shadow project ───────────────────────────────────────────────────
     private ShadowProject? _project;
     public ShadowProject? Project
@@ -129,10 +317,111 @@ public sealed class MainWindowViewModel : ViewModelBase
             this.RaiseAndSetIfChanged(ref _project, value);
             this.RaisePropertyChanged(nameof(HasProject));
             this.RaisePropertyChanged(nameof(ProjectFolderPath));
+            this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
     }
     public bool HasProject => Project is not null;
     public string? ProjectFolderPath => Project?.ProjectFolder;
+
+    // ── Record recovery ────────────────────────────────────────────────────
+    private int _selectedByteOffset = -1;
+    public int SelectedByteOffset
+    {
+        get => _selectedByteOffset;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedByteOffset, value);
+            this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
+        }
+    }
+
+    public bool CanTryRecoverRecord =>
+        HasProject &&
+        SelectedByteOffset >= 0 &&
+        SelectedPage?.PageType == PageType.BTreeLeafTable;
+
+    public bool CanSaveRecoveryToProject =>
+        HasProject &&
+        LastRecoveryResult?.IsValid == true &&
+        SelectedPage?.TableName is not null;
+
+    private DeletedBTreeLeafCellResult? _lastRecoveryResult;
+    public DeletedBTreeLeafCellResult? LastRecoveryResult
+    {
+        get => _lastRecoveryResult;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _lastRecoveryResult, value);
+            this.RaisePropertyChanged(nameof(CanSaveRecoveryToProject));
+        }
+    }
+
+    /// <summary>
+    /// Returns the live cell whose byte range contains <paramref name="offset"/>,
+    /// or null if the offset does not fall inside any cell on the current page.
+    /// </summary>
+    public BTreeLeafCell? FindLiveCellAtOffset(int offset)
+    {
+        if (SelectedPageDetail?.Page is not TableBTreeLeafPage leafPage) return null;
+        return leafPage.Cells.FirstOrDefault(c =>
+            offset >= c.PageOffset && offset < c.PageOffset + c.CellByteLengthOnPage);
+    }
+
+    /// <summary>
+    /// Attempts to decode a deleted B-tree leaf record at the current cursor position.
+    /// Returns an error string if preconditions are not met, or null on success.
+    /// On success, <see cref="LastRecoveryResult"/> is populated.
+    /// </summary>
+    public string? TryRecoverRecordAtOffset()
+    {
+        if (!HasProject)         return "A project must be open to recover records.";
+        if (SelectedPage?.PageType != PageType.BTreeLeafTable)
+                                 return "Record recovery is only available on table leaf pages.";
+        if (SelectedPageDetail is null || SelectedByteOffset < 0 || Database is null)
+                                 return "No page or byte offset selected.";
+
+        LastRecoveryResult = DeletedRecordParser.RecoverBTreeLeafRecord(
+            SelectedPageDetail.PageBytes,
+            SelectedByteOffset,
+            Database.Header.TextEncoding,
+            null);
+        return null;
+    }
+
+    /// <summary>
+    /// Saves the last successful recovery result to the shadow database.
+    /// Returns true on success; sets <see cref="StatusText"/> in both cases.
+    /// </summary>
+    public bool SaveRecoveryToProject()
+    {
+        if (Project is null || LastRecoveryResult?.IsValid != true || Database is null) return false;
+        string? tableName = SelectedPage?.TableName;
+        if (tableName is null)
+        {
+            StatusText = "Cannot save: this page is not associated with a known table.";
+            return false;
+        }
+
+        var schema = Database.GetTableSchema(tableName);
+        if (schema is null)
+        {
+            StatusText = $"Cannot save: schema for table '{tableName}' could not be read.";
+            return false;
+        }
+
+        try
+        {
+            Project.SaveRecoveredRecord(schema, LastRecoveryResult.Cell!, SelectedPage!.PageNumber, SelectedByteOffset);
+            StatusText = $"Record saved — RowId {LastRecoveryResult.Cell!.RowId.Value} → " +
+                         $"{ShadowDatabaseBuilder.RecoveredTablePrefix}{tableName}";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Save failed: {ex.Message}";
+            return false;
+        }
+    }
 
     // ── Status bar ────────────────────────────────────────────────────────
     private string _statusText = "Open a SQLite database to begin.";
@@ -146,6 +435,18 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         SearchTab = new SearchViewModel(Pages, pageNumber => Database?.ReadPage(pageNumber).Data);
         QueryTab  = new QueryViewModel();
+
+        PageTypeFilters = new List<PageTypeToggleViewModel>
+        {
+            new(PageType.BTreeLeafTable,     RebuildFilteredPages),
+            new(PageType.BTreeLeafIndex,     RebuildFilteredPages),
+            new(PageType.BTreeInteriorTable, RebuildFilteredPages),
+            new(PageType.BTreeInteriorIndex, RebuildFilteredPages),
+            new(PageType.Overflow,           RebuildFilteredPages),
+            new(PageType.FreelistTrunk,      RebuildFilteredPages),
+            new(PageType.FreelistLeaf,       RebuildFilteredPages),
+            new(PageType.Unknown,            RebuildFilteredPages),
+        };
     }
 
     // ── Actions ───────────────────────────────────────────────────────────
@@ -229,10 +530,16 @@ public sealed class MainWindowViewModel : ViewModelBase
                 SchemaRows.Add(row);
 
             foreach (var page in db.ReadAllPages())
-                Pages.Add(new PageListEntryViewModel(page.PageNumber, page.PageType));
+                Pages.Add(MakePageListEntry(page));
+            RefreshAvailableTableNames();
+            RebuildFilteredPages();
 
             HasDatabase = true;
             StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}  ·  {db.PageCount:N0} pages";
+
+            string walPath = path + "-wal";
+            if (File.Exists(walPath))
+                LoadWalFile(walPath);
         }
         catch (InvalidDataException ex)
         {
@@ -251,6 +558,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         Database = null;
         _currentFilePath = null;
         Pages.Clear();
+        FilteredPages.Clear();
+        FilterCountLabel = "";
+        AvailableTableNames.Clear();
+        FilterTableName = null;
+        foreach (var f in PageTypeFilters) f.IsSelected = false;
         DatabaseInfoRows.Clear();
         SchemaRows.Clear();
         SelectedSchemaRow = null;
@@ -258,6 +570,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         HeaderHighlights = [];
         SelectedPage = null;
         HasDatabase  = false;
+        WalTab       = null;
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";
         SearchTab.Clear();
@@ -278,6 +591,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
             StatusText = $"Project created at {folderPath}";
+            SyncWalToProject();
         }
         catch (Exception ex)
         {
@@ -317,6 +631,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
             StatusText = $"Project opened from {projectFolder}";
+            SyncWalToProject();
         }
         catch (Exception ex)
         {
@@ -337,11 +652,54 @@ public sealed class MainWindowViewModel : ViewModelBase
             var pageTypes = Project.ReadPageTypes();
             Pages.Clear();
             foreach (var (pageNumber, type, tableName) in pageTypes)
-                Pages.Add(new PageListEntryViewModel(pageNumber, type, tableName));
+            {
+                var page = Database?.ReadPage(pageNumber);
+                var entry = page is not null
+                    ? MakePageListEntry(page, tableName)
+                    : new PageListEntryViewModel(pageNumber, type, tableName);
+                Pages.Add(entry);
+            }
+            RefreshAvailableTableNames();
+            RebuildFilteredPages();
         }
         catch (Exception ex)
         {
             StatusText = $"Error reading persisted page classifications: {ex.Message}";
+        }
+    }
+
+    public void LoadWalFile(string walPath)
+    {
+        if (Database is null) return;
+        try
+        {
+            var wal = new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
+            WalTab = new WalViewModel(walPath, wal, Database);
+            StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
+
+            // If a project is already open sync immediately; if not, CreateProject/OpenProject
+            // will call SyncWalToProject once the project is set (WAL loads before the project
+            // is created/opened in both flows).
+            SyncWalToProject();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"WAL file could not be loaded: {ex.Message}";
+        }
+    }
+
+    private void SyncWalToProject()
+    {
+        if (Project is null || WalTab is null || Database is null) return;
+        try
+        {
+            int added = Project.SyncWalFramesToShadow(WalTab.WalFile, Database);
+            if (added > 0)
+                StatusText += $"  ·  {added} WAL record{(added == 1 ? "" : "s")} synced";
+        }
+        catch (Exception ex)
+        {
+            StatusText += $"  ·  WAL sync failed: {ex.Message}";
         }
     }
 

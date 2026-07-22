@@ -3,8 +3,10 @@ using System.Globalization;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 
 namespace SHARD.Controls;
@@ -102,6 +104,74 @@ public sealed class HexView : Control
         Focusable = true;
     }
 
+    // ── Parent ScrollViewer scroll-lock ───────────────────────────────────────
+    //
+    // Avalonia can scroll the parent ScrollViewer back to offset 0 whenever the
+    // HexView gains focus — either via base.OnPointerPressed auto-focusing on a
+    // left-click, or via focus being restored to HexView after a popup (e.g. the
+    // right-click context menu) closes.
+    //
+    // We fix this by:
+    //  • subscribing to both ScrollViewer AND ScrollContentPresenter PropertyChanged
+    //    so we catch the Offset change no matter which layer applies it;
+    //  • suppressing RequestBringIntoViewEvent so keyboard-navigation focus doesn't
+    //    trigger a scroll either;
+    //  • locking in OnGotFocus (not just OnPointerPressed) so that the focus-return
+    //    after a popup close is also protected;
+    //  • releasing the lock at Background priority, which outlives the layout pass
+    //    that would otherwise apply the unwanted scroll.
+
+    private ScrollViewer?          _parentSv;
+    private ScrollContentPresenter? _parentPresenter;
+    private Vector?                 _scrollLock;
+    private bool                    _inScrollRestore;
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        _parentSv        = this.FindAncestorOfType<ScrollViewer>();
+        _parentPresenter = this.FindAncestorOfType<ScrollContentPresenter>();
+        if (_parentSv        is not null) _parentSv.PropertyChanged        += OnSvPropertyChanged;
+        if (_parentPresenter is not null) _parentPresenter.PropertyChanged += OnPresenterPropertyChanged;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        if (_parentSv        is not null) _parentSv.PropertyChanged        -= OnSvPropertyChanged;
+        if (_parentPresenter is not null) _parentPresenter.PropertyChanged -= OnPresenterPropertyChanged;
+        _parentSv = null;
+        _parentPresenter = null;
+    }
+
+    // Veto any Offset change on either layer while the lock is held.
+    private void OnSvPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (_scrollLock is not { } locked || _inScrollRestore) return;
+        if (e.Property.Name != "Offset") return;
+        _inScrollRestore = true;
+        ((ScrollViewer)sender!).Offset = locked;
+        _inScrollRestore = false;
+    }
+
+    private void OnPresenterPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (_scrollLock is not { } locked || _inScrollRestore) return;
+        if (e.Property.Name != "Offset") return;
+        _inScrollRestore = true;
+        if (_parentSv is not null) _parentSv.Offset = locked;
+        _inScrollRestore = false;
+    }
+
+    // Lock before base.OnGotFocus so we catch BringIntoView called inside it,
+    // and also catch focus-return after a popup (ContextMenu) closes.
+    protected override void OnGotFocus(GotFocusEventArgs e)
+    {
+        _scrollLock = _parentSv?.Offset ?? default;
+        base.OnGotFocus(e);
+        Dispatcher.UIThread.Post(() => _scrollLock = null, DispatcherPriority.Background);
+    }
+
     // ── Font metrics (initialised lazily on first render) ─────────────────────
 
     private double _cw;  // character width
@@ -159,28 +229,47 @@ public sealed class HexView : Control
     /// <paramref name="byteOffset"/> to the top of the viewport.</summary>
     public void ScrollToByteOffset(int byteOffset)
     {
+        _scrollLock = null;   // programmatic scroll must not be blocked by a held lock
         EnsureMetrics();
-        if (_lh <= 0) return;
+        if (_lh <= 0 || _parentSv is null) return;
         int row = Math.Max(0, byteOffset / BytesPerRow);
-        this.FindAncestorOfType<ScrollViewer>()
-            ?.SetCurrentValue(ScrollViewer.OffsetProperty, new Vector(0, row * _lh));
+        _parentSv.SetCurrentValue(ScrollViewer.OffsetProperty, new Vector(0, row * _lh));
+    }
+
+    /// <summary>Moves the cursor to <paramref name="byteOffset"/> without scrolling.</summary>
+    public void SetCursorOffset(int byteOffset)
+    {
+        _selStart    = byteOffset;
+        _selEnd      = byteOffset;
+        CursorOffset = byteOffset;
+        InvalidateVisual();
     }
 
     // ── Pointer input ─────────────────────────────────────────────────────────
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        base.OnPointerPressed(e);
         EnsureMetrics();
         int hit = HitTestByte(e.GetPosition(this));
+
+        // Pre-lock before any focus change (OnGotFocus re-locks too, but setting
+        // it here means it is always held even if GotFocus fires synchronously
+        // inside base.OnPointerPressed before we return to this method body).
+        _scrollLock = _parentSv?.Offset ?? default;
+
+        base.OnPointerPressed(e);   // may auto-focus on left-click → OnGotFocus fires
+        Focus();                    // ensure focus for keyboard input (right-click, etc.)
+
         if (hit < 0) return;
-        _selStart    = hit;
-        _selEnd      = hit;
         CursorOffset = hit;
-        _isDragging  = true;
-        e.Pointer.Capture(this);
-        Focus();
-        InvalidateVisual();
+
+        if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            _selStart   = hit;
+            _selEnd     = hit;
+            _isDragging = true;
+            InvalidateVisual();
+        }
         e.Handled = true;
     }
 
@@ -197,8 +286,8 @@ public sealed class HexView : Control
             HoveredLabel = label;
         }
 
-        // Drag selection
-        if (!_isDragging) return;
+        // Drag selection — also check button state in case release happened outside the control
+        if (!_isDragging || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
         int hit = HitTestByte(e.GetPosition(this));
         if (hit >= 0 && hit != _selEnd)
         {
@@ -211,12 +300,13 @@ public sealed class HexView : Control
     {
         base.OnPointerReleased(e);
         _isDragging = false;
-        e.Pointer.Capture(null);
+        e.Handled   = true;
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
         base.OnPointerExited(e);
+        _isDragging  = false;
         _lastLabel   = null;
         HoveredLabel = null;
     }
@@ -338,8 +428,9 @@ public sealed class HexView : Control
         int  selMax       = hasSelection ? Math.Max(_selStart, _selEnd) : -1;
         bool isCursor     = hasSelection && _selStart == _selEnd;
 
-        var selBrush  = new SolidColorBrush(Color.FromRgb(51, 102, 153), 0.70);
-        var cursorPen = new Pen(Brushes.White, 1.0);
+        var selBrush    = new SolidColorBrush(Color.FromRgb(51, 102, 153), 0.70);
+        var cursorFill  = new SolidColorBrush(Color.FromRgb(255, 200, 0));
+        var cursorText  = Brushes.Black;
 
         for (int row = 0; row < rows; row++)
         {
@@ -417,16 +508,22 @@ public sealed class HexView : Control
                                        FlowDirection.LeftToRight, Mono, Em, Brushes.White);
             ctx.DrawText(ft, new Point(0, y));
 
-            // ── 4. Cursor outline ─────────────────────────────────────────────
+            // ── 4. Cursor ─────────────────────────────────────────────────────
             if (isCursor && _selStart >= rowStart && _selStart < rowStart + rowLen)
             {
-                int byteInRow = _selStart - rowStart;
+                int  byteInRow = _selStart - rowStart;
+                byte b         = data[_selStart];
 
                 double hexX = (ColHex + byteInRow * 3 + (byteInRow >= 8 ? 1 : 0)) * _cw;
-                ctx.DrawRectangle(null, cursorPen, new Rect(hexX, y, 2 * _cw, _lh));
+                ctx.FillRectangle(cursorFill, new Rect(hexX, y, 2 * _cw, _lh));
+                ctx.DrawText(new FormattedText($"{b:X2}", CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, Mono, Em, cursorText), new Point(hexX, y));
 
                 double ascX = (ColAscii + byteInRow) * _cw;
-                ctx.DrawRectangle(null, cursorPen, new Rect(ascX, y, _cw, _lh));
+                ctx.FillRectangle(cursorFill, new Rect(ascX, y, _cw, _lh));
+                ctx.DrawText(new FormattedText((b is >= 32 and < 127 ? (char)b : '.').ToString(),
+                    CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Mono, Em, cursorText),
+                    new Point(ascX, y));
             }
         }
     }
