@@ -87,6 +87,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         set { this.RaiseAndSetIfChanged(ref _filterHasDeletedPointers, value); RebuildFilteredPages(); }
     }
 
+    private bool _filterHasDeletedRecords;
+    public bool FilterHasDeletedRecords
+    {
+        get => _filterHasDeletedRecords;
+        set { this.RaiseAndSetIfChanged(ref _filterHasDeletedRecords, value); RebuildFilteredPages(); }
+    }
+
     private bool _useOrLogic;
     public bool UseOrLogic
     {
@@ -120,8 +127,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         FilteredPages.Clear();
         bool anyTypeSelected    = PageTypeFilters.Any(f => f.IsSelected);
-        bool anyUnallocActive   = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
-        bool deletedActive      = FilterHasDeletedPointers;
+        bool anyUnallocActive       = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
+        bool deletedActive          = FilterHasDeletedPointers;
+        bool deletedRecordsActive   = FilterHasDeletedRecords;
         bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
 
         foreach (var page in Pages)
@@ -133,6 +141,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (anyUnallocActive && !page.UnallocatedRegions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
                 continue;
             if (deletedActive && !page.HasDeletedPointers)
+                continue;
+            if (deletedRecordsActive && !page.HasDeletedRecords)
                 continue;
             FilteredPages.Add(page);
         }
@@ -203,7 +213,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 regions.Add((r.Size, r.NonZeroBytes));
         }
         bool hasDeletedPointers = page is BTreePage bp && bp.DeletedCellPointers.Count > 0;
-        return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions, hasDeletedPointers);
+        bool hasDeletedRecords  = page is TableBTreeLeafPage tlp2 && tlp2.DeletedCells.Count > 0;
+        return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions, hasDeletedPointers, hasDeletedRecords);
     }
 
     // ── Selected page (left panel selection; right panel detail) ─────────

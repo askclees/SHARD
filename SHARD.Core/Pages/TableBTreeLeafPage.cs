@@ -4,6 +4,7 @@ using SHARD.Core.Comparison;
 using SHARD.Core.Decoding;
 using SHARD.Core.Enums;
 using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 
 namespace SHARD.Core.Pages;
 
@@ -11,6 +12,7 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
 {
     public override PageType PageType => PageType.BTreeLeafTable;
     public List<BTreeLeafCell> Cells { get; } = new();
+    public List<BTreeLeafCell> DeletedCells { get; } = new();
     public List<PageFreeBlock> FreeBlocks { get; } = new();
     public List<PageUnallocatedRegion> UnallocatedRegions { get; } = new();
 
@@ -35,8 +37,26 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
             Cells.Add((leafCell));
         }
 
+        if (DeletedCellPointers.Count > 0)
+        {
+            DeletedCells = ExtractDeletedCells(data, DeletedCellPointers, encoding);
+        }
         FreeBlocks = MapFreeList(data);
         UnallocatedRegions = MapUnallocatedSpace(data, HeaderOffset);
+    }
+
+    private List<BTreeLeafCell> ExtractDeletedCells(byte[] data,List<ushort> deletedCellPointers, TextEncoding encoding)
+    {
+        List<BTreeLeafCell> retVal = new();
+        foreach (var pointer in deletedCellPointers)
+        {
+            var result = DeletedRecordParser.RecoverBTreeLeafRecord(data, pointer, encoding);
+            if (result.IsValid)
+            {
+                retVal.Add(result.Cell!);
+            }
+        }
+        return retVal;
     }
 
     private List<PageFreeBlock> MapFreeList(byte[] data)
