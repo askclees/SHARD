@@ -13,6 +13,7 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     public override PageType PageType => PageType.BTreeLeafTable;
     public List<BTreeLeafCell> Cells { get; } = new();
     public List<BTreeLeafCell> DeletedCells { get; } = new();
+    public List<(ushort Pointer, string Error)> DeletedCellParseErrors { get; } = new();
     public List<PageFreeBlock> FreeBlocks { get; } = new();
     public List<PageUnallocatedRegion> UnallocatedRegions { get; } = new();
 
@@ -56,9 +57,9 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
                 if (result.IsValid)
                     retVal.Add(result.Cell!);
             }
-            catch
+            catch (Exception ex)
             {
-                // A bad pointer must not corrupt the rest of the page parse
+                DeletedCellParseErrors.Add((pointer, $"{ex.GetType().Name}: {ex.Message}"));
             }
         }
         return retVal;

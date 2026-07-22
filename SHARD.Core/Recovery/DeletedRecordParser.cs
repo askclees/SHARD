@@ -6,7 +6,8 @@ namespace SHARD.Core.Recovery;
 
 public static class DeletedRecordParser
 {
-    private const string PayloadSizeZero = "Payload size is zero and cannot be correct";
+    private const string OffsetOutOfRange  = "Offset is outside the bounds of the page data";
+    private const string PayloadSizeZero   = "Payload size is zero and cannot be correct";
     private const string RecordLargerThanPage = "Payload size indicates record goes past end of page. recovery involving Overflow pages not supported at this time.";
     private const string PayloadHeaderMismatch = "Payload size does not match the size of all the fields combined";
     private const string ColumnNumberMismatch = "The number of columns in recovered record does not match the provided record structure";
@@ -17,6 +18,9 @@ public static class DeletedRecordParser
         TextEncoding encoding, 
         RecordStructure? recordStructure=null)
     {
+        if (offset < 0 || offset >= data.Length)
+            return new DeletedBTreeLeafCellResult(new List<string>() { OffsetOutOfRange });
+
         Varint payloadSize = Varint.ReadAt(data, offset);
         if (payloadSize.Value == 0)
         {

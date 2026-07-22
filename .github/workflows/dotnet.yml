@@ -2,9 +2,9 @@ name: .NET
 
 on:
   push:
-    branches: [ "main" ]
+    branches-ignore:
+      - 'refs/tags/*'
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: write
