@@ -239,6 +239,8 @@ public sealed class HexView : Control
     /// <summary>Moves the cursor to <paramref name="byteOffset"/> without scrolling.</summary>
     public void SetCursorOffset(int byteOffset)
     {
+        _selStart    = byteOffset;
+        _selEnd      = byteOffset;
         CursorOffset = byteOffset;
         InvalidateVisual();
     }
@@ -426,8 +428,9 @@ public sealed class HexView : Control
         int  selMax       = hasSelection ? Math.Max(_selStart, _selEnd) : -1;
         bool isCursor     = hasSelection && _selStart == _selEnd;
 
-        var selBrush  = new SolidColorBrush(Color.FromRgb(51, 102, 153), 0.70);
-        var cursorPen = new Pen(Brushes.White, 1.0);
+        var selBrush    = new SolidColorBrush(Color.FromRgb(51, 102, 153), 0.70);
+        var cursorFill  = new SolidColorBrush(Color.FromRgb(255, 200, 0));
+        var cursorText  = Brushes.Black;
 
         for (int row = 0; row < rows; row++)
         {
@@ -505,16 +508,22 @@ public sealed class HexView : Control
                                        FlowDirection.LeftToRight, Mono, Em, Brushes.White);
             ctx.DrawText(ft, new Point(0, y));
 
-            // ── 4. Cursor outline ─────────────────────────────────────────────
+            // ── 4. Cursor ─────────────────────────────────────────────────────
             if (isCursor && _selStart >= rowStart && _selStart < rowStart + rowLen)
             {
-                int byteInRow = _selStart - rowStart;
+                int  byteInRow = _selStart - rowStart;
+                byte b         = data[_selStart];
 
                 double hexX = (ColHex + byteInRow * 3 + (byteInRow >= 8 ? 1 : 0)) * _cw;
-                ctx.DrawRectangle(null, cursorPen, new Rect(hexX, y, 2 * _cw, _lh));
+                ctx.FillRectangle(cursorFill, new Rect(hexX, y, 2 * _cw, _lh));
+                ctx.DrawText(new FormattedText($"{b:X2}", CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, Mono, Em, cursorText), new Point(hexX, y));
 
                 double ascX = (ColAscii + byteInRow) * _cw;
-                ctx.DrawRectangle(null, cursorPen, new Rect(ascX, y, _cw, _lh));
+                ctx.FillRectangle(cursorFill, new Rect(ascX, y, _cw, _lh));
+                ctx.DrawText(new FormattedText((b is >= 32 and < 127 ? (char)b : '.').ToString(),
+                    CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Mono, Em, cursorText),
+                    new Point(ascX, y));
             }
         }
     }
