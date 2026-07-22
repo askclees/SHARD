@@ -30,7 +30,8 @@ public sealed class ShadowProject
         CreatedUtc         = manifest.CreatedUtc;
     }
 
-    public static ShadowProject Create(string projectFolder, string evidenceFilePath, SqliteForensicDatabase database)
+    public static (ShadowProject Project, IReadOnlyList<string> Warnings) Create(
+        string projectFolder, string evidenceFilePath, SqliteForensicDatabase database)
     {
         Directory.CreateDirectory(projectFolder);
 
@@ -44,12 +45,12 @@ public sealed class ShadowProject
         if (File.Exists(shadowDbPath))
             throw new InvalidOperationException($"A shadow database already exists at '{shadowDbPath}'.");
 
-        ShadowDatabaseBuilder.Create(shadowDbPath, database);
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database);
 
         string manifestPath = Path.Combine(projectFolder, "project.json");
         File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
 
-        return new ShadowProject(projectFolder, manifest);
+        return (new ShadowProject(projectFolder, manifest), warnings);
     }
 
     /// <summary>Open an existing project folder (must already contain a project.json and shadow database).</summary>

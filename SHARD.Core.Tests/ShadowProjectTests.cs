@@ -17,7 +17,7 @@ public class ShadowProjectTests
             string evidencePath = FixturePath("single_leaf_no_overflow.db");
             using var db = SqliteForensicDatabase.Open(evidencePath);
 
-            var project = ShadowProject.Create(projectFolder, evidencePath, db);
+            var (project, _) = ShadowProject.Create(projectFolder, evidencePath, db);
 
             Assert.True(File.Exists(project.ManifestPath));
             Assert.True(File.Exists(project.ShadowDatabasePath));

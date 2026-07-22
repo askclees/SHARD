@@ -25,8 +25,15 @@ public static class ShadowDatabaseBuilder
     private const string OverflowTableName = InternalTablePrefix + "overflow_pages";
     private const string PagesTableName    = InternalTablePrefix + "pages";
 
-    public static void Create(string shadowDbPath, SqliteForensicDatabase database)
+    /// <summary>
+    /// Builds the shadow database. Returns a list of warning strings for any user tables that
+    /// were silently skipped (e.g. unparseable SQL, empty schema). Empty list means all tables
+    /// were processed.
+    /// </summary>
+    public static IReadOnlyList<string> Create(string shadowDbPath, SqliteForensicDatabase database)
     {
+        var warnings = new List<string>();
+
         using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
         connection.Open();
 
@@ -38,7 +45,11 @@ public static class ShadowDatabaseBuilder
         foreach (var row in database.ReadSqliteMaster())
         {
             if (row.ObjectType != SqliteMasterObjectType.Table) continue;
-            if (row.Sql is null || row.RootPage is null) continue;
+            if (row.Sql is null || row.RootPage is null)
+            {
+                warnings.Add($"Skipped table '{row.Name}': missing SQL or root page in sqlite_master.");
+                continue;
+            }
             if (row.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase))
             {
                 TagTablePages(connection, row.Name, database.GetTreePageNumbers(row.RootPage.Value));
@@ -47,7 +58,16 @@ public static class ShadowDatabaseBuilder
             if (row.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase)) continue;
 
             var tableSchema = CreateTableParser.ExtractTableSchema(row.Sql);
-            if (tableSchema is null || tableSchema.Columns.Count == 0) continue;
+            if (tableSchema is null)
+            {
+                warnings.Add($"Skipped table '{row.Name}': CREATE TABLE SQL could not be parsed.\nSQL: {row.Sql}");
+                continue;
+            }
+            if (tableSchema.Columns.Count == 0)
+            {
+                warnings.Add($"Skipped table '{row.Name}': no columns were parsed from the schema.\nSQL: {row.Sql}");
+                continue;
+            }
 
             string createTableSql = BuildCreateTableSql(tableSchema);
             try
@@ -86,6 +106,8 @@ public static class ShadowDatabaseBuilder
         }
 
         TagFreelistPages(connection, database);
+
+        return warnings;
     }
 
     public static string BuildCreateTableSql(TableSchema schema)

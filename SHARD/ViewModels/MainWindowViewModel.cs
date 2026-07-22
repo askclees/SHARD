@@ -606,10 +606,20 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         try
         {
-            Project = ShadowProject.Create(folderPath, _currentFilePath, Database);
+            var (project, warnings) = ShadowProject.Create(folderPath, _currentFilePath, Database);
+            Project = project;
             QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
-            StatusText = $"Project created at {folderPath}";
+            if (warnings.Count > 0)
+            {
+                string logPath = Path.Combine(folderPath, "warnings.log");
+                File.WriteAllText(logPath, string.Join("\n\n", warnings));
+                StatusText = $"Project created with {warnings.Count} skipped table(s) — see warnings.log";
+            }
+            else
+            {
+                StatusText = $"Project created at {folderPath}";
+            }
             SyncWalToProject();
         }
         catch (Exception ex)
