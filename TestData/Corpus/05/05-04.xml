@@ -219,5 +219,6 @@
                 <reference>users</reference>
                 <columnDefinitions>3</columnDefinitions>
             </meta>
+        </sql>
     </element>
 </database>
