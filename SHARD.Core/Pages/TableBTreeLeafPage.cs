@@ -155,6 +155,41 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
         return retVal;
     }
 
+    /// <summary>
+    /// Returns the row ID and field index (0-based) of the cell that contains
+    /// <paramref name="pageOffset"/>. Returns null when no live cell covers that offset.
+    /// FieldIndex is null when the offset falls in the cell header rather than a field value.
+    /// </summary>
+    public (long RowId, int? FieldIndex)? FindHitContext(int pageOffset)
+    {
+        foreach (var cell in Cells)
+        {
+            if (pageOffset < cell.PageOffset || pageOffset >= cell.PageOffset + cell.CellByteLengthOnPage)
+                continue;
+
+            long rowId = cell.RowId.Value;
+            int recordDataStart = cell.PageOffset
+                + cell.SizeOfPayload.Length
+                + cell.RowId.Length
+                + (int)cell.HeaderSize.Value;
+
+            if (pageOffset < recordDataStart)
+                return (rowId, null);
+
+            int fieldStart = recordDataStart;
+            for (int i = 0; i < cell.HeaderEntries.Count; i++)
+            {
+                int fieldEnd = fieldStart + cell.HeaderEntries[i].ContentLength;
+                if (pageOffset < fieldEnd)
+                    return (rowId, i);
+                fieldStart = fieldEnd;
+            }
+
+            return (rowId, null);
+        }
+        return null;
+    }
+
     public TableBTreeLeafPageComparison Compare(TableBTreeLeafPage comparePage)
     {
         TableBTreeLeafPageComparison retVal = new();

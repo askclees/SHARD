@@ -101,6 +101,74 @@ public class CreateTableParserTests
     }
 
     [Fact]
+    public void InlineLineComments_AreStrippedBeforeParsing()
+    {
+        var sql = """
+            CREATE TABLE t (
+                id INTEGER PRIMARY KEY,
+                status TEXT NOT NULL, -- deprecated, use status_v2
+                value INTEGER -- bool
+            )
+            """;
+
+        var schema = CreateTableParser.ExtractTableSchema(sql);
+
+        Assert.NotNull(schema);
+        Assert.Equal(3, schema!.Columns.Count);
+        Assert.Equal("id", schema.Columns[0].Name);
+        Assert.Equal("status", schema.Columns[1].Name);
+        Assert.Equal("TEXT", schema.Columns[1].DeclaredType);
+        Assert.Equal("value", schema.Columns[2].Name);
+    }
+
+    [Fact]
+    public void InlineComments_WithHyphenInQuotedValue_AreNotStripped()
+    {
+        // Ensure -- inside a string literal is not treated as a comment
+        var sql = "CREATE TABLE t (id INTEGER, note TEXT DEFAULT 'a--b')";
+
+        var schema = CreateTableParser.ExtractTableSchema(sql);
+
+        Assert.NotNull(schema);
+        Assert.Equal(2, schema!.Columns.Count);
+        Assert.Equal("note", schema.Columns[1].Name);
+    }
+
+    [Fact]
+    public void SnapchatConversationTable_WithManyInlineComments_ParsesCorrectly()
+    {
+        var sql = """
+            CREATE TABLE conversation (
+                client_conversation_id text primary key not null,
+                conversation_metadata blob not null,
+                send_state_type text not null,
+                creation_timestamp integer,
+                conversation_version integer not null,
+                sync_watermark integer not null, -- this field is deprecated
+                tombstoned_at_timestamp integer, -- when this conversation was locally left by user
+                nullable_sync_watermark integer, -- if the conversation has synced, the server message id we synced to. null if no sync has happened
+                has_more_messages integer not null default 1, -- bool. if the queryMessagesResponse.has_more is true or false. Once the server says theres no more messages it doesn't change.
+                source_page integer not null, -- creation source page of conversation. This is used for a business metric.
+                last_senders blob,
+                latest_received_reaction_version_seen integer not null default 0, -- latest received reaction version seen. Not updated for sent reactions.
+                latest_received_reaction_version_unseen integer not null default 0, -- latest received reaction version unseen. Not updated for sent reactions.
+                client_resolution_id integer, -- nullable if conversation is committed or if this is a 1:1 conversation. We don't create 1:1 conversations.
+                local_conversation_type integer, -- null if the conversation is comitted. Otherwise contains how the local conversation was created
+                foreign key(send_state_type) references send_state(send_state_type)
+            )
+            """;
+
+        var schema = CreateTableParser.ExtractTableSchema(sql);
+
+        Assert.NotNull(schema);
+        Assert.Equal("conversation", schema!.TableName);
+        Assert.Equal(15, schema.Columns.Count);
+        Assert.Equal("client_conversation_id", schema.Columns[0].Name);
+        Assert.Equal("local_conversation_type", schema.Columns[14].Name);
+        Assert.All(schema.Columns, c => Assert.DoesNotContain("--", c.Name));
+    }
+
+    [Fact]
     public void WideTableFixture_RealCreateStatement_ParsesAll25Columns()
     {
         using var db = SqliteForensicDatabase.Open(

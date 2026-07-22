@@ -123,6 +123,26 @@ public sealed class SqliteForensicDatabase : IDisposable
     }
 
     /// <summary>
+    /// Builds a map from every B-tree page number to the name of the sqlite_master object
+    /// (table or index) that owns it. Page 1 (sqlite_master itself) is mapped to
+    /// "sqlite_master". Pages not reachable from any known root are absent from the map.
+    /// </summary>
+    public Dictionary<uint, string> BuildPageTableMap()
+    {
+        var map = new Dictionary<uint, string>();
+        foreach (uint p in GetTreePageNumbers(1))
+            map[p] = "sqlite_master";
+
+        foreach (var row in ReadSqliteMaster())
+        {
+            if (row.RootPage is null || row.Name is null) continue;
+            string label = row.Name;
+            foreach (uint p in GetTreePageNumbers(row.RootPage.Value))
+                map.TryAdd(p, label);
+        }
+        return map;
+    }
+
     /// <summary>
     /// Returns the parsed <see cref="TableSchema"/> for the named evidence table,
     /// or null if the table is not found or its SQL cannot be parsed.

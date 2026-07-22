@@ -14,12 +14,13 @@ public sealed class SearchPageGroupViewModel
     public IReadOnlyList<SearchHitViewModel>  Hits       { get; }
     public IReadOnlyList<HexHighlight>        Highlights { get; }
 
-    public SearchPageGroupViewModel(uint pageNumber, byte[] pageBytes, IReadOnlyList<SearchHitViewModel> hits)
+    public SearchPageGroupViewModel(uint pageNumber, byte[] pageBytes, IReadOnlyList<SearchHitViewModel> hits, string? tableName = null)
     {
         PageNumber = pageNumber;
         PageBytes  = pageBytes;
         Hits       = hits;
-        Header     = $"Page {pageNumber}  —  {hits.Count} hit{(hits.Count == 1 ? "" : "s")}";
+        var tableLabel = string.IsNullOrEmpty(tableName) ? "" : $"  [{tableName}]";
+        Header     = $"Page {pageNumber}{tableLabel}  —  {hits.Count} hit{(hits.Count == 1 ? "" : "s")}";
 
         var colour = Color.FromRgb(255, 215, 0); // gold
         Highlights = hits

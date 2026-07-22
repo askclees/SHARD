@@ -822,7 +822,7 @@
                             <!-- Results: grouped list + hex view -->
                             <Grid Grid.Row="3"
                                   IsVisible="{Binding SearchTab.HasResults}"
-                                  ColumnDefinitions="260,4,*">
+                                  ColumnDefinitions="455,4,*">
 
                                 <!-- Left: page groups -->
                                 <ScrollViewer Grid.Column="0"
@@ -1086,6 +1086,14 @@
                                                            Text="{Binding TypeLabel}"
                                                            VerticalAlignment="Center"
                                                            FontSize="12" />
+                                                <TextBlock Grid.Column="4"
+                                                           Text="{Binding TableName}"
+                                                           IsVisible="{Binding HasTable}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="11"
+                                                           Opacity="0.6"
+                                                           Padding="8,0,0,0"
+                                                           TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Grid.Column="5"
                                                            Text="COMMIT"
                                                            IsVisible="{Binding IsCommit}"
