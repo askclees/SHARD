@@ -4,6 +4,8 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using SHARD.Controls;
+using SHARD.Core.Records;
+using SHARD.Core.Schema;
 using SHARD.ViewModels;
 
 namespace SHARD.Views;
@@ -233,11 +235,68 @@ public partial class MainWindow : Window
 
     // ── Record recovery ──────────────────────────────────────────────────────
 
-    private void OnTryRecoverRecordClicked(object? sender, RoutedEventArgs e) =>
-        Vm.TryRecoverRecordAtOffset();
+    private async void OnTryRecoverRecordClicked(object? sender, RoutedEventArgs e)
+    {
+        string? preconditionError = Vm.TryRecoverRecordAtOffset();
+        if (preconditionError is not null)
+        {
+            var errDlg = new RecoveryResultWindow(new RecoveryResultViewModel
+            {
+                IsValid = false,
+                Title   = "Cannot decode record",
+                Errors  = [preconditionError],
+            });
+            await errDlg.ShowDialog(this);
+            return;
+        }
 
-    private void OnDismissRecoveryClicked(object? sender, RoutedEventArgs e) =>
-        Vm.DismissRecoveryResult();
+        var result = Vm.LastRecoveryResult!;
+
+        TableSchema? schema = null;
+        if (Vm.SelectedPage?.TableName is { } tableName && Vm.Database is not null)
+            schema = Vm.Database.GetTableSchema(tableName);
+
+        var vm = new RecoveryResultViewModel
+        {
+            IsValid  = result.IsValid,
+            Title    = result.IsValid
+                ? $"Valid record — RowId: {result.Cell!.RowId.Value}"
+                : "Could not decode record at this location",
+            Subtitle = result.IsValid
+                ? $"Offset {Vm.SelectedByteOffset} on page {Vm.SelectedPage?.PageNumber}" +
+                  (Vm.SelectedPage?.TableName is { } tn ? $", table: {tn}" : "")
+                : $"Offset {Vm.SelectedByteOffset} on page {Vm.SelectedPage?.PageNumber}",
+            Fields   = result.IsValid ? BuildFieldRows(result.Cell!, schema) : [],
+            Errors   = result.ValidationErrors,
+            CanAdd   = Vm.CanSaveRecoveryToProject,
+        };
+
+        bool save = await new RecoveryResultWindow(vm).ShowDialog<bool>(this);
+        if (save) Vm.SaveRecoveryToProject();
+    }
+
+    private static List<RecoveryFieldRow> BuildFieldRows(BTreeLeafCell cell, TableSchema? schema)
+    {
+        var rows = new List<RecoveryFieldRow>();
+        if (schema is not null)
+        {
+            for (int i = 0; i < schema.Columns.Count; i++)
+            {
+                var col = schema.Columns[i];
+                string value = col.IsRowIdAlias
+                    ? cell.RowId.Value.ToString()
+                    : (i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value?.ToString() : null) ?? "NULL";
+                rows.Add(new RecoveryFieldRow(col.Name, value));
+            }
+        }
+        else
+        {
+            rows.Add(new RecoveryFieldRow("RowId", cell.RowId.Value.ToString()));
+            for (int i = 0; i < cell.FieldValues.Count; i++)
+                rows.Add(new RecoveryFieldRow($"Field {i}", cell.FieldValues[i]?.Value?.ToString() ?? "NULL"));
+        }
+        return rows;
+    }
 
     // ── Convenience ──────────────────────────────────────────────────────────
 

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Records;
+using SHARD.Core.Schema;
 
 namespace SHARD.Core.Shadow;
 
@@ -62,6 +64,17 @@ public sealed class ShadowProject
             throw new InvalidOperationException($"No shadow database found at '{project.ShadowDatabasePath}'.");
 
         return project;
+    }
+
+    /// <summary>
+    /// Inserts a recovered (deleted) record into the shadow database's
+    /// <c>_shard_recovered_{tableName}</c> table.
+    /// </summary>
+    public void SaveRecoveredRecord(TableSchema schema, BTreeLeafCell cell, uint pageNumber, int cellOffset)
+    {
+        using var connection = new SqliteConnection($"Data Source={ShadowDatabasePath}");
+        connection.Open();
+        ShadowDatabaseBuilder.InsertRecoveredRecord(connection, schema, cell, pageNumber, cellOffset);
     }
 
     /// <summary>Read the persisted page classifications from this project's shadow database.</summary>

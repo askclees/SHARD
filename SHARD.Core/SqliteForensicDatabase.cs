@@ -3,6 +3,7 @@ using System.IO;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
+using SHARD.Core.Schema;
 
 namespace SHARD.Core;
 
@@ -122,6 +123,22 @@ public sealed class SqliteForensicDatabase : IDisposable
     }
 
     /// <summary>
+    /// <summary>
+    /// Returns the parsed <see cref="TableSchema"/> for the named evidence table,
+    /// or null if the table is not found or its SQL cannot be parsed.
+    /// </summary>
+    public TableSchema? GetTableSchema(string tableName)
+    {
+        foreach (var row in ReadSqliteMaster())
+        {
+            if (row.ObjectType != SqliteMasterObjectType.Table) continue;
+            if (!string.Equals(row.Name, tableName, StringComparison.OrdinalIgnoreCase)) continue;
+            if (row.Sql is null) return null;
+            return CreateTableParser.ExtractTableSchema(row.Sql);
+        }
+        return null;
+    }
+
     /// Read and return all rows from the sqlite_master table (page 1).
     /// Traverses interior pages if necessary.
     /// </summary>

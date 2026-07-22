@@ -212,7 +212,6 @@ public sealed class MainWindowViewModel : ViewModelBase
             SelectedPageDetail = value is not null && Database is not null
                 ? new PageViewModel(Database.ReadPage(value.PageNumber))
                 : null;
-            RecoveryMessage    = null;
             LastRecoveryResult = null;
             this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
@@ -336,55 +335,76 @@ public sealed class MainWindowViewModel : ViewModelBase
         SelectedByteOffset >= 0 &&
         SelectedPage?.PageType == PageType.BTreeLeafTable;
 
-    private string? _recoveryMessage;
-    public string? RecoveryMessage
-    {
-        get => _recoveryMessage;
-        private set
-        {
-            this.RaiseAndSetIfChanged(ref _recoveryMessage, value);
-            this.RaisePropertyChanged(nameof(HasRecoveryMessage));
-        }
-    }
-    public bool HasRecoveryMessage => RecoveryMessage is not null;
+    public bool CanSaveRecoveryToProject =>
+        HasProject &&
+        LastRecoveryResult?.IsValid == true &&
+        SelectedPage?.TableName is not null;
 
     private DeletedBTreeLeafCellResult? _lastRecoveryResult;
     public DeletedBTreeLeafCellResult? LastRecoveryResult
     {
         get => _lastRecoveryResult;
-        private set => this.RaiseAndSetIfChanged(ref _lastRecoveryResult, value);
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _lastRecoveryResult, value);
+            this.RaisePropertyChanged(nameof(CanSaveRecoveryToProject));
+        }
     }
 
-    public void TryRecoverRecordAtOffset()
+    /// <summary>
+    /// Attempts to decode a deleted B-tree leaf record at the current cursor position.
+    /// Returns an error string if preconditions are not met, or null on success.
+    /// On success, <see cref="LastRecoveryResult"/> is populated.
+    /// </summary>
+    public string? TryRecoverRecordAtOffset()
     {
-        if (!HasProject)
-        {
-            RecoveryMessage = "A project must be open to recover records.";
-            return;
-        }
+        if (!HasProject)         return "A project must be open to recover records.";
         if (SelectedPage?.PageType != PageType.BTreeLeafTable)
-        {
-            RecoveryMessage = "Record recovery is only available on table leaf pages.";
-            return;
-        }
-        if (SelectedPageDetail is null || SelectedByteOffset < 0 || Database is null) return;
+                                 return "Record recovery is only available on table leaf pages.";
+        if (SelectedPageDetail is null || SelectedByteOffset < 0 || Database is null)
+                                 return "No page or byte offset selected.";
 
-        var result = DeletedRecordParser.RecoverBTreeLeafRecord(
+        LastRecoveryResult = DeletedRecordParser.RecoverBTreeLeafRecord(
             SelectedPageDetail.PageBytes,
             SelectedByteOffset,
             Database.Header.TextEncoding,
             null);
-
-        LastRecoveryResult = result;
-        RecoveryMessage = result.IsValid
-            ? $"Valid record at offset {SelectedByteOffset} — RowId: {result.Cell!.RowId.Value}, {result.Cell.FieldValues.Count} field(s)"
-            : $"Invalid record at offset {SelectedByteOffset}: {string.Join("; ", result.ValidationErrors)}";
+        return null;
     }
 
-    public void DismissRecoveryResult()
+    /// <summary>
+    /// Saves the last successful recovery result to the shadow database.
+    /// Returns true on success; sets <see cref="StatusText"/> in both cases.
+    /// </summary>
+    public bool SaveRecoveryToProject()
     {
-        RecoveryMessage    = null;
-        LastRecoveryResult = null;
+        if (Project is null || LastRecoveryResult?.IsValid != true || Database is null) return false;
+        string? tableName = SelectedPage?.TableName;
+        if (tableName is null)
+        {
+            StatusText = "Cannot save: this page is not associated with a known table.";
+            return false;
+        }
+
+        var schema = Database.GetTableSchema(tableName);
+        if (schema is null)
+        {
+            StatusText = $"Cannot save: schema for table '{tableName}' could not be read.";
+            return false;
+        }
+
+        try
+        {
+            Project.SaveRecoveredRecord(schema, LastRecoveryResult.Cell!, SelectedPage!.PageNumber, SelectedByteOffset);
+            StatusText = $"Record saved — RowId {LastRecoveryResult.Cell!.RowId.Value} → " +
+                         $"{ShadowDatabaseBuilder.RecoveredTablePrefix}{tableName}";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Save failed: {ex.Message}";
+            return false;
+        }
     }
 
     // ── Status bar ────────────────────────────────────────────────────────
