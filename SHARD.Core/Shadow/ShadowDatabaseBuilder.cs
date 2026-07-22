@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
 
@@ -85,6 +86,7 @@ public static class ShadowDatabaseBuilder
                 }
 
                 InsertRows(connection, tableSchema, database.ReadTableRows(row.RootPage.Value));
+                InsertDeletedRows(connection, tableSchema, row.RootPage.Value, database);
                 TagTablePages(connection, tableSchema.TableName, database.GetTreePageNumbers(row.RootPage.Value));
             }
             catch (Exception ex)
@@ -410,6 +412,47 @@ public static class ShadowDatabaseBuilder
                 pageTypeCommand.Parameters.AddWithValue("@table", schema.TableName);
                 pageTypeCommand.Parameters.AddWithValue("@page", fragment.PageNumber);
                 pageTypeCommand.ExecuteNonQuery();
+            }
+        }
+
+        transaction.Commit();
+    }
+
+    private static void InsertDeletedRows(SqliteConnection connection, TableSchema schema, uint rootPage, SqliteForensicDatabase database)
+    {
+        using var transaction = connection.BeginTransaction();
+        string recoveredTable = RecoveredTablePrefix + schema.TableName;
+
+        var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));  placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn)); placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
+
+        string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        foreach (uint pageNum in database.GetTreePageNumbers(rootPage))
+        {
+            if (database.ReadPage(pageNum) is not TableBTreeLeafPage tlp) continue;
+
+            foreach (var cell in tlp.DeletedCells)
+            {
+                using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = sql;
+
+                for (int i = 0; i < schema.Columns.Count; i++)
+                {
+                    object value = schema.Columns[i].IsRowIdAlias
+                        ? cell.RowId.Value
+                        : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+                    command.Parameters.AddWithValue($"@p{i}", value);
+                }
+
+                command.Parameters.AddWithValue("@p_page",    (long)pageNum);
+                command.Parameters.AddWithValue("@p_offset",  cell.PageOffset);
+                command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
+                command.ExecuteNonQuery();
             }
         }
 
