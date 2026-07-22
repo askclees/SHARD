@@ -66,8 +66,9 @@ public sealed class WalViewModel : ViewModelBase
         HeaderRows.Add(new InfoRow("Checksum-2",          $"0x{h.VerificationData.Checksum2:X8}"));
         HeaderRows.Add(new InfoRow("Frame Count",         $"{walFile.Frames.Count}"));
 
+        var pageTableMap = database.BuildPageTableMap();
         for (int i = 0; i < walFile.Frames.Count; i++)
-            Frames.Add(new WalFrameEntryViewModel(walFile.Frames[i], i + 1));
+            Frames.Add(new WalFrameEntryViewModel(walFile.Frames[i], i + 1, pageTableMap));
     }
 
     private WalPageComparisonViewModel? BuildComparison(WalFrame frame)
