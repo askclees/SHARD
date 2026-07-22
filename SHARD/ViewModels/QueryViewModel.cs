@@ -134,7 +134,7 @@ public sealed class QueryViewModel : ViewModelBase
         string? matched = null;
         foreach (string t in TableNames)
         {
-            string pattern = @"\bFROM\s+(" + Regex.Escape($"\"{t}\"") + "|" + Regex.Escape(t) + @")\b";
+            string pattern = @"\bFROM\s+(" + Regex.Escape($"\"{t}\"") + "|" + Regex.Escape(t) + @"\b)";
             if (Regex.IsMatch(QueryText, pattern, RegexOptions.IgnoreCase))
             {
                 matched = t;
