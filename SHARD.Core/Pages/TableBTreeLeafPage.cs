@@ -14,6 +14,7 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     public List<BTreeLeafCell> Cells { get; } = new();
     public List<BTreeLeafCell> DeletedCells { get; } = new();
     public List<BTreeLeafCell> CarvedCells { get; } = new();
+    public List<BTreeLeafCell> FreeblockCells { get; } = new();
     public List<(ushort Pointer, string Error)> DeletedCellParseErrors { get; } = new();
     public List<PageFreeBlock> FreeBlocks { get; } = new();
     public List<PageUnallocatedRegion> UnallocatedRegions { get; } = new();
@@ -157,6 +158,32 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
             }
         }
         return retVal;
+    }
+
+    /// <summary>
+    /// Scans each freeblock on this page for deleted records using schema-driven
+    /// validation and live-cell statistics to constrain recovery. Results are stored
+    /// in <see cref="FreeblockCells"/>; offsets already present in
+    /// <see cref="DeletedCells"/> or <see cref="CarvedCells"/> are skipped.
+    /// </summary>
+    public void CarveFreeblockCells(RecordStructure recordStructure)
+    {
+        if (FreeBlocks.Count == 0 || Cells.Count == 0) return;
+
+        var knownOffsets = new HashSet<int>(
+            DeletedCells.Select(c => c.PageOffset)
+            .Concat(CarvedCells.Select(c => c.PageOffset))
+            .Concat(FreeblockCells.Select(c => c.PageOffset)));
+
+        foreach (var freeblock in FreeBlocks)
+        {
+            foreach (var cell in FreeblockRecordParser.RecoverFromFreeblock(
+                         Data, freeblock, Cells, _encoding, recordStructure))
+            {
+                if (knownOffsets.Add(cell.PageOffset))
+                    FreeblockCells.Add(cell);
+            }
+        }
     }
 
     /// <summary>

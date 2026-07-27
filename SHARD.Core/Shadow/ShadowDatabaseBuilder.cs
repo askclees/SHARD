@@ -23,6 +23,7 @@ public static class ShadowDatabaseBuilder
 
     public const string RecoveryMethodDeletedCell = "deleted_cell";
     public const string RecoveryMethodCarving     = "carving";
+    public const string RecoveryMethodFreeblock   = "freeblock";
     public const string RecoveryMethodManual      = "manual";
 
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
@@ -455,6 +456,10 @@ public static class ShadowDatabaseBuilder
             tlp.CarveDeletedCells(recordStructure);
             foreach (var cell in tlp.CarvedCells)
                 InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving);
+
+            tlp.CarveFreeblockCells(recordStructure);
+            foreach (var cell in tlp.FreeblockCells)
+                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock);
         }
 
         transaction.Commit();

@@ -48,6 +48,13 @@ public sealed class Varint
         
     }
 
+    /// <summary>Constructs a synthetic Varint with explicit value and length (e.g. for recovered cells where the original bytes were overwritten).</summary>
+    internal Varint(long value, int length)
+    {
+        Value = value;
+        Length = length;
+    }
+
     public bool Equals(Varint other)
     {
         return (other.Length == this.Length) && (other.Value == this.Value);

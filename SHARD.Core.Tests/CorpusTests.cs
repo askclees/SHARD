@@ -120,8 +120,12 @@ public class CorpusTests
                     .OfType<TableBTreeLeafPage>()
                     .Sum(p =>
                     {
-                        if (recordStructure is not null) p.CarveDeletedCells(recordStructure);
-                        return p.DeletedCells.Count + p.CarvedCells.Count;
+                        if (recordStructure is not null)
+                        {
+                            p.CarveDeletedCells(recordStructure);
+                            p.CarveFreeblockCells(recordStructure);
+                        }
+                        return p.DeletedCells.Count + p.CarvedCells.Count + p.FreeblockCells.Count;
                     });
             }
             catch (Exception ex)

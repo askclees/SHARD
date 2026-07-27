@@ -76,6 +76,35 @@ public class BTreeLeafCell
     }
 
     /// <summary>
+    /// Constructs a cell recovered from a freeblock, where the original payload-size and
+    /// rowid varint bytes have been overwritten by the freeblock linked-list header.
+    /// <paramref name="payloadSize"/> and <paramref name="rowId"/> are supplied by the
+    /// caller (rowId.Value should be -1 to signal that the rowid is unknown).
+    /// <paramref name="headerSize"/> is inferred from the schema. Field values are decoded
+    /// directly from <paramref name="pageData"/> starting at <paramref name="fieldDataOffset"/>.
+    /// </summary>
+    internal BTreeLeafCell(
+        IReadOnlyList<HeaderEntry> headerEntries,
+        byte[] pageData,
+        int fieldDataOffset,
+        Varint payloadSize,
+        Varint rowId,
+        Varint headerSize,
+        TextEncoding encoding,
+        int pageOffset)
+    {
+        _encoding   = encoding;
+        PageOffset  = pageOffset;
+        SizeOfPayload = payloadSize;
+        RowId       = rowId;
+        HeaderSize  = headerSize;
+        // Synthetic local data — sized so CellByteLengthOnPage returns the true cell size.
+        _localData  = new byte[payloadSize.Length + rowId.Length + (int)payloadSize.Value];
+        HeaderEntries.AddRange(headerEntries);
+        FieldValues.AddRange(DecodeFieldValues(pageData, fieldDataOffset));
+    }
+
+    /// <summary>
     /// Re-decodes field values once the full record bytes (local + overflow chain) are
     /// available, replacing any nulls left by fields that previously spilled past the
     /// locally-stored portion of the payload.
