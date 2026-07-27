@@ -16,9 +16,14 @@ namespace SHARD.Core.Shadow;
 /// </summary>
 public static class ShadowDatabaseBuilder
 {
-    private const string PageNumberColumn = "_page_number";
-    private const string CellOffsetColumn = "_cell_offset";
+    private const string PageNumberColumn    = "_page_number";
+    private const string CellOffsetColumn   = "_cell_offset";
     private const string OverflowPageColumn = "_overflow_page";
+    private const string RecoveryMethodColumn = "_recovery_method";
+
+    public const string RecoveryMethodDeletedCell = "deleted_cell";
+    public const string RecoveryMethodCarving     = "carving";
+    public const string RecoveryMethodManual      = "manual";
 
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
     public const string InternalTablePrefix = "_shard_";
@@ -151,9 +156,10 @@ public static class ShadowDatabaseBuilder
             return string.Join(' ', parts);
         }).ToList();
 
-        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}  INTEGER NOT NULL");
-        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)} INTEGER NOT NULL");
-        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)} INTEGER NOT NULL DEFAULT 0");
+        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}     INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)}    INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)}  INTEGER NOT NULL DEFAULT 0");
+        columnSql.Add($"{QuoteIdentifier(RecoveryMethodColumn)} TEXT NOT NULL");
 
         string tableName = RecoveredTablePrefix + schema.TableName;
         return $"CREATE TABLE {QuoteIdentifier(tableName)} (\n  {string.Join(",\n  ", columnSql)}\n)";
@@ -206,14 +212,17 @@ public static class ShadowDatabaseBuilder
         TableSchema schema,
         BTreeLeafCell cell,
         uint pageNumber,
-        int cellOffset)
+        int cellOffset,
+        string recoveryMethod = RecoveryMethodManual)
     {
         string recoveredTable = RecoveredTablePrefix + schema.TableName;
 
         var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
         var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
-        columnNames.Add(QuoteIdentifier(PageNumberColumn));  placeholders.Add("@p_page");
-        columnNames.Add(QuoteIdentifier(CellOffsetColumn)); placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));     placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn));     placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(OverflowPageColumn));   placeholders.Add("@p_overflow");
+        columnNames.Add(QuoteIdentifier(RecoveryMethodColumn)); placeholders.Add("@p_method");
 
         string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} " +
                      $"({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
@@ -229,8 +238,10 @@ public static class ShadowDatabaseBuilder
             command.Parameters.AddWithValue($"@p{i}", value);
         }
 
-        command.Parameters.AddWithValue("@p_page",   (long)pageNumber);
-        command.Parameters.AddWithValue("@p_offset", cellOffset);
+        command.Parameters.AddWithValue("@p_page",    (long)pageNumber);
+        command.Parameters.AddWithValue("@p_offset",  cellOffset);
+        command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
+        command.Parameters.AddWithValue("@p_method",  recoveryMethod);
         command.ExecuteNonQuery();
     }
 
@@ -425,38 +436,51 @@ public static class ShadowDatabaseBuilder
 
         var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
         var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
-        columnNames.Add(QuoteIdentifier(PageNumberColumn));  placeholders.Add("@p_page");
-        columnNames.Add(QuoteIdentifier(CellOffsetColumn)); placeholders.Add("@p_offset");
-        columnNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));     placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn));     placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(OverflowPageColumn));   placeholders.Add("@p_overflow");
+        columnNames.Add(QuoteIdentifier(RecoveryMethodColumn)); placeholders.Add("@p_method");
 
         string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        var recordStructure = RecordStructure.FromSchema(schema);
 
         foreach (uint pageNum in database.GetTreePageNumbers(rootPage))
         {
             if (database.ReadPage(pageNum) is not TableBTreeLeafPage tlp) continue;
 
             foreach (var cell in tlp.DeletedCells)
-            {
-                using var command = connection.CreateCommand();
-                command.Transaction = transaction;
-                command.CommandText = sql;
+                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell);
 
-                for (int i = 0; i < schema.Columns.Count; i++)
-                {
-                    object value = schema.Columns[i].IsRowIdAlias
-                        ? cell.RowId.Value
-                        : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
-                    command.Parameters.AddWithValue($"@p{i}", value);
-                }
-
-                command.Parameters.AddWithValue("@p_page",    (long)pageNum);
-                command.Parameters.AddWithValue("@p_offset",  cell.PageOffset);
-                command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
-                command.ExecuteNonQuery();
-            }
+            tlp.CarveDeletedCells(recordStructure);
+            foreach (var cell in tlp.CarvedCells)
+                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving);
         }
 
         transaction.Commit();
+    }
+
+    private static void InsertRecoveredCellInTransaction(
+        SqliteConnection connection, SqliteTransaction transaction,
+        string sql, TableSchema schema, BTreeLeafCell cell, uint pageNum, string recoveryMethod)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+
+        for (int i = 0; i < schema.Columns.Count; i++)
+        {
+            object value = schema.Columns[i].IsRowIdAlias
+                ? cell.RowId.Value
+                : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+            command.Parameters.AddWithValue($"@p{i}", value);
+        }
+
+        command.Parameters.AddWithValue("@p_page",    (long)pageNum);
+        command.Parameters.AddWithValue("@p_offset",  cell.PageOffset);
+        command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
+        command.Parameters.AddWithValue("@p_method",  recoveryMethod);
+        command.ExecuteNonQuery();
     }
 
     private static string BuildInsertSql(TableSchema schema)

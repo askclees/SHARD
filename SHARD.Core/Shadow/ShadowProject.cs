@@ -10,30 +10,44 @@ using SHARD.Core.WAL;
 namespace SHARD.Core.Shadow;
 
 /// <summary>
-/// A project folder containing a manifest (project.json) and a shadow SQLite
-/// database mirroring the structure of an evidence file's schema.
+/// A shadow SQLite database mirroring an evidence file's schema and row data.
+/// A project starts as a temporary (unsaved) state backed by a temp file the
+/// moment an evidence file is opened; calling <see cref="SaveTo"/> persists it
+/// to a named folder on disk.
 /// </summary>
-public sealed class ShadowProject
+public sealed class ShadowProject : IDisposable
 {
-    public string ProjectFolder { get; }
-    public string ManifestPath { get; }
-    public string ShadowDatabasePath { get; }
-    public string EvidenceFilePath { get; }
-    public DateTime CreatedUtc { get; }
+    private string? _projectFolder;
+    private string _shadowDatabasePath;
+    private string? _tempDbPath;
+    private readonly ProjectManifest _manifest;
 
-    private ShadowProject(string projectFolder, ProjectManifest manifest)
+    public string? ProjectFolder     => _projectFolder;
+    public string? ManifestPath      => _projectFolder is null ? null : Path.Combine(_projectFolder, "project.json");
+    public string  ShadowDatabasePath => _shadowDatabasePath;
+    public string  EvidenceFilePath   => _manifest.EvidenceFilePath;
+    public DateTime CreatedUtc        => _manifest.CreatedUtc;
+    public bool    IsUnsaved          => _tempDbPath is not null;
+
+    private ShadowProject(string? projectFolder, ProjectManifest manifest, string shadowDatabasePath, string? tempDbPath)
     {
-        ProjectFolder      = projectFolder;
-        ManifestPath       = Path.Combine(projectFolder, "project.json");
-        ShadowDatabasePath = Path.Combine(projectFolder, manifest.ShadowDatabaseFileName);
-        EvidenceFilePath   = manifest.EvidenceFilePath;
-        CreatedUtc         = manifest.CreatedUtc;
+        _projectFolder       = projectFolder;
+        _manifest            = manifest;
+        _shadowDatabasePath  = shadowDatabasePath;
+        _tempDbPath          = tempDbPath;
     }
 
-    public static (ShadowProject Project, IReadOnlyList<string> Warnings) Create(
-        string projectFolder, string evidenceFilePath, SqliteForensicDatabase database)
+    /// <summary>
+    /// Create a temporary project backed by a temp file, immediately usable for
+    /// queries and record recovery. Call <see cref="SaveTo"/> to persist to disk.
+    /// </summary>
+    public static (ShadowProject Project, IReadOnlyList<string> Warnings) CreateTemporary(
+        string evidenceFilePath, SqliteForensicDatabase database)
     {
-        Directory.CreateDirectory(projectFolder);
+        // GetTempFileName creates a zero-byte file; rename with .db so SQLite is happy.
+        string tempBase = Path.GetTempFileName();
+        string tempPath = Path.ChangeExtension(tempBase, ".db");
+        File.Move(tempBase, tempPath);
 
         var manifest = new ProjectManifest
         {
@@ -41,19 +55,39 @@ public sealed class ShadowProject
             CreatedUtc       = DateTime.UtcNow,
         };
 
-        string shadowDbPath = Path.Combine(projectFolder, manifest.ShadowDatabaseFileName);
+        var warnings = ShadowDatabaseBuilder.Create(tempPath, database);
+        return (new ShadowProject(null, manifest, tempPath, tempPath), warnings);
+    }
+
+    /// <summary>
+    /// Persist the temporary project to <paramref name="projectFolder"/> on disk,
+    /// writing the manifest and copying the shadow database. Deletes the temp file.
+    /// Throws if the project is already saved or the target already contains a shadow DB.
+    /// </summary>
+    public void SaveTo(string projectFolder)
+    {
+        Directory.CreateDirectory(projectFolder);
+
+        string shadowDbPath = Path.Combine(projectFolder, _manifest.ShadowDatabaseFileName);
         if (File.Exists(shadowDbPath))
             throw new InvalidOperationException($"A shadow database already exists at '{shadowDbPath}'.");
 
-        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database);
+        File.Copy(_shadowDatabasePath, shadowDbPath);
 
-        string manifestPath = Path.Combine(projectFolder, "project.json");
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(
+            Path.Combine(projectFolder, "project.json"),
+            JsonSerializer.Serialize(_manifest, new JsonSerializerOptions { WriteIndented = true }));
 
-        return (new ShadowProject(projectFolder, manifest), warnings);
+        if (_tempDbPath is not null)
+        {
+            try { File.Delete(_tempDbPath); } catch { }
+            _tempDbPath = null;
+        }
+        _projectFolder      = projectFolder;
+        _shadowDatabasePath = shadowDbPath;
     }
 
-    /// <summary>Open an existing project folder (must already contain a project.json and shadow database).</summary>
+    /// <summary>Open an existing saved project folder (must contain project.json and shadow DB).</summary>
     public static ShadowProject Open(string projectFolder)
     {
         string manifestPath = Path.Combine(projectFolder, "project.json");
@@ -63,20 +97,17 @@ public sealed class ShadowProject
         var manifest = JsonSerializer.Deserialize<ProjectManifest>(File.ReadAllText(manifestPath))
             ?? throw new InvalidOperationException($"Failed to read project manifest at '{manifestPath}'.");
 
-        var project = new ShadowProject(projectFolder, manifest);
-        if (!File.Exists(project.ShadowDatabasePath))
-            throw new InvalidOperationException($"No shadow database found at '{project.ShadowDatabasePath}'.");
+        string shadowDbPath = Path.Combine(projectFolder, manifest.ShadowDatabaseFileName);
+        if (!File.Exists(shadowDbPath))
+            throw new InvalidOperationException($"No shadow database found at '{shadowDbPath}'.");
 
-        return project;
+        return new ShadowProject(projectFolder, manifest, shadowDbPath, null);
     }
 
-    /// <summary>
-    /// Inserts a recovered (deleted) record into the shadow database's
-    /// <c>_shard_recovered_{tableName}</c> table.
-    /// </summary>
+    /// <summary>Insert a recovered (deleted) record into the shadow database.</summary>
     public void SaveRecoveredRecord(TableSchema schema, BTreeLeafCell cell, uint pageNumber, int cellOffset)
     {
-        using var connection = new SqliteConnection($"Data Source={ShadowDatabasePath}");
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
         ShadowDatabaseBuilder.InsertRecoveredRecord(connection, schema, cell, pageNumber, cellOffset);
     }
@@ -84,16 +115,13 @@ public sealed class ShadowProject
     /// <summary>
     /// Compares each WAL frame against the current database page and inserts any
     /// records that are new in the WAL into the corresponding live shadow table.
-    /// Uses the last frame per page (the current WAL state) and skips pages whose
-    /// table is not recorded in the shadow database.
     /// Returns the number of records inserted.
     /// </summary>
     public int SyncWalFramesToShadow(WalFile walFile, SqliteForensicDatabase database)
     {
-        using var connection = new SqliteConnection($"Data Source={ShadowDatabasePath}");
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
 
-        // Latest WAL frame wins for each page number.
         var latestFrames = walFile.Frames
             .GroupBy(f => f.Header.PageNumber)
             .Select(g => g.Last())
@@ -111,7 +139,6 @@ public sealed class ShadowProject
             var schema = database.GetTableSchema(tableName);
             if (schema is null) continue;
 
-            // Compare WAL page against the current database page to find new records.
             TableBTreeLeafPageComparison comparison;
             if (frame.Header.PageNumber <= database.PageCount &&
                 database.ReadPage(frame.Header.PageNumber) is TableBTreeLeafPage dbLeafPage)
@@ -120,7 +147,6 @@ public sealed class ShadowProject
             }
             else
             {
-                // Page exists only in the WAL — every cell is new.
                 comparison = new TableBTreeLeafPageComparison { AddedRecords = walPage.Cells };
             }
 
@@ -151,7 +177,7 @@ public sealed class ShadowProject
     {
         var result = new List<(uint PageNumber, PageType Type, string? TableName)>();
 
-        using var connection = new SqliteConnection($"Data Source={ShadowDatabasePath};Mode=ReadOnly");
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath};Mode=ReadOnly");
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = $"""
@@ -167,5 +193,11 @@ public sealed class ShadowProject
         }
 
         return result;
+    }
+
+    public void Dispose()
+    {
+        if (_tempDbPath is not null && File.Exists(_tempDbPath))
+            try { File.Delete(_tempDbPath); } catch { }
     }
 }

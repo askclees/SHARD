@@ -8,6 +8,7 @@
         x:Class="SHARD.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="SHARD — SQLite Forensic Analyser"
+        Icon="avares://SHARD/Assets/shard-icon.png"
         Width="1200" Height="760"
         MinWidth="800" MinHeight="500"
         DragDrop.AllowDrop="True">
@@ -25,8 +26,8 @@
                           IsEnabled="{Binding HasDatabase}"
                           InputGesture="Ctrl+W" />
                 <Separator />
-                <MenuItem Header="Create _Project…"
-                          Name="MenuCreateProject"
+                <MenuItem Header="_Save Project…"
+                          Name="MenuSaveProject"
                           IsEnabled="{Binding HasDatabase}" />
                 <MenuItem Header="_Open Project…"
                           Name="MenuOpenProject" />
@@ -912,20 +913,7 @@
                     <TabItem Header="Query">
                         <Grid RowDefinitions="Auto,Auto,Auto,*">
 
-                            <!-- Placeholder: no project yet -->
-                            <TextBlock Grid.Row="0" Grid.RowSpan="4"
-                                       IsVisible="{Binding HasProject, Converter={x:Static conv:BoolConverters.Not}}"
-                                       Text="Create a project to run SQL queries against its shadow database."
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       Opacity="0.35"
-                                       FontSize="13"
-                                       TextWrapping="Wrap"
-                                       MaxWidth="360"
-                                       TextAlignment="Center" />
-
                             <Grid Grid.Row="0" Grid.RowSpan="4"
-                                  IsVisible="{Binding HasProject}"
                                   ColumnDefinitions="220,4,*">
 
                                 <!-- Left: table list -->
