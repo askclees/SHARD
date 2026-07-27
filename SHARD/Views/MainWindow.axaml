@@ -1058,8 +1058,8 @@
                                              ItemsSource="{Binding QueryTab.TableNames}"
                                              DoubleTapped="OnTableDoubleTapped">
                                         <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="x:String">
-                                                <TextBlock Text="{Binding}"
+                                            <DataTemplate x:DataType="vm:QueryTableViewModel">
+                                                <TextBlock Text="{Binding DisplayName}"
                                                            FontFamily="Courier New"
                                                            FontSize="12"
                                                            ToolTip.Tip="Double-click to query this table" />

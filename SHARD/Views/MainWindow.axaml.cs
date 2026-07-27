@@ -95,8 +95,8 @@ public partial class MainWindow : Window
 
     private void OnTableDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (sender is ListBox { SelectedItem: string table })
-            Vm.QueryTab.RunQueryForTable(table);
+        if (sender is ListBox { SelectedItem: QueryTableViewModel table })
+            Vm.QueryTab.RunQueryForTable(table.ActualName);
     }
 
     // ── File open ────────────────────────────────────────────────────────────

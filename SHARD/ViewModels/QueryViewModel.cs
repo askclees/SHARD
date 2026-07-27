@@ -66,7 +66,7 @@ public sealed class QueryViewModel : ViewModelBase
 
     // ── Tables (for the table-list side panel) ──────────────────────────────────
 
-    public ObservableCollection<string> TableNames { get; } = [];
+    public ObservableCollection<QueryTableViewModel> TableNames { get; } = [];
 
     // ── Command ───────────────────────────────────────────────────────────────
 
@@ -94,9 +94,14 @@ public sealed class QueryViewModel : ViewModelBase
             {
                 string name = reader.GetString(0);
                 if (!name.StartsWith(ShadowDatabaseBuilder.InternalTablePrefix, StringComparison.OrdinalIgnoreCase))
-                    TableNames.Add(name);
+                {
+                    TableNames.Add(new QueryTableViewModel(name, name));
+                }
                 else if (name.StartsWith(ShadowDatabaseBuilder.DeletedTablePrefix, StringComparison.OrdinalIgnoreCase))
-                    TableNames.Add(name);
+                {
+                    string bare = name[ShadowDatabaseBuilder.DeletedTablePrefix.Length..];
+                    TableNames.Add(new QueryTableViewModel(name, $"{bare} (deleted)"));
+                }
             }
         }
         catch
@@ -134,12 +139,12 @@ public sealed class QueryViewModel : ViewModelBase
 
         // Find the first known table referenced after FROM (quoted or bare identifier).
         string? matched = null;
-        foreach (string t in TableNames)
+        foreach (var t in TableNames)
         {
-            string pattern = @"\bFROM\s+(" + Regex.Escape($"\"{t}\"") + "|" + Regex.Escape(t) + @"\b)";
+            string pattern = @"\bFROM\s+(" + Regex.Escape($"\"{t.ActualName}\"") + "|" + Regex.Escape(t.ActualName) + @"\b)";
             if (Regex.IsMatch(QueryText, pattern, RegexOptions.IgnoreCase))
             {
-                matched = t;
+                matched = t.ActualName;
                 break;
             }
         }
