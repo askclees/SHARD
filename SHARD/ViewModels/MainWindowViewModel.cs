@@ -640,6 +640,17 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 var (project, warnings) = ShadowProject.CreateTemporary(_currentFilePath!, Database);
                 Project = project;
+
+                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Valid
+                                                                     && d.RootPage.HasValue
+                                                                     && d.Sql is not null))
+                {
+                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
+                    if (schema is null) continue;
+                    try { project.AddDeletedTableRecords(schema, Database.ReadTableRows(deletedVm.RootPage!.Value)); }
+                    catch { }
+                }
+
                 QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
                 RefreshPagesFromShadowDatabase();
                 if (warnings.Count > 0)

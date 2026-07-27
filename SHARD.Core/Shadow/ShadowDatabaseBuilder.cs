@@ -27,8 +27,10 @@ public static class ShadowDatabaseBuilder
     public const string RecoveryMethodManual      = "manual";
 
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
-    public const string InternalTablePrefix = "_shard_";
+    public const string InternalTablePrefix  = "_shard_";
     public const string RecoveredTablePrefix = InternalTablePrefix + "recovered_";
+    /// <summary>Prefix for shadow tables that hold records read from a dropped table's still-valid root page.</summary>
+    public const string DeletedTablePrefix   = InternalTablePrefix + "deleted_";
     private const string OverflowTableName = InternalTablePrefix + "overflow_pages";
     private const string PagesTableName    = InternalTablePrefix + "pages";
 
@@ -501,6 +503,66 @@ public static class ShadowDatabaseBuilder
         placeholders.Add("@p_overflow");
 
         return $"INSERT INTO {QuoteIdentifier(schema.TableName)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+    }
+
+    /// <summary>
+    /// Creates a <c>_shard_deleted_{tableName}</c> table in the shadow database and
+    /// populates it with rows read directly from a dropped table's still-valid root page.
+    /// Uses <c>CREATE TABLE IF NOT EXISTS</c> so it is safe to call more than once.
+    /// </summary>
+    public static void CreateAndPopulateDeletedTable(
+        SqliteConnection connection, TableSchema schema, IEnumerable<TableRow> rows)
+    {
+        string shadowTable = DeletedTablePrefix + schema.TableName;
+
+        var columnSql = schema.Columns.Select(c =>
+        {
+            var parts = new List<string> { QuoteIdentifier(c.Name) };
+            if (!string.IsNullOrEmpty(c.DeclaredType)) parts.Add(c.DeclaredType);
+            return string.Join(' ', parts);
+        }).ToList();
+
+        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}    INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)}   INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)} INTEGER NOT NULL DEFAULT 0");
+
+        using (var create = connection.CreateCommand())
+        {
+            create.CommandText = $"CREATE TABLE IF NOT EXISTS {QuoteIdentifier(shadowTable)} (\n  {string.Join(",\n  ", columnSql)}\n)";
+            create.ExecuteNonQuery();
+        }
+
+        var colNames     = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        colNames.Add(QuoteIdentifier(PageNumberColumn));    placeholders.Add("@p_page");
+        colNames.Add(QuoteIdentifier(CellOffsetColumn));   placeholders.Add("@p_offset");
+        colNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
+
+        string insertSql = $"INSERT INTO {QuoteIdentifier(shadowTable)} ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        using var transaction = connection.BeginTransaction();
+        foreach (var row in rows)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction  = transaction;
+            cmd.CommandText  = insertSql;
+
+            for (int i = 0; i < schema.Columns.Count; i++)
+            {
+                var col = schema.Columns[i];
+                object value = col.IsRowIdAlias
+                    ? row.RowId
+                    : (object?)(i < row.FieldValues.Count ? row.FieldValues[i]?.Value : null) ?? DBNull.Value;
+                cmd.Parameters.AddWithValue($"@p{i}", value);
+            }
+
+            cmd.Parameters.AddWithValue("@p_page",    (long)row.PageNumber);
+            cmd.Parameters.AddWithValue("@p_offset",  (long)row.CellOffset);
+            cmd.Parameters.AddWithValue("@p_overflow",
+                (long)(row.OverflowFragments.Count > 0 ? row.OverflowFragments[0].PageNumber : 0));
+            cmd.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";

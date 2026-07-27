@@ -104,6 +104,17 @@ public sealed class ShadowProject : IDisposable
         return new ShadowProject(projectFolder, manifest, shadowDbPath, null);
     }
 
+    /// <summary>
+    /// Creates (if not already present) and populates a <c>_shard_deleted_{tableName}</c>
+    /// table in the shadow database with rows read from a dropped table's valid root page.
+    /// </summary>
+    public void AddDeletedTableRecords(TableSchema schema, IEnumerable<TableRow> rows)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        ShadowDatabaseBuilder.CreateAndPopulateDeletedTable(connection, schema, rows);
+    }
+
     /// <summary>Insert a recovered (deleted) record into the shadow database.</summary>
     public void SaveRecoveredRecord(TableSchema schema, BTreeLeafCell cell, uint pageNumber, int cellOffset)
     {

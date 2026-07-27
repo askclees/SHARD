@@ -95,6 +95,8 @@ public sealed class QueryViewModel : ViewModelBase
                 string name = reader.GetString(0);
                 if (!name.StartsWith(ShadowDatabaseBuilder.InternalTablePrefix, StringComparison.OrdinalIgnoreCase))
                     TableNames.Add(name);
+                else if (name.StartsWith(ShadowDatabaseBuilder.DeletedTablePrefix, StringComparison.OrdinalIgnoreCase))
+                    TableNames.Add(name);
             }
         }
         catch
