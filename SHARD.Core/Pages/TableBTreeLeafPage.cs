@@ -260,26 +260,48 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     /// <summary>
     /// Scans unallocated regions on this page for deleted records, using
     /// <paramref name="recordStructure"/> for schema-driven validation.
-    /// Only regions with more than one non-zero byte are attempted. Results are
-    /// stored in <see cref="CarvedCells"/>; any cell whose offset already appears
-    /// in <see cref="DeletedCells"/> is skipped to avoid duplicates.
+    /// Slides through each region byte-by-byte (skipping zero runs), jumping
+    /// past already-known cells by their exact size. Results are stored in
+    /// <see cref="CarvedCells"/>; any offset already present in
+    /// <see cref="DeletedCells"/> is skipped to avoid duplicates.
     /// </summary>
     public void CarveDeletedCells(RecordStructure recordStructure)
     {
         var knownOffsets = new HashSet<int>(DeletedCells.Select(c => c.PageOffset));
+        var knownSizes   = DeletedCells.ToDictionary(c => c.PageOffset, c => c.CellByteLengthOnPage);
 
         foreach (var region in UnallocatedRegions)
         {
             if (region.NonZeroBytes <= 1) continue;
-            if (knownOffsets.Contains(region.Offset)) continue;
 
-            var result = DeletedRecordParser.RecoverBTreeLeafRecord(
-                Data, region.Offset, _encoding, recordStructure);
+            int pos = region.Offset;
+            int end = region.Offset + region.Size;
 
-            if (result.IsValid)
+            while (pos < end)
             {
-                CarvedCells.Add(result.Cell!);
-                knownOffsets.Add(region.Offset);
+                while (pos < end && Data[pos] == 0x00) pos++;
+                if (pos >= end) break;
+
+                if (knownOffsets.Contains(pos))
+                {
+                    pos += knownSizes.TryGetValue(pos, out int sz) ? sz : 1;
+                    continue;
+                }
+
+                var result = DeletedRecordParser.RecoverBTreeLeafRecord(
+                    Data, pos, _encoding, recordStructure);
+
+                if (result.IsValid)
+                {
+                    CarvedCells.Add(result.Cell!);
+                    knownOffsets.Add(pos);
+                    knownSizes[pos] = result.Cell!.CellByteLengthOnPage;
+                    pos += result.Cell!.CellByteLengthOnPage;
+                }
+                else
+                {
+                    pos++;
+                }
             }
         }
     }

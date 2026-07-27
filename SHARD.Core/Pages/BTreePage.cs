@@ -84,7 +84,7 @@ public abstract class BTreePage : SqlitePage
             }
             else
             {
-                if (!CellPointers.Contains(deletedPointer))
+                if (!CellPointers.Contains(deletedPointer) && !DeletedCellPointers.Contains(deletedPointer))
                     DeletedCellPointers.Add(deletedPointer);
             }
             pointer += 2;
