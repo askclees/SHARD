@@ -3,6 +3,7 @@ using System.IO;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
 
 namespace SHARD.Core;
@@ -196,6 +197,66 @@ public sealed class SqliteForensicDatabase : IDisposable
             leaf.CarveDeletedCells(recordStructure);
             foreach (var cell in leaf.CarvedCells)
                 yield return cell;
+        }
+    }
+
+    /// <summary>
+    /// Carves deleted records from every sqlite_master leaf page and returns those that
+    /// parse as valid schema rows. Each result includes how the cell was recovered and
+    /// whether the table's root page still holds readable B-tree data.
+    /// </summary>
+    public IEnumerable<DeletedSqliteMasterRow> ReadDeletedSqliteMaster()
+    {
+        // Build the set of root pages currently claimed by live objects so we can
+        // distinguish "still valid" from "reused by another table".
+        var liveRootPages = new HashSet<uint>();
+        liveRootPages.Add(1); // sqlite_master itself
+        foreach (var row in ReadSqliteMaster())
+            if (row.RootPage.HasValue)
+                liveRootPages.Add(row.RootPage.Value);
+
+        var recordStructure = RecordStructure.FromSchema(SqliteMasterSchema);
+
+        foreach (uint pageNum in GetLeafPageNumbers(1))
+        {
+            if (ReadPage(pageNum) is not TableBTreeLeafPage leaf) continue;
+
+            leaf.CarveDeletedCells(recordStructure);
+            leaf.CarveFreeblockCells(recordStructure);
+
+            var candidates =
+                leaf.DeletedCells  .Select(c => (Cell: c, Method: "deleted-pointer"))
+                .Concat(leaf.CarvedCells   .Select(c => (Cell: c, Method: "carved")))
+                .Concat(leaf.FreeblockCells.Select(c => (Cell: c, Method: "freeblock")));
+
+            foreach (var (cell, method) in candidates)
+            {
+                var masterRow = CreateSqliteMasterRowFromCell(cell, pageNum, cell.PageOffset);
+                if (masterRow is null) continue;
+
+                var status = masterRow.RootPage.HasValue
+                    ? CheckRootPageValidity(masterRow.RootPage.Value, liveRootPages)
+                    : RootPageStatus.Invalid;
+
+                yield return new DeletedSqliteMasterRow(masterRow, method, status);
+            }
+        }
+    }
+
+    private RootPageStatus CheckRootPageValidity(uint rootPage, HashSet<uint> liveRootPages)
+    {
+        if (rootPage < 1 || rootPage > PageCount) return RootPageStatus.Invalid;
+        if (liveRootPages.Contains(rootPage))      return RootPageStatus.Reused;
+        try
+        {
+            var page = ReadPage(rootPage);
+            return page is TableBTreeLeafPage or TableBTreeInteriorPage
+                ? RootPageStatus.Valid
+                : RootPageStatus.Freed;
+        }
+        catch
+        {
+            return RootPageStatus.Invalid;
         }
     }
 
