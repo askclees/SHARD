@@ -110,10 +110,19 @@ public class CorpusTests
             int deletedFound;
             try
             {
+                var schema = db.GetTableSchema(expected.Name);
+                var recordStructure = schema is not null
+                    ? SHARD.Core.Records.RecordStructure.FromSchema(schema)
+                    : null;
+
                 deletedFound = db.GetTreePageNumbers(master.RootPage!.Value)
                     .Select(p => db.ReadPage(p))
                     .OfType<TableBTreeLeafPage>()
-                    .Sum(p => p.DeletedCells.Count);
+                    .Sum(p =>
+                    {
+                        if (recordStructure is not null) p.CarveDeletedCells(recordStructure);
+                        return p.DeletedCells.Count + p.CarvedCells.Count;
+                    });
             }
             catch (Exception ex)
             {
