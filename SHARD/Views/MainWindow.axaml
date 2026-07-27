@@ -8,6 +8,7 @@
         x:Class="SHARD.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="SHARD — SQLite Forensic Analyser"
+        Icon="avares://SHARD/Assets/shard-icon.png"
         Width="1200" Height="760"
         MinWidth="800" MinHeight="500"
         DragDrop.AllowDrop="True">
