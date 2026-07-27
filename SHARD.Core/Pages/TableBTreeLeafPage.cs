@@ -13,13 +13,17 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     public override PageType PageType => PageType.BTreeLeafTable;
     public List<BTreeLeafCell> Cells { get; } = new();
     public List<BTreeLeafCell> DeletedCells { get; } = new();
+    public List<BTreeLeafCell> CarvedCells { get; } = new();
     public List<(ushort Pointer, string Error)> DeletedCellParseErrors { get; } = new();
     public List<PageFreeBlock> FreeBlocks { get; } = new();
     public List<PageUnallocatedRegion> UnallocatedRegions { get; } = new();
 
+    private readonly TextEncoding _encoding;
+
     public TableBTreeLeafPage(uint pageNumber, int pageSize, byte[] data, TextEncoding encoding, int reservedBytes)
         : base(pageNumber, pageSize, data)
     {
+        _encoding = encoding;
         foreach (int i in this.CellPointers)
         {
             var varintData = Varint.ReadAt(data, i);
@@ -224,6 +228,33 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     private List<long> RecordDifference(List<long> list1, List<long> list2)
     {
         return list1.Where(x => !list2.Contains(x)).ToList();
+    }
+
+    /// <summary>
+    /// Scans unallocated regions on this page for deleted records, using
+    /// <paramref name="recordStructure"/> for schema-driven validation.
+    /// Only regions with more than one non-zero byte are attempted. Results are
+    /// stored in <see cref="CarvedCells"/>; any cell whose offset already appears
+    /// in <see cref="DeletedCells"/> is skipped to avoid duplicates.
+    /// </summary>
+    public void CarveDeletedCells(RecordStructure recordStructure)
+    {
+        var knownOffsets = new HashSet<int>(DeletedCells.Select(c => c.PageOffset));
+
+        foreach (var region in UnallocatedRegions)
+        {
+            if (region.NonZeroBytes <= 1) continue;
+            if (knownOffsets.Contains(region.Offset)) continue;
+
+            var result = DeletedRecordParser.RecoverBTreeLeafRecord(
+                Data, region.Offset, _encoding, recordStructure);
+
+            if (result.IsValid)
+            {
+                CarvedCells.Add(result.Cell!);
+                knownOffsets.Add(region.Offset);
+            }
+        }
     }
 
 }
