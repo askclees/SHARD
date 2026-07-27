@@ -63,7 +63,7 @@ public static class DeletedRecordParser
 
             for (int i = 0; i < HeaderEntries.Count; i++)
             {
-                if (HeaderEntries[i].Kind != recordStructure.ColumnDataTypes[i])
+                if (!recordStructure.AllowedKindsPerColumn[i].Contains(HeaderEntries[i].Kind))
                 {
                     return new DeletedBTreeLeafCellResult(new List<String>() { ColumnTypeMismatch });
                 }
