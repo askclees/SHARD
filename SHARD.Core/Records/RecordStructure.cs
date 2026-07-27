@@ -16,25 +16,26 @@ public class RecordStructure
 
     public int NumColumns => AllowedKindsPerColumn.Count;
 
-    // Per-affinity allowed sets. Null is always permitted (deleted rows often have NULL fields).
+    // Base allowed kinds per affinity — Null excluded; added conditionally based on nullability.
     private static readonly SerialTypeKind[] IntegerKinds =
-        [SerialTypeKind.Null, SerialTypeKind.Integer, SerialTypeKind.Int0, SerialTypeKind.Int1, SerialTypeKind.Float];
+        [SerialTypeKind.Integer, SerialTypeKind.Int0, SerialTypeKind.Int1, SerialTypeKind.Float];
 
     private static readonly SerialTypeKind[] RealKinds =
-        [SerialTypeKind.Null, SerialTypeKind.Float, SerialTypeKind.Integer, SerialTypeKind.Int0, SerialTypeKind.Int1];
+        [SerialTypeKind.Float, SerialTypeKind.Integer, SerialTypeKind.Int0, SerialTypeKind.Int1];
 
     private static readonly SerialTypeKind[] TextKinds =
-        [SerialTypeKind.Null, SerialTypeKind.Text];
+        [SerialTypeKind.Text];
 
     // BLOB and NUMERIC affinities impose no type preference — accept any valid kind.
     private static readonly SerialTypeKind[] AnyKind =
-        [SerialTypeKind.Null, SerialTypeKind.Integer, SerialTypeKind.Int0, SerialTypeKind.Int1,
+        [SerialTypeKind.Integer, SerialTypeKind.Int0, SerialTypeKind.Int1,
          SerialTypeKind.Float, SerialTypeKind.Text, SerialTypeKind.Blob];
 
     /// <summary>
     /// Builds a <see cref="RecordStructure"/> from a parsed <see cref="TableSchema"/>.
     /// Rowid-alias columns are skipped because they are stored in the cell's rowid
-    /// field, not in the record payload.
+    /// field, not in the record payload. Null is added to the allowed kinds only for
+    /// columns that are not declared NOT NULL.
     /// </summary>
     public static RecordStructure FromSchema(TableSchema schema)
     {
@@ -43,13 +44,19 @@ public class RecordStructure
         {
             if (col.IsRowIdAlias) continue;
 
-            SerialTypeKind[] allowed = col.Affinity switch
+            SerialTypeKind[] baseKinds = col.Affinity switch
             {
                 TypeAffinity.Integer => IntegerKinds,
                 TypeAffinity.Real    => RealKinds,
                 TypeAffinity.Text    => TextKinds,
                 _                    => AnyKind,   // Blob, Numeric, or unknown
             };
+
+            // Column can hold NULL values — prepend Null to the allowed set.
+            SerialTypeKind[] allowed = col.IsNotNull
+                ? baseKinds
+                : [SerialTypeKind.Null, ..baseKinds];
+
             rs.AllowedKindsPerColumn.Add(allowed);
         }
         return rs;
