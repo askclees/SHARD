@@ -27,18 +27,24 @@ public static class DeletedRecordParser
             return new DeletedBTreeLeafCellResult(new List<string>() { PayloadSizeZero });
         }
         int currentOffset = offset + payloadSize.Length;
-        if (payloadSize.Value + offset > data.Length)
+        if (currentOffset >= data.Length || payloadSize.Value + offset > data.Length)
         {
             return new DeletedBTreeLeafCellResult(new List<string>() { RecordLargerThanPage });
         }
         Varint rowId = Varint.ReadAt(data, currentOffset);
         currentOffset += rowId.Length;
+        if (currentOffset >= data.Length)
+        {
+            return new DeletedBTreeLeafCellResult(new List<string>() { RecordLargerThanPage });
+        }
         Varint headerSize = Varint.ReadAt(data, currentOffset);
         //Need to decode header size, includes varint of size in length
         List<HeaderEntry> HeaderEntries = new();
         var headerOffset = headerSize.Length;
         while (headerOffset < headerSize.Value)
         {
+            if (currentOffset + headerOffset >= data.Length)
+                return new DeletedBTreeLeafCellResult(new List<string>() { RecordLargerThanPage });
             Varint temp = Varint.ReadAt(data, currentOffset + headerOffset);
             HeaderEntries.Add(new HeaderEntry(temp));
             headerOffset += temp.Length;
@@ -71,6 +77,10 @@ public static class DeletedRecordParser
         }
         
         int cellSize = payloadSize.Length + rowId.Length + (int)payloadSize.Value;
+        if (offset + cellSize > data.Length)
+        {
+            return new DeletedBTreeLeafCellResult(new List<string>() { RecordLargerThanPage });
+        }
         return new DeletedBTreeLeafCellResult(
             new BTreeLeafCell(
                 data[offset..(offset + cellSize)].ToArray(),

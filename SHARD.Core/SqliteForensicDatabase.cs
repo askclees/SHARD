@@ -314,6 +314,8 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// </summary>
     public IEnumerable<uint> GetTreePageNumbers(uint rootPage)
     {
+        if (rootPage < 1 || rootPage > PageCount) yield break;
+
         yield return rootPage;
 
         if (ReadPage(rootPage) is BTreeInteriorPage interior)
