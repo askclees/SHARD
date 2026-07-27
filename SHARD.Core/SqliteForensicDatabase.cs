@@ -143,12 +143,20 @@ public sealed class SqliteForensicDatabase : IDisposable
         return map;
     }
 
+    // sqlite_master always has this fixed schema — it is not in itself, so we hardcode it.
+    public static readonly TableSchema SqliteMasterSchema =
+        CreateTableParser.ExtractTableSchema(
+            "CREATE TABLE sqlite_master (type TEXT, name TEXT, tbl_name TEXT, rootpage INTEGER, sql TEXT)")!;
+
     /// <summary>
     /// Returns the parsed <see cref="TableSchema"/> for the named evidence table,
     /// or null if the table is not found or its SQL cannot be parsed.
     /// </summary>
     public TableSchema? GetTableSchema(string tableName)
     {
+        if (string.Equals(tableName, "sqlite_master", StringComparison.OrdinalIgnoreCase))
+            return SqliteMasterSchema;
+
         foreach (var row in ReadSqliteMaster())
         {
             if (row.ObjectType != SqliteMasterObjectType.Table) continue;
