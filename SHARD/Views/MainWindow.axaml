@@ -794,45 +794,99 @@
                                            Opacity="0.35"
                                            FontSize="13" />
 
-                                <Grid IsVisible="{Binding HasSchemaSelection}"
-                                      RowDefinitions="Auto,*">
+                                <TabControl IsVisible="{Binding HasSchemaSelection}"
+                                            Padding="0">
 
-                                    <Border Grid.Row="0"
-                                            Padding="8,4"
-                                            BorderThickness="0,0,0,1">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <ToggleButton x:Name="SchemaOffsetToggle"
-                                                          Content="Dec Offsets"
-                                                          IsChecked="False"
-                                                          Padding="8,2"
-                                                          FontSize="11" />
-                                            <ToggleButton x:Name="SchemaHighlightToggle"
-                                                          Content="Highlights"
-                                                          IsChecked="True"
-                                                          Padding="8,2"
-                                                          FontSize="11" />
-                                            <TextBlock Text="{Binding #SchemaHexView.HoveredLabel}"
-                                                       IsVisible="{Binding #SchemaHexView.HoveredLabel,
-                                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                    <!-- Tab: Hex View -->
+                                    <TabItem Header="Hex View">
+                                        <Grid RowDefinitions="Auto,*">
+
+                                            <Border Grid.Row="0"
+                                                    Padding="8,4"
+                                                    BorderThickness="0,0,0,1">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ToggleButton x:Name="SchemaOffsetToggle"
+                                                                  Content="Dec Offsets"
+                                                                  IsChecked="False"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <ToggleButton x:Name="SchemaHighlightToggle"
+                                                                  Content="Highlights"
+                                                                  IsChecked="True"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <TextBlock Text="{Binding #SchemaHexView.HoveredLabel}"
+                                                               IsVisible="{Binding #SchemaHexView.HoveredLabel,
+                                                                           Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11"
+                                                               Opacity="0.75"
+                                                               Margin="8,0,0,0" />
+                                                </StackPanel>
+                                            </Border>
+
+                                            <ScrollViewer Grid.Row="1"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Auto">
+                                                <controls:HexView x:Name="SchemaHexView"
+                                                                  Margin="14,8,14,16"
+                                                                  Data="{Binding SchemaPageBytes}"
+                                                                  Highlights="{Binding SchemaHighlights}"
+                                                                  UseDecimalOffsets="{Binding #SchemaOffsetToggle.IsChecked}"
+                                                                  ShowHighlights="{Binding #SchemaHighlightToggle.IsChecked}" />
+                                            </ScrollViewer>
+
+                                        </Grid>
+                                    </TabItem>
+
+                                    <!-- Tab: Recovered Records (valid deleted tables only) -->
+                                    <TabItem Header="{Binding RecoveredDeletedRecordsHeader}"
+                                             IsVisible="{Binding HasRecoveredDeletedRecords}">
+                                        <Grid>
+                                            <TextBlock IsVisible="{Binding HasRecoveredDeletedRecords,
+                                                                   Converter={x:Static conv:BoolConverters.Not}}"
+                                                       Text="No records recovered from this table"
+                                                       HorizontalAlignment="Center"
                                                        VerticalAlignment="Center"
-                                                       FontSize="11"
-                                                       Opacity="0.75"
-                                                       Margin="8,0,0,0" />
-                                        </StackPanel>
-                                    </Border>
+                                                       Opacity="0.35"
+                                                       FontSize="12" />
+                                            <ScrollViewer IsVisible="{Binding HasRecoveredDeletedRecords}"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsControl ItemsSource="{Binding RecoveredDeletedRecords}"
+                                                              Margin="14,10">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:RecoveredDeletedRecordViewModel">
+                                                            <Expander Header="{Binding Header}"
+                                                                      IsExpanded="True"
+                                                                      Margin="0,2,0,0">
+                                                                <ItemsControl ItemsSource="{Binding Fields}"
+                                                                              Margin="8,4,0,4">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                                            <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                <TextBlock Grid.Column="0"
+                                                                                           Text="{Binding Label}"
+                                                                                           FontSize="12"
+                                                                                           FontWeight="SemiBold"
+                                                                                           Opacity="0.6" />
+                                                                                <TextBlock Grid.Column="1"
+                                                                                           Text="{Binding Value}"
+                                                                                           FontSize="12"
+                                                                                           TextWrapping="Wrap" />
+                                                                            </Grid>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Expander>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+                                        </Grid>
+                                    </TabItem>
 
-                                    <ScrollViewer Grid.Row="1"
-                                                  VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Auto">
-                                        <controls:HexView x:Name="SchemaHexView"
-                                                          Margin="14,8,14,16"
-                                                          Data="{Binding SchemaPageBytes}"
-                                                          Highlights="{Binding SchemaHighlights}"
-                                                          UseDecimalOffsets="{Binding #SchemaOffsetToggle.IsChecked}"
-                                                          ShowHighlights="{Binding #SchemaHighlightToggle.IsChecked}" />
-                                    </ScrollViewer>
-
-                                </Grid>
+                                </TabControl>
                             </Grid>
 
                         </Grid>

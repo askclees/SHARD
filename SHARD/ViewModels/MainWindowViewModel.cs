@@ -9,6 +9,7 @@ using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
+using SHARD.Core.Schema;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
 
@@ -307,16 +308,56 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 SchemaPageBytes  = Database.ReadPage(value.PageNumber).Data;
                 SchemaHighlights = [new HexHighlight(value.CellOffset, value.CellLength, Color.FromRgb(220, 140, 40), value.Name ?? "deleted")];
+                LoadRecoveredRecords(value);
             }
-            else if (_selectedSchemaRow is null)
+            else
             {
-                SchemaPageBytes  = [];
-                SchemaHighlights = [];
+                if (_selectedSchemaRow is null)
+                {
+                    SchemaPageBytes  = [];
+                    SchemaHighlights = [];
+                }
+                ClearRecoveredRecords();
             }
         }
     }
 
     public bool HasSchemaSelection => _selectedSchemaRow is not null || _selectedDeletedSchemaRow is not null;
+
+    // ── Recovered records from a valid deleted table ───────────────────────
+    public ObservableCollection<RecoveredDeletedRecordViewModel> RecoveredDeletedRecords { get; } = [];
+    public bool HasRecoveredDeletedRecords => RecoveredDeletedRecords.Count > 0;
+    public string RecoveredDeletedRecordsHeader => RecoveredDeletedRecords.Count > 0
+        ? $"Records ({RecoveredDeletedRecords.Count})"
+        : "Records";
+
+    private void LoadRecoveredRecords(DeletedSchemaRowViewModel vm)
+    {
+        ClearRecoveredRecords();
+        if (vm.RootPageStatus != RootPageStatus.Valid) return;
+        if (!vm.RootPage.HasValue || Database is null) return;
+
+        TableSchema? schema = vm.Sql is not null
+            ? CreateTableParser.ExtractTableSchema(vm.Sql)
+            : null;
+
+        try
+        {
+            foreach (var row in Database.ReadTableRows(vm.RootPage.Value))
+                RecoveredDeletedRecords.Add(new RecoveredDeletedRecordViewModel(row, schema));
+        }
+        catch { /* non-fatal — show whatever was read */ }
+
+        this.RaisePropertyChanged(nameof(HasRecoveredDeletedRecords));
+        this.RaisePropertyChanged(nameof(RecoveredDeletedRecordsHeader));
+    }
+
+    private void ClearRecoveredRecords()
+    {
+        RecoveredDeletedRecords.Clear();
+        this.RaisePropertyChanged(nameof(HasRecoveredDeletedRecords));
+        this.RaisePropertyChanged(nameof(RecoveredDeletedRecordsHeader));
+    }
 
     private byte[] _schemaPageBytes = [];
     public byte[] SchemaPageBytes
@@ -647,6 +688,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SelectedDeletedSchemaRow = null;
         this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
         this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
+        ClearRecoveredRecords();
         HeaderBytes      = [];
         HeaderHighlights = [];
         SelectedPage = null;
