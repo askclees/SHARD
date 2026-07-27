@@ -274,18 +274,49 @@ public sealed class MainWindowViewModel : ViewModelBase
         set
         {
             this.RaiseAndSetIfChanged(ref _selectedSchemaRow, value);
+            this.RaisePropertyChanged(nameof(HasSchemaSelection));
             if (value is not null && Database is not null)
             {
                 SchemaPageBytes  = Database.ReadPage(value.PageNumber).Data;
                 SchemaHighlights = [new HexHighlight(value.CellOffset, value.CellLength, Color.FromRgb(78, 201, 176), value.Name)];
             }
-            else
+            else if (_selectedDeletedSchemaRow is null)
             {
                 SchemaPageBytes  = [];
                 SchemaHighlights = [];
             }
         }
     }
+
+    // ── Deleted schema rows + selection ───────────────────────────────────
+    public ObservableCollection<DeletedSchemaRowViewModel> DeletedSchemaRows { get; } = [];
+    public bool HasDeletedSchemaRows => DeletedSchemaRows.Count > 0;
+    public string DeletedSchemaHeader => DeletedSchemaRows.Count > 0
+        ? $"Deleted Tables ({DeletedSchemaRows.Count})"
+        : "Deleted Tables";
+
+    private DeletedSchemaRowViewModel? _selectedDeletedSchemaRow;
+    public DeletedSchemaRowViewModel? SelectedDeletedSchemaRow
+    {
+        get => _selectedDeletedSchemaRow;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedDeletedSchemaRow, value);
+            this.RaisePropertyChanged(nameof(HasSchemaSelection));
+            if (value is not null && Database is not null)
+            {
+                SchemaPageBytes  = Database.ReadPage(value.PageNumber).Data;
+                SchemaHighlights = [new HexHighlight(value.CellOffset, value.CellLength, Color.FromRgb(220, 140, 40), value.Name ?? "deleted")];
+            }
+            else if (_selectedSchemaRow is null)
+            {
+                SchemaPageBytes  = [];
+                SchemaHighlights = [];
+            }
+        }
+    }
+
+    public bool HasSchemaSelection => _selectedSchemaRow is not null || _selectedDeletedSchemaRow is not null;
 
     private byte[] _schemaPageBytes = [];
     public byte[] SchemaPageBytes
@@ -546,6 +577,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             foreach (var row in db.ReadSqliteMaster())
                 SchemaRows.Add(row);
 
+            try
+            {
+                foreach (var deleted in db.ReadDeletedSqliteMaster())
+                    DeletedSchemaRows.Add(new DeletedSchemaRowViewModel(deleted));
+            }
+            catch { /* non-fatal — proceed without deleted table data */ }
+            this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
+            this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
+
             foreach (var page in db.ReadAllPages())
                 Pages.Add(MakePageListEntry(page));
             RefreshAvailableTableNames();
@@ -603,6 +643,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         DatabaseInfoRows.Clear();
         SchemaRows.Clear();
         SelectedSchemaRow = null;
+        DeletedSchemaRows.Clear();
+        SelectedDeletedSchemaRow = null;
+        this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
+        this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
         HeaderBytes      = [];
         HeaderHighlights = [];
         SelectedPage = null;
