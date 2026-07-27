@@ -167,6 +167,38 @@ public sealed class SqliteForensicDatabase : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Carves deleted records from every leaf page of the named table's B-tree by
+    /// scanning unallocated regions with schema-driven validation. Results are stored
+    /// in <see cref="TableBTreeLeafPage.CarvedCells"/> on each page and also yielded
+    /// here for convenience. Returns an empty sequence if the schema cannot be resolved
+    /// or the table is not found.
+    /// </summary>
+    public IEnumerable<BTreeLeafCell> CarveTableDeletedCells(string tableName)
+    {
+        var schema = GetTableSchema(tableName);
+        if (schema is null) yield break;
+
+        var recordStructure = RecordStructure.FromSchema(schema);
+
+        uint? rootPage = string.Equals(tableName, "sqlite_master", StringComparison.OrdinalIgnoreCase)
+            ? 1u
+            : ReadSqliteMaster()
+                .FirstOrDefault(r => r.ObjectType == SqliteMasterObjectType.Table
+                                  && string.Equals(r.Name, tableName, StringComparison.OrdinalIgnoreCase))
+                ?.RootPage;
+
+        if (rootPage is null) yield break;
+
+        foreach (uint pageNum in GetTreePageNumbers(rootPage.Value))
+        {
+            if (ReadPage(pageNum) is not TableBTreeLeafPage leaf) continue;
+            leaf.CarveDeletedCells(recordStructure);
+            foreach (var cell in leaf.CarvedCells)
+                yield return cell;
+        }
+    }
+
     /// Read and return all rows from the sqlite_master table (page 1).
     /// Traverses interior pages if necessary.
     /// </summary>
