@@ -279,7 +279,7 @@ public static class ShadowDatabaseBuilder
     }
 
     /// <summary>Records which table's B-tree a set of pages belongs to (root, interior, and leaf pages).</summary>
-    private static void TagTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
+    public static void TagTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
     {
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
@@ -503,6 +503,15 @@ public static class ShadowDatabaseBuilder
         placeholders.Add("@p_overflow");
 
         return $"INSERT INTO {QuoteIdentifier(schema.TableName)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+    }
+
+    /// <summary>
+    /// Tags the given page numbers in <c>_shard_pages</c> with <c>"{tableName} (deleted)"</c>
+    /// so they appear correctly labelled in the Pages list.
+    /// </summary>
+    public static void TagDeletedTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
+    {
+        TagTablePages(connection, $"{tableName} (deleted)", pageNumbers);
     }
 
     /// <summary>

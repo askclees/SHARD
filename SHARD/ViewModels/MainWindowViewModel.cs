@@ -647,7 +647,12 @@ public sealed class MainWindowViewModel : ViewModelBase
                 {
                     var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
                     if (schema is null) continue;
-                    try { project.AddDeletedTableRecords(schema, Database.ReadTableRows(deletedVm.RootPage!.Value)); }
+                    try
+                    {
+                        var pageNums = Database.GetTreePageNumbers(deletedVm.RootPage!.Value).ToList();
+                        project.AddDeletedTableRecords(schema, Database.ReadTableRows(deletedVm.RootPage!.Value));
+                        project.TagDeletedTablePages(schema.TableName, pageNums);
+                    }
                     catch { }
                 }
 

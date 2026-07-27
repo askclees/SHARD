@@ -115,6 +115,17 @@ public sealed class ShadowProject : IDisposable
         ShadowDatabaseBuilder.CreateAndPopulateDeletedTable(connection, schema, rows);
     }
 
+    /// <summary>
+    /// Updates <c>_shard_pages</c> to label the given page numbers as belonging to a
+    /// dropped table (shown as <c>"tableName (deleted)"</c> in the Pages list).
+    /// </summary>
+    public void TagDeletedTablePages(string tableName, IEnumerable<uint> pageNumbers)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        ShadowDatabaseBuilder.TagDeletedTablePages(connection, tableName, pageNumbers);
+    }
+
     /// <summary>Insert a recovered (deleted) record into the shadow database.</summary>
     public void SaveRecoveredRecord(TableSchema schema, BTreeLeafCell cell, uint pageNumber, int cellOffset)
     {
