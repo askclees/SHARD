@@ -228,9 +228,20 @@ public sealed class MainWindowViewModel : ViewModelBase
         set
         {
             this.RaiseAndSetIfChanged(ref _selectedPage, value);
-            SelectedPageDetail = value is not null && Database is not null
-                ? new PageViewModel(Database.ReadPage(value.PageNumber))
+            SqlitePage? page = value is not null && Database is not null
+                ? Database.ReadPage(value.PageNumber)
                 : null;
+            if (page is TableBTreeLeafPage tlp && value?.TableName is { } tn)
+            {
+                var schema = Database!.GetTableSchema(tn);
+                if (schema is not null)
+                {
+                    var rs = RecordStructure.FromSchema(schema);
+                    tlp.CarveDeletedCells(rs);
+                    tlp.CarveFreeblockCells(rs);
+                }
+            }
+            SelectedPageDetail = page is not null ? new PageViewModel(page) : null;
             LastRecoveryResult = null;
             this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
