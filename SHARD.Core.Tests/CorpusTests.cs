@@ -387,6 +387,10 @@ public class CorpusTests(ITestOutputHelper output)
         string? summaryPath = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
         if (summaryPath is not null)
             File.AppendAllText(summaryPath, report);
+
+        string? reportFilePath = Environment.GetEnvironmentVariable("CORPUS_REPORT_FILE");
+        if (reportFilePath is not null)
+            File.WriteAllText(reportFilePath, report);
     }
 
     // ── Report builder ────────────────────────────────────────────────────────

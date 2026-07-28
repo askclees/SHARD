@@ -32,7 +32,17 @@ jobs:
 
     - name: Corpus Recovery Report
       continue-on-error: true
+      env:
+        CORPUS_REPORT_FILE: corpus-recovery-report.md
       run: dotnet test --no-build --verbosity normal --filter "FullyQualifiedName~GenerateCorpusReport"
+
+    - name: Upload corpus report artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: corpus-recovery-report
+        path: corpus-recovery-report.md
+        if-no-files-found: ignore
 
   release:
     needs: build
@@ -64,6 +74,13 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Download corpus report
+      if: steps.check.outputs.exists == 'false'
+      uses: actions/download-artifact@v4
+      with:
+        name: corpus-recovery-report
+      continue-on-error: true
+
     - name: Publish Windows
       if: steps.check.outputs.exists == 'false'
       run: dotnet publish SHARD/SHARD.csproj -c Release -r win-x64 --no-self-contained -o ./publish/win-x64
@@ -92,11 +109,16 @@ jobs:
     - name: Create release
       if: steps.check.outputs.exists == 'false'
       run: |
+        REPORT_ARG=""
+        if [ -f corpus-recovery-report.md ]; then
+          REPORT_ARG="corpus-recovery-report.md"
+        fi
         gh release create "v${{ steps.version.outputs.version }}" \
           SHARD-win-x64.zip \
           SHARD-linux-x64.zip \
           SHARD-osx-x64.zip \
           SHARD-osx-arm64.zip \
+          $REPORT_ARG \
           --title "SHARD v${{ steps.version.outputs.version }}" \
           --prerelease \
           --generate-notes
