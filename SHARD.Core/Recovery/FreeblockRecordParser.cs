@@ -25,6 +25,37 @@ namespace SHARD.Core.Recovery;
 /// </summary>
 public static class FreeblockRecordParser
 {
+    /// <summary>
+    /// Applies the three k-templates at <paramref name="offset"/> without any
+    /// freeblock-list context — used by the unallocated-region second pass.
+    /// <paramref name="maxSize"/> is the remaining space available (passed as the
+    /// fbSize bound to TryK2). Returns null when no template matches.
+    /// </summary>
+    public static BTreeLeafCell? RecoverAtOffset(
+        byte[] pageData, int offset, int maxSize,
+        IReadOnlyList<BTreeLeafCell> referenceCells,
+        TextEncoding encoding, RecordStructure recordStructure)
+    {
+        long loPayload, hiPayload;
+        if (referenceCells.Count > 0)
+        {
+            long minP = referenceCells.Min(c => c.SizeOfPayload.Value);
+            long maxP = referenceCells.Max(c => c.SizeOfPayload.Value);
+            long tol  = Math.Max(64L, maxP - minP + 64L);
+            loPayload = Math.Max(1L, minP - tol);
+            hiPayload = maxP + tol;
+        }
+        else
+        {
+            loPayload = 1;
+            hiPayload = pageData.Length;
+        }
+
+        return TryK4(pageData, offset, loPayload, hiPayload, encoding, recordStructure)
+            ?? TryK3(pageData, offset, loPayload, hiPayload, encoding, recordStructure)
+            ?? TryK2(pageData, offset, maxSize, loPayload, hiPayload, referenceCells, encoding, recordStructure);
+    }
+
     public static IEnumerable<BTreeLeafCell> RecoverFromFreeblock(
         byte[] pageData,
         PageFreeBlock freeblock,
