@@ -229,7 +229,7 @@ public static class CreateTableParser
         while (pos < s.Length && char.IsWhiteSpace(s[pos])) pos++;
         if (pos >= s.Length) { endPos = pos; return ""; }
 
-        if (s[pos] is '"' or '`' or '[')
+        if (s[pos] is '"' or '`' or '[' or '\'')
         {
             int end = SkipQuotedOrBracketed(s, pos);
             endPos = end;

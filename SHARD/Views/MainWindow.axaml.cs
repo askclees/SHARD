@@ -35,7 +35,7 @@ public partial class MainWindow : Window
         // Wire up named controls
         this.FindControl<MenuItem>("MenuOpen")!.Click          += OnOpenClick;
         this.FindControl<MenuItem>("MenuClose")!.Click         += OnCloseClick;
-        this.FindControl<MenuItem>("MenuCreateProject")!.Click += OnCreateProjectClick;
+        this.FindControl<MenuItem>("MenuSaveProject")!.Click   += OnSaveProjectClick;
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
@@ -95,8 +95,8 @@ public partial class MainWindow : Window
 
     private void OnTableDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (sender is ListBox { SelectedItem: string table })
-            Vm.QueryTab.RunQueryForTable(table);
+        if (sender is ListBox { SelectedItem: QueryTableViewModel table })
+            Vm.QueryTab.RunQueryForTable(table.ActualName);
     }
 
     // ── File open ────────────────────────────────────────────────────────────
@@ -130,22 +130,16 @@ public partial class MainWindow : Window
             Vm.LoadWalFile(file.Path.LocalPath);
     }
 
-    private async void OnCreateProjectClick(object? sender, RoutedEventArgs e)
+    private async void OnSaveProjectClick(object? sender, RoutedEventArgs e)
     {
-        string? candidate = Vm.CurrentFilePath + "-wal";
-        string? detectedWal = Vm.WalTab is null && System.IO.File.Exists(candidate)
-            ? candidate
-            : null; // already loaded or not found — no need to offer
-
-        var dialog = new CreateProjectWindow(detectedWal);
-        var result = await dialog.ShowDialog<CreateProjectResult?>(this);
-
-        if (result is not null)
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
-            Vm.CreateProject(result.FolderPath);
-            if (result.WalPathToLoad is not null)
-                Vm.LoadWalFile(result.WalPathToLoad);
-        }
+            Title         = "Save Project To Folder",
+            AllowMultiple = false,
+        });
+
+        if (folders is [var folder])
+            Vm.SaveProject(folder.Path.LocalPath);
     }
 
     private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)

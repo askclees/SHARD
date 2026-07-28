@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
 
@@ -15,18 +16,33 @@ namespace SHARD.Core.Shadow;
 /// </summary>
 public static class ShadowDatabaseBuilder
 {
-    private const string PageNumberColumn = "_page_number";
-    private const string CellOffsetColumn = "_cell_offset";
+    private const string PageNumberColumn    = "_page_number";
+    private const string CellOffsetColumn   = "_cell_offset";
     private const string OverflowPageColumn = "_overflow_page";
+    private const string RecoveryMethodColumn = "_recovery_method";
+
+    public const string RecoveryMethodDeletedCell = "deleted_cell";
+    public const string RecoveryMethodCarving     = "carving";
+    public const string RecoveryMethodFreeblock   = "freeblock";
+    public const string RecoveryMethodManual      = "manual";
 
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
-    public const string InternalTablePrefix = "_shard_";
+    public const string InternalTablePrefix  = "_shard_";
     public const string RecoveredTablePrefix = InternalTablePrefix + "recovered_";
+    /// <summary>Prefix for shadow tables that hold records read from a dropped table's still-valid root page.</summary>
+    public const string DeletedTablePrefix   = InternalTablePrefix + "deleted_";
     private const string OverflowTableName = InternalTablePrefix + "overflow_pages";
     private const string PagesTableName    = InternalTablePrefix + "pages";
 
-    public static void Create(string shadowDbPath, SqliteForensicDatabase database)
+    /// <summary>
+    /// Builds the shadow database. Returns a list of warning strings for any user tables that
+    /// were silently skipped (e.g. unparseable SQL, empty schema). Empty list means all tables
+    /// were processed.
+    /// </summary>
+    public static IReadOnlyList<string> Create(string shadowDbPath, SqliteForensicDatabase database)
     {
+        var warnings = new List<string>();
+
         using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
         connection.Open();
 
@@ -38,7 +54,11 @@ public static class ShadowDatabaseBuilder
         foreach (var row in database.ReadSqliteMaster())
         {
             if (row.ObjectType != SqliteMasterObjectType.Table) continue;
-            if (row.Sql is null || row.RootPage is null) continue;
+            if (row.Sql is null || row.RootPage is null)
+            {
+                warnings.Add($"Skipped table '{row.Name}': missing SQL or root page in sqlite_master.");
+                continue;
+            }
             if (row.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase))
             {
                 TagTablePages(connection, row.Name, database.GetTreePageNumbers(row.RootPage.Value));
@@ -47,7 +67,16 @@ public static class ShadowDatabaseBuilder
             if (row.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase)) continue;
 
             var tableSchema = CreateTableParser.ExtractTableSchema(row.Sql);
-            if (tableSchema is null || tableSchema.Columns.Count == 0) continue;
+            if (tableSchema is null)
+            {
+                warnings.Add($"Skipped table '{row.Name}': CREATE TABLE SQL could not be parsed.\nSQL: {row.Sql}");
+                continue;
+            }
+            if (tableSchema.Columns.Count == 0)
+            {
+                warnings.Add($"Skipped table '{row.Name}': no columns were parsed from the schema.\nSQL: {row.Sql}");
+                continue;
+            }
 
             string createTableSql = BuildCreateTableSql(tableSchema);
             try
@@ -65,6 +94,7 @@ public static class ShadowDatabaseBuilder
                 }
 
                 InsertRows(connection, tableSchema, database.ReadTableRows(row.RootPage.Value));
+                InsertDeletedRows(connection, tableSchema, row.RootPage.Value, database);
                 TagTablePages(connection, tableSchema.TableName, database.GetTreePageNumbers(row.RootPage.Value));
             }
             catch (Exception ex)
@@ -86,6 +116,8 @@ public static class ShadowDatabaseBuilder
         }
 
         TagFreelistPages(connection, database);
+
+        return warnings;
     }
 
     public static string BuildCreateTableSql(TableSchema schema)
@@ -127,9 +159,10 @@ public static class ShadowDatabaseBuilder
             return string.Join(' ', parts);
         }).ToList();
 
-        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}  INTEGER NOT NULL");
-        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)} INTEGER NOT NULL");
-        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)} INTEGER NOT NULL DEFAULT 0");
+        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}     INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)}    INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)}  INTEGER NOT NULL DEFAULT 0");
+        columnSql.Add($"{QuoteIdentifier(RecoveryMethodColumn)} TEXT NOT NULL");
 
         string tableName = RecoveredTablePrefix + schema.TableName;
         return $"CREATE TABLE {QuoteIdentifier(tableName)} (\n  {string.Join(",\n  ", columnSql)}\n)";
@@ -182,14 +215,17 @@ public static class ShadowDatabaseBuilder
         TableSchema schema,
         BTreeLeafCell cell,
         uint pageNumber,
-        int cellOffset)
+        int cellOffset,
+        string recoveryMethod = RecoveryMethodManual)
     {
         string recoveredTable = RecoveredTablePrefix + schema.TableName;
 
         var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
         var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
-        columnNames.Add(QuoteIdentifier(PageNumberColumn));  placeholders.Add("@p_page");
-        columnNames.Add(QuoteIdentifier(CellOffsetColumn)); placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));     placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn));     placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(OverflowPageColumn));   placeholders.Add("@p_overflow");
+        columnNames.Add(QuoteIdentifier(RecoveryMethodColumn)); placeholders.Add("@p_method");
 
         string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} " +
                      $"({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
@@ -205,8 +241,10 @@ public static class ShadowDatabaseBuilder
             command.Parameters.AddWithValue($"@p{i}", value);
         }
 
-        command.Parameters.AddWithValue("@p_page",   (long)pageNumber);
-        command.Parameters.AddWithValue("@p_offset", cellOffset);
+        command.Parameters.AddWithValue("@p_page",    (long)pageNumber);
+        command.Parameters.AddWithValue("@p_offset",  cellOffset);
+        command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
+        command.Parameters.AddWithValue("@p_method",  recoveryMethod);
         command.ExecuteNonQuery();
     }
 
@@ -241,7 +279,7 @@ public static class ShadowDatabaseBuilder
     }
 
     /// <summary>Records which table's B-tree a set of pages belongs to (root, interior, and leaf pages).</summary>
-    private static void TagTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
+    public static void TagTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
     {
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
@@ -394,6 +432,64 @@ public static class ShadowDatabaseBuilder
         transaction.Commit();
     }
 
+    private static void InsertDeletedRows(SqliteConnection connection, TableSchema schema, uint rootPage, SqliteForensicDatabase database)
+    {
+        using var transaction = connection.BeginTransaction();
+        string recoveredTable = RecoveredTablePrefix + schema.TableName;
+
+        var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        columnNames.Add(QuoteIdentifier(PageNumberColumn));     placeholders.Add("@p_page");
+        columnNames.Add(QuoteIdentifier(CellOffsetColumn));     placeholders.Add("@p_offset");
+        columnNames.Add(QuoteIdentifier(OverflowPageColumn));   placeholders.Add("@p_overflow");
+        columnNames.Add(QuoteIdentifier(RecoveryMethodColumn)); placeholders.Add("@p_method");
+
+        string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        var recordStructure = RecordStructure.FromSchema(schema);
+
+        foreach (uint pageNum in database.GetTreePageNumbers(rootPage))
+        {
+            if (database.ReadPage(pageNum) is not TableBTreeLeafPage tlp) continue;
+
+            foreach (var cell in tlp.DeletedCells)
+                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell);
+
+            tlp.CarveDeletedCells(recordStructure);
+            foreach (var cell in tlp.CarvedCells)
+                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving);
+
+            tlp.CarveFreeblockCells(recordStructure);
+            foreach (var cell in tlp.FreeblockCells)
+                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock);
+        }
+
+        transaction.Commit();
+    }
+
+    private static void InsertRecoveredCellInTransaction(
+        SqliteConnection connection, SqliteTransaction transaction,
+        string sql, TableSchema schema, BTreeLeafCell cell, uint pageNum, string recoveryMethod)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+
+        for (int i = 0; i < schema.Columns.Count; i++)
+        {
+            object value = schema.Columns[i].IsRowIdAlias
+                ? cell.RowId.Value
+                : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+            command.Parameters.AddWithValue($"@p{i}", value);
+        }
+
+        command.Parameters.AddWithValue("@p_page",    (long)pageNum);
+        command.Parameters.AddWithValue("@p_offset",  cell.PageOffset);
+        command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
+        command.Parameters.AddWithValue("@p_method",  recoveryMethod);
+        command.ExecuteNonQuery();
+    }
+
     private static string BuildInsertSql(TableSchema schema)
     {
         var columnNames = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
@@ -407,6 +503,75 @@ public static class ShadowDatabaseBuilder
         placeholders.Add("@p_overflow");
 
         return $"INSERT INTO {QuoteIdentifier(schema.TableName)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+    }
+
+    /// <summary>
+    /// Tags the given page numbers in <c>_shard_pages</c> with <c>"{tableName} (deleted)"</c>
+    /// so they appear correctly labelled in the Pages list.
+    /// </summary>
+    public static void TagDeletedTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
+    {
+        TagTablePages(connection, $"{tableName} (deleted)", pageNumbers);
+    }
+
+    /// <summary>
+    /// Creates a <c>_shard_deleted_{tableName}</c> table in the shadow database and
+    /// populates it with rows read directly from a dropped table's still-valid root page.
+    /// Uses <c>CREATE TABLE IF NOT EXISTS</c> so it is safe to call more than once.
+    /// </summary>
+    public static void CreateAndPopulateDeletedTable(
+        SqliteConnection connection, TableSchema schema, IEnumerable<TableRow> rows)
+    {
+        string shadowTable = DeletedTablePrefix + schema.TableName;
+
+        var columnSql = schema.Columns.Select(c =>
+        {
+            var parts = new List<string> { QuoteIdentifier(c.Name) };
+            if (!string.IsNullOrEmpty(c.DeclaredType)) parts.Add(c.DeclaredType);
+            return string.Join(' ', parts);
+        }).ToList();
+
+        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}    INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)}   INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)} INTEGER NOT NULL DEFAULT 0");
+
+        using (var create = connection.CreateCommand())
+        {
+            create.CommandText = $"CREATE TABLE IF NOT EXISTS {QuoteIdentifier(shadowTable)} (\n  {string.Join(",\n  ", columnSql)}\n)";
+            create.ExecuteNonQuery();
+        }
+
+        var colNames     = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        colNames.Add(QuoteIdentifier(PageNumberColumn));    placeholders.Add("@p_page");
+        colNames.Add(QuoteIdentifier(CellOffsetColumn));   placeholders.Add("@p_offset");
+        colNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
+
+        string insertSql = $"INSERT INTO {QuoteIdentifier(shadowTable)} ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", placeholders)})";
+
+        using var transaction = connection.BeginTransaction();
+        foreach (var row in rows)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction  = transaction;
+            cmd.CommandText  = insertSql;
+
+            for (int i = 0; i < schema.Columns.Count; i++)
+            {
+                var col = schema.Columns[i];
+                object value = col.IsRowIdAlias
+                    ? row.RowId
+                    : (object?)(i < row.FieldValues.Count ? row.FieldValues[i]?.Value : null) ?? DBNull.Value;
+                cmd.Parameters.AddWithValue($"@p{i}", value);
+            }
+
+            cmd.Parameters.AddWithValue("@p_page",    (long)row.PageNumber);
+            cmd.Parameters.AddWithValue("@p_offset",  (long)row.CellOffset);
+            cmd.Parameters.AddWithValue("@p_overflow",
+                (long)(row.OverflowFragments.Count > 0 ? row.OverflowFragments[0].PageNumber : 0));
+            cmd.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";

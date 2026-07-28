@@ -3,6 +3,7 @@ using System.IO;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
 
 namespace SHARD.Core;
@@ -143,12 +144,20 @@ public sealed class SqliteForensicDatabase : IDisposable
         return map;
     }
 
+    // sqlite_master always has this fixed schema — it is not in itself, so we hardcode it.
+    public static readonly TableSchema SqliteMasterSchema =
+        CreateTableParser.ExtractTableSchema(
+            "CREATE TABLE sqlite_master (type TEXT, name TEXT, tbl_name TEXT, rootpage INTEGER, sql TEXT)")!;
+
     /// <summary>
     /// Returns the parsed <see cref="TableSchema"/> for the named evidence table,
     /// or null if the table is not found or its SQL cannot be parsed.
     /// </summary>
     public TableSchema? GetTableSchema(string tableName)
     {
+        if (string.Equals(tableName, "sqlite_master", StringComparison.OrdinalIgnoreCase))
+            return SqliteMasterSchema;
+
         foreach (var row in ReadSqliteMaster())
         {
             if (row.ObjectType != SqliteMasterObjectType.Table) continue;
@@ -157,6 +166,98 @@ public sealed class SqliteForensicDatabase : IDisposable
             return CreateTableParser.ExtractTableSchema(row.Sql);
         }
         return null;
+    }
+
+    /// <summary>
+    /// Carves deleted records from every leaf page of the named table's B-tree by
+    /// scanning unallocated regions with schema-driven validation. Results are stored
+    /// in <see cref="TableBTreeLeafPage.CarvedCells"/> on each page and also yielded
+    /// here for convenience. Returns an empty sequence if the schema cannot be resolved
+    /// or the table is not found.
+    /// </summary>
+    public IEnumerable<BTreeLeafCell> CarveTableDeletedCells(string tableName)
+    {
+        var schema = GetTableSchema(tableName);
+        if (schema is null) yield break;
+
+        var recordStructure = RecordStructure.FromSchema(schema);
+
+        uint? rootPage = string.Equals(tableName, "sqlite_master", StringComparison.OrdinalIgnoreCase)
+            ? 1u
+            : ReadSqliteMaster()
+                .FirstOrDefault(r => r.ObjectType == SqliteMasterObjectType.Table
+                                  && string.Equals(r.Name, tableName, StringComparison.OrdinalIgnoreCase))
+                ?.RootPage;
+
+        if (rootPage is null) yield break;
+
+        foreach (uint pageNum in GetTreePageNumbers(rootPage.Value))
+        {
+            if (ReadPage(pageNum) is not TableBTreeLeafPage leaf) continue;
+            leaf.CarveDeletedCells(recordStructure);
+            foreach (var cell in leaf.CarvedCells)
+                yield return cell;
+        }
+    }
+
+    /// <summary>
+    /// Carves deleted records from every sqlite_master leaf page and returns those that
+    /// parse as valid schema rows. Each result includes how the cell was recovered and
+    /// whether the table's root page still holds readable B-tree data.
+    /// </summary>
+    public IEnumerable<DeletedSqliteMasterRow> ReadDeletedSqliteMaster()
+    {
+        // Build the set of root pages currently claimed by live objects so we can
+        // distinguish "still valid" from "reused by another table".
+        var liveRootPages = new HashSet<uint>();
+        liveRootPages.Add(1); // sqlite_master itself
+        foreach (var row in ReadSqliteMaster())
+            if (row.RootPage.HasValue)
+                liveRootPages.Add(row.RootPage.Value);
+
+        var recordStructure = RecordStructure.FromSchema(SqliteMasterSchema);
+
+        foreach (uint pageNum in GetLeafPageNumbers(1))
+        {
+            if (ReadPage(pageNum) is not TableBTreeLeafPage leaf) continue;
+
+            leaf.CarveDeletedCells(recordStructure);
+            leaf.CarveFreeblockCells(recordStructure);
+
+            var candidates =
+                leaf.DeletedCells  .Select(c => (Cell: c, Method: "deleted-pointer"))
+                .Concat(leaf.CarvedCells   .Select(c => (Cell: c, Method: "carved")))
+                .Concat(leaf.FreeblockCells.Select(c => (Cell: c, Method: "freeblock")));
+
+            foreach (var (cell, method) in candidates)
+            {
+                var masterRow = CreateSqliteMasterRowFromCell(cell, pageNum, cell.PageOffset);
+                if (masterRow is null) continue;
+
+                var status = masterRow.RootPage.HasValue
+                    ? CheckRootPageValidity(masterRow.RootPage.Value, liveRootPages)
+                    : RootPageStatus.Invalid;
+
+                yield return new DeletedSqliteMasterRow(masterRow, method, status);
+            }
+        }
+    }
+
+    private RootPageStatus CheckRootPageValidity(uint rootPage, HashSet<uint> liveRootPages)
+    {
+        if (rootPage < 1 || rootPage > PageCount) return RootPageStatus.Invalid;
+        if (liveRootPages.Contains(rootPage))      return RootPageStatus.Reused;
+        try
+        {
+            var page = ReadPage(rootPage);
+            return page is TableBTreeLeafPage or TableBTreeInteriorPage
+                ? RootPageStatus.Valid
+                : RootPageStatus.Freed;
+        }
+        catch
+        {
+            return RootPageStatus.Invalid;
+        }
     }
 
     /// Read and return all rows from the sqlite_master table (page 1).
@@ -274,6 +375,8 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// </summary>
     public IEnumerable<uint> GetTreePageNumbers(uint rootPage)
     {
+        if (rootPage < 1 || rootPage > PageCount) yield break;
+
         yield return rootPage;
 
         if (ReadPage(rootPage) is BTreeInteriorPage interior)
@@ -297,9 +400,19 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// <summary>
     /// Read and return all rows from a table's B-tree given its root page, resolving overflow
     /// chains and decorating each row with the forensic provenance of its primary cell.
+    /// Handles both ordinary (rowid) tables and WITHOUT ROWID tables, which SQLite stores as
+    /// index B-trees (leaf page type 0x0A) rather than table B-trees (0x0D).
     /// </summary>
     public IEnumerable<TableRow> ReadTableRows(uint rootPage)
     {
+        // WITHOUT ROWID tables are stored as index B-trees
+        if (ReadPage(rootPage) is IndexBTreeLeafPage or IndexBTreeInteriorPage)
+        {
+            foreach (var row in ReadWithoutRowidTableRows(rootPage))
+                yield return row;
+            yield break;
+        }
+
         foreach (var (cell, pageNum, cellOffset) in ReadTableCells(rootPage))
         {
             List<OverflowFragment> fragments = [];
@@ -319,6 +432,34 @@ public sealed class SqliteForensicDatabase : IDisposable
                 CellLength        = cell.CellByteLengthOnPage,
                 OverflowFragments = fragments,
             };
+        }
+    }
+
+    private IEnumerable<TableRow> ReadWithoutRowidTableRows(uint rootPage)
+    {
+        foreach (uint pageNum in GetTreePageNumbers(rootPage))
+        {
+            if (ReadPage(pageNum) is not IndexBTreeLeafPage leaf) continue;
+            for (int i = 0; i < leaf.Cells.Count; i++)
+            {
+                var cell = leaf.Cells[i];
+                List<OverflowFragment> fragments = [];
+                if (cell.OverflowPage != 0)
+                {
+                    var (overflowBytes, frags) = ReadOverflowChain(cell.OverflowPage, cell.OverflowBytesNeeded);
+                    cell.ResolveOverflow(overflowBytes);
+                    fragments = frags;
+                }
+                yield return new TableRow
+                {
+                    RowId             = 0, // WITHOUT ROWID tables have no rowid
+                    FieldValues       = cell.FieldValues,
+                    PageNumber        = pageNum,
+                    CellOffset        = leaf.CellPointers[i],
+                    CellLength        = cell.CellByteLengthOnPage,
+                    OverflowFragments = fragments,
+                };
+            }
         }
     }
 

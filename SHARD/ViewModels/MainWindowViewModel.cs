@@ -9,6 +9,7 @@ using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
+using SHARD.Core.Schema;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
 
@@ -274,17 +275,88 @@ public sealed class MainWindowViewModel : ViewModelBase
         set
         {
             this.RaiseAndSetIfChanged(ref _selectedSchemaRow, value);
+            this.RaisePropertyChanged(nameof(HasSchemaSelection));
             if (value is not null && Database is not null)
             {
                 SchemaPageBytes  = Database.ReadPage(value.PageNumber).Data;
                 SchemaHighlights = [new HexHighlight(value.CellOffset, value.CellLength, Color.FromRgb(78, 201, 176), value.Name)];
             }
-            else
+            else if (_selectedDeletedSchemaRow is null)
             {
                 SchemaPageBytes  = [];
                 SchemaHighlights = [];
             }
         }
+    }
+
+    // ── Deleted schema rows + selection ───────────────────────────────────
+    public ObservableCollection<DeletedSchemaRowViewModel> DeletedSchemaRows { get; } = [];
+    public bool HasDeletedSchemaRows => DeletedSchemaRows.Count > 0;
+    public string DeletedSchemaHeader => DeletedSchemaRows.Count > 0
+        ? $"Deleted Tables ({DeletedSchemaRows.Count})"
+        : "Deleted Tables";
+
+    private DeletedSchemaRowViewModel? _selectedDeletedSchemaRow;
+    public DeletedSchemaRowViewModel? SelectedDeletedSchemaRow
+    {
+        get => _selectedDeletedSchemaRow;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _selectedDeletedSchemaRow, value);
+            this.RaisePropertyChanged(nameof(HasSchemaSelection));
+            if (value is not null && Database is not null)
+            {
+                SchemaPageBytes  = Database.ReadPage(value.PageNumber).Data;
+                SchemaHighlights = [new HexHighlight(value.CellOffset, value.CellLength, Color.FromRgb(220, 140, 40), value.Name ?? "deleted")];
+                LoadRecoveredRecords(value);
+            }
+            else
+            {
+                if (_selectedSchemaRow is null)
+                {
+                    SchemaPageBytes  = [];
+                    SchemaHighlights = [];
+                }
+                ClearRecoveredRecords();
+            }
+        }
+    }
+
+    public bool HasSchemaSelection => _selectedSchemaRow is not null || _selectedDeletedSchemaRow is not null;
+
+    // ── Recovered records from a valid deleted table ───────────────────────
+    public ObservableCollection<RecoveredDeletedRecordViewModel> RecoveredDeletedRecords { get; } = [];
+    public bool HasRecoveredDeletedRecords => RecoveredDeletedRecords.Count > 0;
+    public string RecoveredDeletedRecordsHeader => RecoveredDeletedRecords.Count > 0
+        ? $"Records ({RecoveredDeletedRecords.Count})"
+        : "Records";
+
+    private void LoadRecoveredRecords(DeletedSchemaRowViewModel vm)
+    {
+        ClearRecoveredRecords();
+        if (vm.RootPageStatus != RootPageStatus.Valid) return;
+        if (!vm.RootPage.HasValue || Database is null) return;
+
+        TableSchema? schema = vm.Sql is not null
+            ? CreateTableParser.ExtractTableSchema(vm.Sql)
+            : null;
+
+        try
+        {
+            foreach (var row in Database.ReadTableRows(vm.RootPage.Value))
+                RecoveredDeletedRecords.Add(new RecoveredDeletedRecordViewModel(row, schema));
+        }
+        catch { /* non-fatal — show whatever was read */ }
+
+        this.RaisePropertyChanged(nameof(HasRecoveredDeletedRecords));
+        this.RaisePropertyChanged(nameof(RecoveredDeletedRecordsHeader));
+    }
+
+    private void ClearRecoveredRecords()
+    {
+        RecoveredDeletedRecords.Clear();
+        this.RaisePropertyChanged(nameof(HasRecoveredDeletedRecords));
+        this.RaisePropertyChanged(nameof(RecoveredDeletedRecordsHeader));
     }
 
     private byte[] _schemaPageBytes = [];
@@ -334,7 +406,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
     public bool HasProject => Project is not null;
-    public string? ProjectFolderPath => Project?.ProjectFolder;
+    public string? ProjectFolderPath => Project?.IsUnsaved == true ? "(unsaved)" : Project?.ProjectFolder;
 
     // ── Record recovery ────────────────────────────────────────────────────
     private int _selectedByteOffset = -1;
@@ -349,7 +421,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     public bool CanTryRecoverRecord =>
-        HasProject &&
+        Project is not null &&
         SelectedByteOffset >= 0 &&
         SelectedPage?.PageType == PageType.BTreeLeafTable;
 
@@ -387,7 +459,6 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     public string? TryRecoverRecordAtOffset()
     {
-        if (!HasProject)         return "A project must be open to recover records.";
         if (SelectedPage?.PageType != PageType.BTreeLeafTable)
                                  return "Record recovery is only available on table leaf pages.";
         if (SelectedPageDetail is null || SelectedByteOffset < 0 || Database is null)
@@ -547,6 +618,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             foreach (var row in db.ReadSqliteMaster())
                 SchemaRows.Add(row);
 
+            try
+            {
+                foreach (var deleted in db.ReadDeletedSqliteMaster())
+                    DeletedSchemaRows.Add(new DeletedSchemaRowViewModel(deleted));
+            }
+            catch { /* non-fatal — proceed without deleted table data */ }
+            this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
+            this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
+
             foreach (var page in db.ReadAllPages())
                 Pages.Add(MakePageListEntry(page));
             RefreshAvailableTableNames();
@@ -554,6 +634,41 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             HasDatabase = true;
             StatusText = $"{info.Name}  ·  {header.PageSize:N0} bytes/page  ·  {header.TextEncodingName}  ·  {db.PageCount:N0} pages";
+
+            // Build shadow DB immediately so Query and recovery work without a saved project.
+            try
+            {
+                var (project, warnings) = ShadowProject.CreateTemporary(_currentFilePath!, Database);
+                Project = project;
+
+                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Valid
+                                                                     && d.RootPage.HasValue
+                                                                     && d.Sql is not null))
+                {
+                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
+                    if (schema is null) continue;
+                    try
+                    {
+                        var pageNums = Database.GetTreePageNumbers(deletedVm.RootPage!.Value).ToList();
+                        project.AddDeletedTableRecords(schema, Database.ReadTableRows(deletedVm.RootPage!.Value));
+                        project.TagDeletedTablePages(schema.TableName, pageNums);
+                    }
+                    catch { }
+                }
+
+                QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
+                RefreshPagesFromShadowDatabase();
+                if (warnings.Count > 0)
+                {
+                    string logPath = path + ".warnings.log";
+                    File.WriteAllText(logPath, string.Join("\n\n", warnings));
+                    StatusText += $"  ·  {warnings.Count} table(s) skipped";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText += $"  ·  Shadow DB failed: {ex.Message}";
+            }
 
             string walPath = path + "-wal";
             if (File.Exists(walPath))
@@ -585,11 +700,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         DatabaseInfoRows.Clear();
         SchemaRows.Clear();
         SelectedSchemaRow = null;
+        DeletedSchemaRows.Clear();
+        SelectedDeletedSchemaRow = null;
+        this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
+        this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
+        ClearRecoveredRecords();
         HeaderBytes      = [];
         HeaderHighlights = [];
         SelectedPage = null;
         HasDatabase  = false;
         WalTab       = null;
+        _project?.Dispose();
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";
         SearchTab.Clear();
@@ -597,34 +718,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Create a project folder containing a manifest and a shadow database mirroring
-    /// the currently-loaded evidence file's table structure.
+    /// Save the current temporary project to <paramref name="folderPath"/> on disk,
+    /// writing the manifest and persisting the shadow database.
     /// </summary>
-    public void CreateProject(string folderPath)
+    public void SaveProject(string folderPath)
     {
-        if (Database is null || _currentFilePath is null) return;
-
+        if (Project is null) return;
         try
         {
-            Project = ShadowProject.Create(folderPath, _currentFilePath, Database);
-            QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
-            RefreshPagesFromShadowDatabase();
-            StatusText = $"Project created at {folderPath}";
-            SyncWalToProject();
+            Project.SaveTo(folderPath);
+            this.RaisePropertyChanged(nameof(ProjectFolderPath));
+            StatusText = $"Project saved to {folderPath}";
         }
         catch (Exception ex)
         {
-            string logPath = Path.Combine(folderPath, "error.log");
-            try
-            {
-                File.WriteAllText(logPath, ex.ToString());
-                StatusText = $"Error creating project: {ex.Message} (see {logPath})";
-            }
-            catch
-            {
-                // Folder may not exist yet (e.g. failed before Directory.CreateDirectory) — fall back to status text only.
-                StatusText = $"Error creating project: {ex.Message}";
-            }
+            StatusText = $"Error saving project: {ex.Message}";
         }
     }
 
@@ -646,6 +754,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 return;
             }
 
+            // Replace the temporary shadow project created by LoadFile with the saved one.
+            _project?.Dispose();
             Project = project;
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();

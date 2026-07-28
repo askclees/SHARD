@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SHARD.Core", "SHARD.Core\SH
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SHARD.Core.Tests", "SHARD.Core.Tests\SHARD.Core.Tests.csproj", "{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SHARD.Cli", "SHARD.Cli\SHARD.Cli.csproj", "{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -52,6 +54,18 @@ Global
 		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|x64.Build.0 = Release|Any CPU
 		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|x86.ActiveCfg = Release|Any CPU
 		{831F83C1-7EB0-4ECE-8DCC-2C8CC957248E}.Release|x86.Build.0 = Release|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Debug|x64.Build.0 = Debug|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Debug|x86.Build.0 = Debug|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Release|x64.ActiveCfg = Release|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Release|x64.Build.0 = Release|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Release|x86.ActiveCfg = Release|Any CPU
+		{6FA1705F-E9C6-4CC6-8DC2-6CC50ED78EE5}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

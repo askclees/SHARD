@@ -8,6 +8,7 @@
         x:Class="SHARD.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="SHARD — SQLite Forensic Analyser"
+        Icon="avares://SHARD/Assets/shard-icon.png"
         Width="1200" Height="760"
         MinWidth="800" MinHeight="500"
         DragDrop.AllowDrop="True">
@@ -25,8 +26,8 @@
                           IsEnabled="{Binding HasDatabase}"
                           InputGesture="Ctrl+W" />
                 <Separator />
-                <MenuItem Header="Create _Project…"
-                          Name="MenuCreateProject"
+                <MenuItem Header="_Save Project…"
+                          Name="MenuSaveProject"
                           IsEnabled="{Binding HasDatabase}" />
                 <MenuItem Header="_Open Project…"
                           Name="MenuOpenProject" />
@@ -663,40 +664,120 @@
                     <TabItem Header="Schema">
                         <Grid ColumnDefinitions="*,4,*">
 
-                            <!-- Left: column headers + selectable row list -->
-                            <Grid Grid.Column="0" RowDefinitions="Auto,*">
+                            <!-- Left: live schema (top) + deleted tables (bottom) -->
+                            <Grid Grid.Column="0" RowDefinitions="*,4,*">
 
-                                <Border Grid.Row="0"
-                                        Padding="10,6"
-                                        BorderThickness="0,0,0,1">
-                                    <Grid ColumnDefinitions="80,180,180,80,*">
-                                        <TextBlock Grid.Column="0" Text="Type"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
-                                        <TextBlock Grid.Column="1" Text="Name"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
-                                        <TextBlock Grid.Column="2" Text="Table"     FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
-                                        <TextBlock Grid.Column="3" Text="Root Page" FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
-                                        <TextBlock Grid.Column="4" Text="SQL"       FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
-                                    </Grid>
-                                </Border>
+                                <!-- Live schema -->
+                                <Grid Grid.Row="0" RowDefinitions="Auto,*">
+                                    <Border Grid.Row="0"
+                                            Padding="10,6"
+                                            BorderThickness="0,0,0,1">
+                                        <Grid ColumnDefinitions="80,180,180,80,*">
+                                            <TextBlock Grid.Column="0" Text="Type"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="1" Text="Name"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="2" Text="Table"     FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="3" Text="Root Page" FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="4" Text="SQL"       FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                        </Grid>
+                                    </Border>
 
-                                <ListBox Grid.Row="1"
-                                         ItemsSource="{Binding SchemaRows}"
-                                         SelectedItem="{Binding SelectedSchemaRow}">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate x:DataType="core:SqliteMasterRow">
-                                            <Grid ColumnDefinitions="80,180,180,80,*" Margin="4,3">
-                                                <TextBlock Grid.Column="0" Text="{Binding ObjectType}" FontSize="12" />
-                                                <TextBlock Grid.Column="1" Text="{Binding Name}"       FontSize="12" />
-                                                <TextBlock Grid.Column="2" Text="{Binding TableName}"  FontSize="12" />
-                                                <TextBlock Grid.Column="3" Text="{Binding RootPage}"   FontSize="12" />
-                                                <TextBlock Grid.Column="4"
-                                                           Text="{Binding Sql}"
-                                                           FontSize="12"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           ToolTip.Tip="{Binding Sql}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
+                                    <ListBox Grid.Row="1"
+                                             ItemsSource="{Binding SchemaRows}"
+                                             SelectedItem="{Binding SelectedSchemaRow}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="core:SqliteMasterRow">
+                                                <Grid ColumnDefinitions="80,180,180,80,*" Margin="4,3">
+                                                    <TextBlock Grid.Column="0" Text="{Binding ObjectType}" FontSize="12" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding Name}"       FontSize="12" />
+                                                    <TextBlock Grid.Column="2" Text="{Binding TableName}"  FontSize="12" />
+                                                    <TextBlock Grid.Column="3" Text="{Binding RootPage}"   FontSize="12" />
+                                                    <TextBlock Grid.Column="4"
+                                                               Text="{Binding Sql}"
+                                                               FontSize="12"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip.Tip="{Binding Sql}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+
+                                <GridSplitter Grid.Row="1" ResizeDirection="Rows" />
+
+                                <!-- Deleted tables -->
+                                <Grid Grid.Row="2" RowDefinitions="Auto,Auto,*">
+
+                                    <!-- Section label -->
+                                    <Border Grid.Row="0"
+                                            Padding="10,5"
+                                            BorderThickness="0,1,0,0">
+                                        <TextBlock Text="{Binding DeletedSchemaHeader}"
+                                                   FontWeight="SemiBold"
+                                                   FontSize="11"
+                                                   Opacity="0.75" />
+                                    </Border>
+
+                                    <!-- Column headers -->
+                                    <Border Grid.Row="1"
+                                            Padding="10,4"
+                                            BorderThickness="0,0,0,1">
+                                        <Grid ColumnDefinitions="80,180,80,90,90,*">
+                                            <TextBlock Grid.Column="0" Text="Type"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="1" Text="Name"      FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="2" Text="Root Page" FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="3" Text="Method"    FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="4" Text="Status"    FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                            <TextBlock Grid.Column="5" Text="SQL"       FontWeight="SemiBold" FontSize="11" Opacity="0.6" />
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Placeholder when none found -->
+                                    <TextBlock Grid.Row="2"
+                                               IsVisible="{Binding HasDeletedSchemaRows,
+                                                           Converter={x:Static conv:BoolConverters.Not}}"
+                                               Text="No deleted tables found on this database"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               FontSize="12"
+                                               Opacity="0.35"
+                                               TextWrapping="Wrap"
+                                               MaxWidth="220"
+                                               TextAlignment="Center" />
+
+                                    <ListBox Grid.Row="2"
+                                             IsVisible="{Binding HasDeletedSchemaRows}"
+                                             ItemsSource="{Binding DeletedSchemaRows}"
+                                             SelectedItem="{Binding SelectedDeletedSchemaRow}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:DeletedSchemaRowViewModel">
+                                                <Grid ColumnDefinitions="80,180,80,90,90,*" Margin="4,3">
+                                                    <TextBlock Grid.Column="0" Text="{Binding ObjectType}" FontSize="12" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding Name}"       FontSize="12" />
+                                                    <TextBlock Grid.Column="2" Text="{Binding RootPage}"   FontSize="12" />
+                                                    <TextBlock Grid.Column="3" Text="{Binding RecoveryMethod}" FontSize="11" Opacity="0.7" />
+                                                    <StackPanel Grid.Column="4"
+                                                                Orientation="Horizontal"
+                                                                Spacing="4"
+                                                                VerticalAlignment="Center">
+                                                        <Border Width="8" Height="8"
+                                                                CornerRadius="4"
+                                                                Background="{Binding StatusBrush}"
+                                                                VerticalAlignment="Center" />
+                                                        <TextBlock Text="{Binding StatusLabel}"
+                                                                   FontSize="11"
+                                                                   VerticalAlignment="Center" />
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="5"
+                                                               Text="{Binding Sql}"
+                                                               FontSize="12"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip.Tip="{Binding Sql}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+
+                                </Grid>
 
                             </Grid>
 
@@ -705,59 +786,107 @@
                             <!-- Right: hex view of the selected row's page -->
                             <Grid Grid.Column="2">
 
-                                <TextBlock IsVisible="{Binding SelectedSchemaRow,
-                                                       Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                <TextBlock IsVisible="{Binding HasSchemaSelection,
+                                                       Converter={x:Static conv:BoolConverters.Not}}"
                                            Text="← Select a row to view its bytes"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"
                                            Opacity="0.35"
                                            FontSize="13" />
 
-                                <Grid IsVisible="{Binding SelectedSchemaRow,
-                                                  Converter={x:Static conv:ObjectConverters.IsNotNull}}"
-                                      RowDefinitions="Auto,*">
+                                <TabControl IsVisible="{Binding HasSchemaSelection}"
+                                            Padding="0">
 
-                                    <Border Grid.Row="0"
-                                            Padding="8,4"
-                                            BorderThickness="0,0,0,1">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <ToggleButton x:Name="SchemaOffsetToggle"
-                                                          Content="Dec Offsets"
-                                                          IsChecked="False"
-                                                          Padding="8,2"
-                                                          FontSize="11" />
-                                            <ToggleButton x:Name="SchemaHighlightToggle"
-                                                          Content="Highlights"
-                                                          IsChecked="True"
-                                                          Padding="8,2"
-                                                          FontSize="11" />
-                                            <TextBlock Text="{Binding SelectedSchemaRow.PageNumber, StringFormat='Page {0}'}"
+                                    <!-- Tab: Hex View -->
+                                    <TabItem Header="Hex View">
+                                        <Grid RowDefinitions="Auto,*">
+
+                                            <Border Grid.Row="0"
+                                                    Padding="8,4"
+                                                    BorderThickness="0,0,0,1">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ToggleButton x:Name="SchemaOffsetToggle"
+                                                                  Content="Dec Offsets"
+                                                                  IsChecked="False"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <ToggleButton x:Name="SchemaHighlightToggle"
+                                                                  Content="Highlights"
+                                                                  IsChecked="True"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <TextBlock Text="{Binding #SchemaHexView.HoveredLabel}"
+                                                               IsVisible="{Binding #SchemaHexView.HoveredLabel,
+                                                                           Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11"
+                                                               Opacity="0.75"
+                                                               Margin="8,0,0,0" />
+                                                </StackPanel>
+                                            </Border>
+
+                                            <ScrollViewer Grid.Row="1"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Auto">
+                                                <controls:HexView x:Name="SchemaHexView"
+                                                                  Margin="14,8,14,16"
+                                                                  Data="{Binding SchemaPageBytes}"
+                                                                  Highlights="{Binding SchemaHighlights}"
+                                                                  UseDecimalOffsets="{Binding #SchemaOffsetToggle.IsChecked}"
+                                                                  ShowHighlights="{Binding #SchemaHighlightToggle.IsChecked}" />
+                                            </ScrollViewer>
+
+                                        </Grid>
+                                    </TabItem>
+
+                                    <!-- Tab: Recovered Records (valid deleted tables only) -->
+                                    <TabItem Header="{Binding RecoveredDeletedRecordsHeader}"
+                                             IsVisible="{Binding HasRecoveredDeletedRecords}">
+                                        <Grid>
+                                            <TextBlock IsVisible="{Binding HasRecoveredDeletedRecords,
+                                                                   Converter={x:Static conv:BoolConverters.Not}}"
+                                                       Text="No records recovered from this table"
+                                                       HorizontalAlignment="Center"
                                                        VerticalAlignment="Center"
-                                                       FontSize="11"
-                                                       Opacity="0.75"
-                                                       Margin="8,0,0,0" />
-                                            <TextBlock Text="{Binding #SchemaHexView.HoveredLabel}"
-                                                       IsVisible="{Binding #SchemaHexView.HoveredLabel,
-                                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
-                                                       VerticalAlignment="Center"
-                                                       FontSize="11"
-                                                       Opacity="0.75"
-                                                       Margin="8,0,0,0" />
-                                        </StackPanel>
-                                    </Border>
+                                                       Opacity="0.35"
+                                                       FontSize="12" />
+                                            <ScrollViewer IsVisible="{Binding HasRecoveredDeletedRecords}"
+                                                          VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsControl ItemsSource="{Binding RecoveredDeletedRecords}"
+                                                              Margin="14,10">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate x:DataType="vm:RecoveredDeletedRecordViewModel">
+                                                            <Expander Header="{Binding Header}"
+                                                                      IsExpanded="True"
+                                                                      Margin="0,2,0,0">
+                                                                <ItemsControl ItemsSource="{Binding Fields}"
+                                                                              Margin="8,4,0,4">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                                            <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                <TextBlock Grid.Column="0"
+                                                                                           Text="{Binding Label}"
+                                                                                           FontSize="12"
+                                                                                           FontWeight="SemiBold"
+                                                                                           Opacity="0.6" />
+                                                                                <TextBlock Grid.Column="1"
+                                                                                           Text="{Binding Value}"
+                                                                                           FontSize="12"
+                                                                                           TextWrapping="Wrap" />
+                                                                            </Grid>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Expander>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+                                        </Grid>
+                                    </TabItem>
 
-                                    <ScrollViewer Grid.Row="1"
-                                                  VerticalScrollBarVisibility="Auto"
-                                                  HorizontalScrollBarVisibility="Auto">
-                                        <controls:HexView x:Name="SchemaHexView"
-                                                          Margin="14,8,14,16"
-                                                          Data="{Binding SchemaPageBytes}"
-                                                          Highlights="{Binding SchemaHighlights}"
-                                                          UseDecimalOffsets="{Binding #SchemaOffsetToggle.IsChecked}"
-                                                          ShowHighlights="{Binding #SchemaHighlightToggle.IsChecked}" />
-                                    </ScrollViewer>
-
-                                </Grid>
+                                </TabControl>
                             </Grid>
 
                         </Grid>
@@ -912,20 +1041,7 @@
                     <TabItem Header="Query">
                         <Grid RowDefinitions="Auto,Auto,Auto,*">
 
-                            <!-- Placeholder: no project yet -->
-                            <TextBlock Grid.Row="0" Grid.RowSpan="4"
-                                       IsVisible="{Binding HasProject, Converter={x:Static conv:BoolConverters.Not}}"
-                                       Text="Create a project to run SQL queries against its shadow database."
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       Opacity="0.35"
-                                       FontSize="13"
-                                       TextWrapping="Wrap"
-                                       MaxWidth="360"
-                                       TextAlignment="Center" />
-
                             <Grid Grid.Row="0" Grid.RowSpan="4"
-                                  IsVisible="{Binding HasProject}"
                                   ColumnDefinitions="220,4,*">
 
                                 <!-- Left: table list -->
@@ -942,8 +1058,8 @@
                                              ItemsSource="{Binding QueryTab.TableNames}"
                                              DoubleTapped="OnTableDoubleTapped">
                                         <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="x:String">
-                                                <TextBlock Text="{Binding}"
+                                            <DataTemplate x:DataType="vm:QueryTableViewModel">
+                                                <TextBlock Text="{Binding DisplayName}"
                                                            FontFamily="Courier New"
                                                            FontSize="12"
                                                            ToolTip.Tip="Double-click to query this table" />

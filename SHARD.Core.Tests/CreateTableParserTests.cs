@@ -101,6 +101,25 @@ public class CreateTableParserTests
     }
 
     [Fact]
+    public void SingleQuotedColumnNames_AreParsedCorrectly()
+    {
+        var sql = "Create table members( 'mid' INT Unsigned not null, 'mname' text not null, 'msurname' text null, 'mcodea' int null, 'mcodeb' float null)";
+
+        var schema = CreateTableParser.ExtractTableSchema(sql);
+
+        Assert.NotNull(schema);
+        Assert.Equal("members", schema!.TableName);
+        Assert.Equal(5, schema.Columns.Count);
+        Assert.Equal("mid",      schema.Columns[0].Name);
+        Assert.Equal("mname",    schema.Columns[1].Name);
+        Assert.Equal("msurname", schema.Columns[2].Name);
+        Assert.Equal("mcodea",   schema.Columns[3].Name);
+        Assert.Equal("mcodeb",   schema.Columns[4].Name);
+        Assert.True(schema.Columns[0].IsNotNull);
+        Assert.True(schema.Columns[1].IsNotNull);
+    }
+
+    [Fact]
     public void InlineLineComments_AreStrippedBeforeParsing()
     {
         var sql = """
