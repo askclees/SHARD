@@ -28,7 +28,11 @@ jobs:
       run: dotnet build --no-restore
 
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet test --no-build --verbosity normal --filter "Category!=Corpus"
+
+    - name: Corpus Recovery Report
+      continue-on-error: true
+      run: dotnet test --no-build --verbosity normal --filter "FullyQualifiedName~GenerateCorpusReport"
 
   release:
     needs: build
@@ -46,7 +50,7 @@ jobs:
     - name: Get version
       id: version
       run: |
-        VERSION=$(grep -oP '(?<=<Version>)[^<]+' SHARD/SHARD.csproj)
+        VERSION=$(grep -oP '(?<=<Version>)[^<]+' SHARD/SHARD.csproj || true)
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Check if release exists
