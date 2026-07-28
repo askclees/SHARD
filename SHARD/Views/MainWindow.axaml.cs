@@ -90,11 +90,23 @@ public partial class MainWindow : Window
 
     private void OnQueryBoxKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Control)
+        if (e.Key != Key.Enter) return;
+
+        if (e.KeyModifiers == KeyModifiers.Shift)
+        {
+            // Insert a newline at the caret for multi-line SQL
+            if (sender is TextBox tb)
+            {
+                int pos = tb.CaretIndex;
+                tb.Text = (tb.Text ?? string.Empty).Insert(pos, "\n");
+                tb.CaretIndex = pos + 1;
+            }
+        }
+        else
         {
             Vm.QueryTab.RunQueryCommand.Execute(default).Subscribe();
-            e.Handled = true;
         }
+        e.Handled = true;
     }
 
     private void OnTableDoubleTapped(object? sender, TappedEventArgs e)
