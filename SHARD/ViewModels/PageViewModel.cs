@@ -153,9 +153,17 @@ public sealed class PageViewModel : ViewModelBase
 
     private static IReadOnlyList<HexHighlight> BuildPageHighlights(SqlitePage page)
     {
-        if (page is not BTreePage bp) return [];
-
         var list = new List<HexHighlight>();
+
+        // Cells carved from freed pages — emit before early return so they show on non-BTree pages.
+        foreach (var cell in page.CarvedRecoveredCells)
+            AddDeletedCellHighlights(list, cell, "Recovered",
+                Color.FromRgb( 60, 180, 100),
+                Color.FromRgb( 40, 150,  70),
+                Color.FromRgb( 40, 160, 180));
+
+        if (page is not BTreePage bp) return list;
+
         int h = page.HeaderOffset;
 
         list.Add(new(h + 0, 1, Color.FromRgb( 86, 156, 214), "Page Type"));

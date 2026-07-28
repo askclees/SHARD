@@ -116,6 +116,20 @@ public sealed class ShadowProject : IDisposable
     }
 
     /// <summary>
+    /// Inserts B-tree leaf cells carved from a freed page's raw bytes into the
+    /// <c>_shard_deleted_{tableName}</c> shadow table, creating it if necessary.
+    /// Used when the original root page is now a freelist page but its bytes may
+    /// still contain the original table records.
+    /// </summary>
+    public void AddFreedPageCarvedRecords(
+        TableSchema schema, IReadOnlyList<BTreeLeafCell> cells, uint pageNumber)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        ShadowDatabaseBuilder.AppendCarvedCellsToDeletedTable(connection, schema, cells, pageNumber);
+    }
+
+    /// <summary>
     /// Updates <c>_shard_pages</c> to label the given page numbers as belonging to a
     /// dropped table (shown as <c>"tableName (deleted)"</c> in the Pages list).
     /// </summary>

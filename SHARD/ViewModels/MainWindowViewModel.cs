@@ -29,7 +29,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     private Dictionary<uint, string>? _pageTableMap;
-    private readonly Dictionary<string, TableSchema> _manualSchemas = new();
+    private readonly Dictionary<string, TableSchema> _manualSchemas  = new();
+    private readonly Dictionary<uint, TableSchema>   _freedPageSchemas = new();
 
     // ── Open / empty state ────────────────────────────────────────────────
     private bool _hasDatabase;
@@ -242,6 +243,14 @@ public sealed class MainWindowViewModel : ViewModelBase
                     tlp.CarveDeletedCells(rs);
                     tlp.CarveFreeblockCells(rs);
                 }
+            }
+            else if (page is not null && value is not null
+                     && _freedPageSchemas.TryGetValue(value.PageNumber, out var freedSchema)
+                     && Database is not null)
+            {
+                var rs     = RecordStructure.FromSchema(freedSchema);
+                var carved = DeletedRecordParser.CarveRawBytes(page.Data, Database.Header.TextEncoding, rs);
+                page.CarvedRecoveredCells.AddRange(carved);
             }
             SelectedPageDetail = page is not null ? new PageViewModel(page) : null;
             LastRecoveryResult = null;
@@ -782,6 +791,30 @@ public sealed class MainWindowViewModel : ViewModelBase
                     catch { }
                 }
 
+                // Carve freed pages: the root page is now a freelist page but may still
+                // hold the original table's bytes.
+                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Freed
+                                                                     && d.RootPage.HasValue
+                                                                     && d.Sql is not null))
+                {
+                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
+                    if (schema is null) continue;
+                    try
+                    {
+                        var rs       = RecordStructure.FromSchema(schema);
+                        var pageData = Database.ReadPage(deletedVm.RootPage!.Value).Data;
+                        var carved   = DeletedRecordParser.CarveRawBytes(pageData, Database.Header.TextEncoding, rs);
+                        if (carved.Count > 0)
+                        {
+                            project.AddFreedPageCarvedRecords(schema, carved, deletedVm.RootPage!.Value);
+                            project.TagDeletedTablePages(schema.TableName, [deletedVm.RootPage!.Value]);
+                        }
+                        // Register schema so navigating to the page triggers lazy carving for highlights.
+                        _freedPageSchemas[deletedVm.RootPage!.Value] = schema;
+                    }
+                    catch { }
+                }
+
                 QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
                 RefreshPagesFromShadowDatabase();
                 if (warnings.Count > 0)
@@ -837,6 +870,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         HasDatabase  = false;
         WalTab       = null;
         _manualSchemas.Clear();
+        _freedPageSchemas.Clear();
         _project?.Dispose();
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";
