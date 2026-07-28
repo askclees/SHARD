@@ -170,7 +170,7 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     /// </summary>
     public void CarveFreeblockCells(RecordStructure recordStructure)
     {
-        if (FreeBlocks.Count == 0 || Cells.Count == 0) return;
+        if (FreeBlocks.Count == 0) return;
 
         var knownOffsets = new HashSet<int>(
             DeletedCells.Select(c => c.PageOffset)
@@ -303,6 +303,71 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
                 else
                 {
                     pos++;
+                }
+            }
+        }
+
+        // Second pass: at the end of every known cell that touches an unallocated
+        // region, attempt template recovery for records whose first 4 bytes were
+        // overwritten by a freeblock header (common when all cells on a page are
+        // deleted and SQLite merges adjacent freeblocks).  Repeat until stable.
+        //
+        // Reference cells for TryK2's col-type-0 mode: prefer live cells; fall back
+        // to deleted + carved cells when the page has no live rows.
+        IReadOnlyList<BTreeLeafCell> refCells = Cells.Count > 0
+            ? Cells
+            : (IReadOnlyList<BTreeLeafCell>)DeletedCells.Concat(CarvedCells).ToList();
+
+        bool foundNew = true;
+        while (foundNew)
+        {
+            foundNew = false;
+
+            // Re-snapshot reference when we only have carved cells (grows each pass).
+            if (Cells.Count == 0)
+                refCells = DeletedCells.Concat(CarvedCells).ToList();
+
+            var seedCells = DeletedCells.Concat(CarvedCells).ToList();
+            foreach (var cell in seedCells)
+            {
+                int startPos = cell.PageOffset + cell.CellByteLengthOnPage;
+
+                var region = UnallocatedRegions.FirstOrDefault(
+                    r => startPos >= r.Offset && startPos < r.Offset + r.Size);
+                if (region == null) continue;
+
+                int regionEnd = region.Offset + region.Size;
+                if (startPos >= regionEnd) continue;
+
+                // Try at startPos directly first: the leading zero bytes may be the
+                // next-pointer field of an overwritten freeblock header, so skipping
+                // them would misalign the template.
+                if (!knownOffsets.Contains(startPos))
+                {
+                    var recovered = FreeblockRecordParser.RecoverAtOffset(
+                        Data, startPos, regionEnd - startPos, refCells, _encoding, recordStructure);
+                    if (recovered != null && knownOffsets.Add(recovered.PageOffset))
+                    {
+                        CarvedCells.Add(recovered);
+                        knownSizes[recovered.PageOffset] = recovered.CellByteLengthOnPage;
+                        foundNew = true;
+                        continue;
+                    }
+                }
+
+                // Fall back: skip zeros (handles real padding gaps) and try again.
+                int nextPos = startPos;
+                while (nextPos < regionEnd && Data[nextPos] == 0x00) nextPos++;
+                if (nextPos == startPos || nextPos >= regionEnd) continue;
+                if (knownOffsets.Contains(nextPos)) continue;
+
+                var recovered2 = FreeblockRecordParser.RecoverAtOffset(
+                    Data, nextPos, regionEnd - nextPos, refCells, _encoding, recordStructure);
+                if (recovered2 != null && knownOffsets.Add(recovered2.PageOffset))
+                {
+                    CarvedCells.Add(recovered2);
+                    knownSizes[recovered2.PageOffset] = recovered2.CellByteLengthOnPage;
+                    foundNew = true;
                 }
             }
         }

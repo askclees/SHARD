@@ -470,24 +470,46 @@
                                                                           IsExpanded="False"
                                                                           Expanded="OnFreeBlockSectionExpanded"
                                                                           Margin="0,2,0,0">
-                                                                    <ItemsControl ItemsSource="{Binding Rows}"
-                                                                                  Margin="8,4,0,4">
-                                                                        <ItemsControl.ItemTemplate>
-                                                                            <DataTemplate x:DataType="vm:InfoRow">
-                                                                                <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                                    <TextBlock Grid.Column="0"
-                                                                                               Text="{Binding Label}"
-                                                                                               FontSize="12"
-                                                                                               FontWeight="SemiBold"
-                                                                                               Opacity="0.6" />
-                                                                                    <TextBlock Grid.Column="1"
-                                                                                               Text="{Binding Value}"
-                                                                                               FontSize="12"
-                                                                                               TextWrapping="Wrap" />
-                                                                                </Grid>
-                                                                            </DataTemplate>
-                                                                        </ItemsControl.ItemTemplate>
-                                                                    </ItemsControl>
+                                                                    <StackPanel>
+                                                                        <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                      Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0"
+                                                                                                   Text="{Binding Label}"
+                                                                                                   FontSize="12"
+                                                                                                   FontWeight="SemiBold"
+                                                                                                   Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1"
+                                                                                                   Text="{Binding Value}"
+                                                                                                   FontSize="12"
+                                                                                                   TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                        <StackPanel IsVisible="{Binding HasRecoveredRecords}"
+                                                                                    Margin="8,2,0,4">
+                                                                            <TextBlock Text="Recovered Records"
+                                                                                       FontSize="11"
+                                                                                       FontWeight="SemiBold"
+                                                                                       Opacity="0.6"
+                                                                                       Margin="0,4,0,4" />
+                                                                            <ItemsControl ItemsSource="{Binding RecoveredRecords}">
+                                                                                <ItemsControl.ItemTemplate>
+                                                                                    <DataTemplate x:DataType="vm:FreeBlockRecordEntry">
+                                                                                        <Button Content="{Binding Label}"
+                                                                                                Click="OnFreeBlockRecordClick"
+                                                                                                Padding="4,2"
+                                                                                                Margin="0,1"
+                                                                                                FontSize="11"
+                                                                                                HorizontalAlignment="Left" />
+                                                                                    </DataTemplate>
+                                                                                </ItemsControl.ItemTemplate>
+                                                                            </ItemsControl>
+                                                                        </StackPanel>
+                                                                    </StackPanel>
                                                                 </Expander>
                                                             </DataTemplate>
                                                         </ItemsControl.ItemTemplate>
@@ -1307,16 +1329,38 @@
                                                                               IsExpanded="False"
                                                                               Expanded="OnWalFreeBlockSectionExpanded"
                                                                               Margin="0,2,0,0">
-                                                                        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
-                                                                            <ItemsControl.ItemTemplate>
-                                                                                <DataTemplate x:DataType="vm:InfoRow">
-                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
-                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
-                                                                                    </Grid>
-                                                                                </DataTemplate>
-                                                                            </ItemsControl.ItemTemplate>
-                                                                        </ItemsControl>
+                                                                        <StackPanel>
+                                                                            <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                                <ItemsControl.ItemTemplate>
+                                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                        </Grid>
+                                                                                    </DataTemplate>
+                                                                                </ItemsControl.ItemTemplate>
+                                                                            </ItemsControl>
+                                                                            <StackPanel IsVisible="{Binding HasRecoveredRecords}"
+                                                                                        Margin="8,2,0,4">
+                                                                                <TextBlock Text="Recovered Records"
+                                                                                           FontSize="11"
+                                                                                           FontWeight="SemiBold"
+                                                                                           Opacity="0.6"
+                                                                                           Margin="0,4,0,4" />
+                                                                                <ItemsControl ItemsSource="{Binding RecoveredRecords}">
+                                                                                    <ItemsControl.ItemTemplate>
+                                                                                        <DataTemplate x:DataType="vm:FreeBlockRecordEntry">
+                                                                                            <Button Content="{Binding Label}"
+                                                                                                    Click="OnWalFreeBlockRecordClick"
+                                                                                                    Padding="4,2"
+                                                                                                    Margin="0,1"
+                                                                                                    FontSize="11"
+                                                                                                    HorizontalAlignment="Left" />
+                                                                                        </DataTemplate>
+                                                                                    </ItemsControl.ItemTemplate>
+                                                                                </ItemsControl>
+                                                                            </StackPanel>
+                                                                        </StackPanel>
                                                                     </Expander>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>

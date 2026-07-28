@@ -7,26 +7,55 @@ namespace SHARD.Core.Recovery;
 /// <summary>
 /// Recovers deleted records from SQLite page freeblocks.
 ///
-/// When a cell is freed, SQLite overwrites its first 4 bytes with the freeblock
-/// linked-list header (2-byte next-pointer + 2-byte size).  The first record in
-/// a freeblock therefore has its payload-size and rowid varints (and possibly
-/// the start of its record header) partially or fully lost.
+/// SQLite overwrites the first 4 bytes of a freed cell with the freeblock
+/// linked-list header (2-byte next-pointer + 2-byte size).  A cell starts with
+/// a payload-size varint (P bytes) followed by a rowid varint (R bytes); k = P+R
+/// is at most 4 bytes for the records we target (P ≤ 2, R ≤ 2).  Three templates
+/// are tried in order of confidence:
 ///
-/// Recovery strategy:
-///   1. Derive the typical payload-size varint length (P) and rowid varint length
-///      (R) from live cells on the same page — deleted records almost always share
-///      the same lengths as their neighbours.
-///   2. k = P + R tells us where the intact header starts inside the freeblock.
-///      If k ≥ 4 the record header is fully intact; if k &lt; 4 we infer the missing
-///      column types algebraically using the freeblock size as a constraint.
-///   3. The rowid is set to -1 in all cases because it lies within the first k
-///      bytes (nearly always inside the overwritten region).
-///   4. After the first record, any remaining space in the freeblock contains
-///      fully-intact former records that are parsed with the standard
-///      <see cref="DeletedRecordParser"/>.
+///   k=4  All of P+R overwritten.  Record header is fully intact from byte 4.
+///   k=3  P+R+headerSize overwritten.  All column-type varints intact from byte 4;
+///        headerSize is inferred from their total varint length.
+///   k=2  P+R+headerSize+colType₀ overwritten.  Columns 1..N-1 intact from byte 4;
+///        the missing column-0 type is inferred from the freeblock size.
+///
+/// In all cases the rowid is recorded as -1 (it falls in the overwritten region).
+/// After the first record, any remaining freeblock space is scanned for intact
+/// subsequent records via <see cref="DeletedRecordParser"/>.
 /// </summary>
 public static class FreeblockRecordParser
 {
+    /// <summary>
+    /// Applies the three k-templates at <paramref name="offset"/> without any
+    /// freeblock-list context — used by the unallocated-region second pass.
+    /// <paramref name="maxSize"/> is the remaining space available (passed as the
+    /// fbSize bound to TryK2). Returns null when no template matches.
+    /// </summary>
+    public static BTreeLeafCell? RecoverAtOffset(
+        byte[] pageData, int offset, int maxSize,
+        IReadOnlyList<BTreeLeafCell> referenceCells,
+        TextEncoding encoding, RecordStructure recordStructure)
+    {
+        long loPayload, hiPayload;
+        if (referenceCells.Count > 0)
+        {
+            long minP = referenceCells.Min(c => c.SizeOfPayload.Value);
+            long maxP = referenceCells.Max(c => c.SizeOfPayload.Value);
+            long tol  = Math.Max(64L, maxP - minP + 64L);
+            loPayload = Math.Max(1L, minP - tol);
+            hiPayload = maxP + tol;
+        }
+        else
+        {
+            loPayload = 1;
+            hiPayload = pageData.Length;
+        }
+
+        return TryK4(pageData, offset, loPayload, hiPayload, encoding, recordStructure)
+            ?? TryK3(pageData, offset, loPayload, hiPayload, encoding, recordStructure)
+            ?? TryK2(pageData, offset, maxSize, loPayload, hiPayload, referenceCells, encoding, recordStructure);
+    }
+
     public static IEnumerable<BTreeLeafCell> RecoverFromFreeblock(
         byte[] pageData,
         PageFreeBlock freeblock,
@@ -34,153 +63,219 @@ public static class FreeblockRecordParser
         TextEncoding encoding,
         RecordStructure recordStructure)
     {
-        if (liveCells.Count == 0) yield break;
-
         int fbStart = (int)freeblock.PageOffset;
         int fbSize  = (int)freeblock.BlockSize;
         int fbEnd   = fbStart + fbSize;
         if (fbEnd > pageData.Length) yield break;
 
-        int typicalP = Mode(liveCells.Select(c => c.SizeOfPayload.Length));
-        int typicalR = Mode(liveCells.Select(c => c.RowId.Length));
-        int k = typicalP + typicalR;
+        // Derive payload bounds from live cells if available; otherwise accept anything.
+        long loPayload, hiPayload;
+        if (liveCells.Count > 0)
+        {
+            long minP = liveCells.Min(c => c.SizeOfPayload.Value);
+            long maxP = liveCells.Max(c => c.SizeOfPayload.Value);
+            long tol  = Math.Max(64L, maxP - minP + 64L);
+            loPayload = Math.Max(1L, minP - tol);
+            hiPayload = maxP + tol;
+        }
+        else
+        {
+            loPayload = 1;
+            hiPayload = pageData.Length;
+        }
 
-        long minPayload = liveCells.Min(c => c.SizeOfPayload.Value);
-        long maxPayload = liveCells.Max(c => c.SizeOfPayload.Value);
-        long tolerance  = Math.Max(64L, maxPayload - minPayload + 64L);
-        long loPayload  = Math.Max(1L, minPayload - tolerance);
-        long hiPayload  = maxPayload + tolerance;
-
-        // ── First record: first k bytes overwritten by freeblock header ──────────
-        BTreeLeafCell? first = k >= 4
-            ? TryIntactHeader(pageData, fbStart, k, typicalP, typicalR, loPayload, hiPayload, encoding, recordStructure)
-            : TryPartialHeader(pageData, fbStart, fbSize, k, typicalP, typicalR, loPayload, hiPayload, encoding, recordStructure);
+        // Try templates in confidence order.
+        BTreeLeafCell? first =
+            TryK4(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
+            TryK3(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
+            TryK2(pageData, fbStart, fbSize, loPayload, hiPayload, liveCells, encoding, recordStructure);
 
         if (first is null) yield break;
         yield return first;
 
-        // ── Subsequent records: fully intact bytes inside the same freeblock ─────
+        // Subsequent records inside the same freeblock.
+        //
+        // Normally subsequent records are fully intact. However, when SQLite merges
+        // two adjacent freed cells into one freeblock it does NOT clear the inner
+        // cell's own old freeblock header — so the inner cell's first 4 bytes are
+        // also overwritten. We detect this by checking whether the 2-byte size field
+        // at [runStart+2] equals the number of bytes remaining to fbEnd; if so we
+        // apply the same k-template recovery we used for the first record.
         int nextOffset = fbStart + first.CellByteLengthOnPage;
         while (nextOffset < fbEnd - 4)
         {
+            int runStart = nextOffset;
             while (nextOffset < fbEnd && pageData[nextOffset] == 0x00)
                 nextOffset++;
             if (nextOffset >= fbEnd) break;
 
+            // Try as a fully-intact record first (the common case).
             var result = DeletedRecordParser.RecoverBTreeLeafRecord(pageData, nextOffset, encoding, recordStructure);
-            if (!result.IsValid) break;
+            if (result.IsValid)
+            {
+                long ps = result.Cell!.SizeOfPayload.Value;
+                if (ps < loPayload || ps > hiPayload) break;
+                yield return result.Cell;
+                nextOffset += result.Cell.CellByteLengthOnPage;
+                continue;
+            }
 
-            long ps = result.Cell!.SizeOfPayload.Value;
-            if (ps < loPayload || ps > hiPayload) break;
+            // Intact parse failed. Check if runStart holds an inner freeblock header
+            // whose size field encodes exactly the bytes remaining to fbEnd.
+            if (runStart + 4 > fbEnd) break;
+            int innerSize = (pageData[runStart + 2] << 8) | pageData[runStart + 3];
+            if (innerSize != fbEnd - runStart) break;
 
-            yield return result.Cell;
-            nextOffset += result.Cell.CellByteLengthOnPage;
+            BTreeLeafCell? inner =
+                TryK4(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
+                TryK3(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
+                TryK2(pageData, runStart, innerSize, loPayload, hiPayload, liveCells, encoding, recordStructure);
+            if (inner is null) break;
+
+            yield return inner;
+            nextOffset = runStart + inner.CellByteLengthOnPage;
         }
     }
 
-    // ── k ≥ 4: header starts at byte k, fully intact ─────────────────────────────
+    // ── k=4: bytes 0-3 are P+R, record header is intact at byte 4 ───────────────
 
-    private static BTreeLeafCell? TryIntactHeader(
-        byte[] pageData, int fbStart, int k, int typicalP, int typicalR,
-        long loPayload, long hiPayload,
+    private static BTreeLeafCell? TryK4(
+        byte[] pageData, int fbStart, long loPayload, long hiPayload,
         TextEncoding encoding, RecordStructure recordStructure)
     {
-        int headerStart = fbStart + k;
+        int headerStart = fbStart + 4;
         if (headerStart >= pageData.Length) return null;
 
         if (!TryParseHeaderEntries(pageData, headerStart, out var entries, out long headerSizeValue))
             return null;
         if (!ValidateEntries(entries!, recordStructure)) return null;
 
-        var validEntries = entries!;
-        long payloadValue = headerSizeValue + validEntries.Sum(e => (long)e.ContentLength);
+        long payloadValue = headerSizeValue + entries!.Sum(e => (long)e.ContentLength);
         if (payloadValue < loPayload || payloadValue > hiPayload) return null;
 
-        return BuildCell(pageData, fbStart, typicalP, typicalR, payloadValue,
-                         validEntries, headerSizeValue, encoding, dataOffset: headerStart + (int)headerSizeValue);
+        // P=2, R=2 → CellByteLengthOnPage = 4 + payloadValue (correct for k=4).
+        return BuildCell(pageData, fbStart, 2, 2, payloadValue, entries!,
+                         headerSizeValue, encoding,
+                         dataOffset: headerStart + (int)headerSizeValue);
     }
 
-    // ── k < 4: first (4-k) bytes of the header are inside the overwritten region ─
+    // ── k=3: bytes 0-3 are P+R+headerSize, all column types intact at byte 4 ────
     //
-    // Assumes a 1-byte header-size varint and 1-byte column-type varints for
-    // any column whose type byte falls within bytes 0-3.  The freeblock size
-    // provides the total-payload constraint that lets us derive the missing type.
+    // headerSize is inferred as 1 (its own varint) + sum of column-type varint lengths.
 
-    private static BTreeLeafCell? TryPartialHeader(
-        byte[] pageData, int fbStart, int fbSize, int k, int typicalP, int typicalR,
-        long loPayload, long hiPayload,
+    private static BTreeLeafCell? TryK3(
+        byte[] pageData, int fbStart, long loPayload, long hiPayload,
         TextEncoding encoding, RecordStructure recordStructure)
     {
-        long expectedPayload = fbSize - k;
-        if (expectedPayload < loPayload || expectedPayload > hiPayload) return null;
-
         int N = recordStructure.NumColumns;
+        int typeOffset = fbStart + 4;
 
-        // With 1-byte header-size at byte k: column types begin at byte k+1.
-        // Bytes 0-3 are overwritten, so intact column types start at byte 4.
-        // lostColTypes = number of column-type bytes that fell inside bytes 0-3.
-        int lostColTypes = Math.Max(0, 4 - k - 1); // -1 accounts for the 1-byte header-size varint
-
-        if (lostColTypes > 1) return null; // more than one lost column type is too ambiguous
-
-        // Parse intact column types from byte 4 onward.
-        int typeReadOffset = fbStart + 4;
-        var intactEntries  = new List<HeaderEntry>(N - lostColTypes);
-        for (int i = lostColTypes; i < N; i++)
+        var entries = new List<HeaderEntry>(N);
+        for (int i = 0; i < N; i++)
         {
-            if (typeReadOffset >= pageData.Length) return null;
-            var tv    = Varint.ReadAt(pageData, typeReadOffset);
+            if (typeOffset >= pageData.Length) return null;
+            var tv    = Varint.ReadAt(pageData, typeOffset);
+            var entry = new HeaderEntry(tv);
+            if (!recordStructure.AllowedKindsPerColumn[i].Contains(entry.Kind)) return null;
+            entries.Add(entry);
+            typeOffset += tv.Length;
+        }
+
+        int  intactTypeBytes  = entries.Sum(e => e.RawValue.Length);
+        long headerSizeValue  = 1L + intactTypeBytes;
+        long payloadValue     = headerSizeValue + entries.Sum(e => (long)e.ContentLength);
+
+        if (payloadValue < loPayload || payloadValue > hiPayload) return null;
+
+        var hsVarint = new Varint(headerSizeValue, headerSizeValue < 128 ? 1 : 2);
+        // P=2, R=1 → CellByteLengthOnPage = 3 + payloadValue.
+        return BuildCell(pageData, fbStart, 2, 1, payloadValue, entries,
+                         headerSizeValue, encoding, dataOffset: typeOffset, hsVarint);
+    }
+
+    // ── k=2: bytes 0-3 are P+R+headerSize+colType₀, cols 1..N-1 intact at byte 4 ─
+    //
+    // col-0's serial type is inferred from the mode of live cells' header entries —
+    // rows in the same table almost always store column 0 with the same varint width.
+    // If no live cells are available the freeblock size is used as a fallback
+    // constraint (which only works reliably when one cell occupies the whole block).
+
+    private static BTreeLeafCell? TryK2(
+        byte[] pageData, int fbStart, int fbSize, long loPayload, long hiPayload,
+        IReadOnlyList<BTreeLeafCell> liveCells,
+        TextEncoding encoding, RecordStructure recordStructure)
+    {
+        int N = recordStructure.NumColumns;
+        if (N < 2) return null;
+
+        int typeOffset = fbStart + 4;
+        var intactEntries = new List<HeaderEntry>(N - 1);
+        for (int i = 1; i < N; i++)
+        {
+            if (typeOffset >= pageData.Length) return null;
+            var tv    = Varint.ReadAt(pageData, typeOffset);
             var entry = new HeaderEntry(tv);
             if (!recordStructure.AllowedKindsPerColumn[i].Contains(entry.Kind)) return null;
             intactEntries.Add(entry);
-            typeReadOffset += tv.Length;
+            typeOffset += tv.Length;
         }
-        int dataOffset = typeReadOffset; // field data follows immediately after the last intact type varint
 
-        long intactContentTotal = intactEntries.Sum(e => (long)e.ContentLength);
         int  intactTypeBytes    = intactEntries.Sum(e => e.RawValue.Length);
+        long intactContentTotal = intactEntries.Sum(e => (long)e.ContentLength);
+        int  dataOffset         = typeOffset;
 
-        // header_size.Value (assumed 1-byte varint) = 1 (itself) + lostColTypes (assumed 1-byte each) + intactTypeBytes
-        long assumedHeaderSize = 1L + lostColTypes + intactTypeBytes;
-
-        var lostEntries = new List<HeaderEntry>(lostColTypes);
-        if (lostColTypes == 1)
+        // Determine col-0's serial type.
+        HeaderEntry col0;
+        if (liveCells.Count > 0 && liveCells.All(c => c.HeaderEntries.Count > 0))
         {
-            int lostContentLen = (int)(expectedPayload - assumedHeaderSize - intactContentTotal);
+            // Use the modal serial type of col-0 across all live cells.
+            long modeSerial = Mode(liveCells.Select(c => (int)c.HeaderEntries[0].RawValue.Value));
+            var candidate   = new HeaderEntry(new Varint(modeSerial, modeSerial < 128 ? 1 : 2));
+            if (!recordStructure.AllowedKindsPerColumn[0].Contains(candidate.Kind)) return null;
+            col0 = candidate;
+        }
+        else
+        {
+            // Fallback: derive from freeblock size (assumes the whole block is one cell).
+            long expectedPayloadFb = fbSize - 2;
+            if (expectedPayloadFb < loPayload || expectedPayloadFb > hiPayload) return null;
+            long assumedHeaderSize = 2L + intactTypeBytes;
+            long lostContentLen    = expectedPayloadFb - assumedHeaderSize - intactContentTotal;
             if (lostContentLen < 0) return null;
-
-            var inferred = InferHeaderEntry(lostContentLen, recordStructure.AllowedKindsPerColumn[0]);
+            var inferred = InferHeaderEntry((int)lostContentLen, recordStructure.AllowedKindsPerColumn[0]);
             if (inferred is null) return null;
-            lostEntries.Add(inferred.Value);
-
-            // Recompute actual header size in case the inferred type varint is not 1 byte.
             long actualHeaderSize = 1L + inferred.Value.RawValue.Length + intactTypeBytes;
-            if (actualHeaderSize + lostContentLen + intactContentTotal != expectedPayload) return null;
-            assumedHeaderSize = actualHeaderSize;
+            if (actualHeaderSize + lostContentLen + intactContentTotal != expectedPayloadFb) return null;
+            col0 = inferred.Value;
         }
 
-        var allEntries = new List<HeaderEntry>(lostEntries.Count + intactEntries.Count);
-        allEntries.AddRange(lostEntries);
-        allEntries.AddRange(intactEntries);
-        if (allEntries.Count != N) return null;
+        long headerSizeValue = 1L + col0.RawValue.Length + intactTypeBytes;
+        long payloadValue    = headerSizeValue + col0.ContentLength + intactContentTotal;
 
-        var hsVarint = new Varint(assumedHeaderSize, assumedHeaderSize < 128 ? 1 : 2);
-        return BuildCell(pageData, fbStart, typicalP, typicalR, expectedPayload,
-                         allEntries, assumedHeaderSize, encoding, dataOffset, hsVarint);
+        if (payloadValue < loPayload || payloadValue > hiPayload) return null;
+        if (2L + payloadValue > fbSize) return null;  // cell must fit inside the freeblock
+
+        var allEntries = new List<HeaderEntry>(N) { col0 };
+        allEntries.AddRange(intactEntries);
+
+        var hsVarint = new Varint(headerSizeValue, headerSizeValue < 128 ? 1 : 2);
+        // P=1, R=1 → CellByteLengthOnPage = 2 + payloadValue.
+        return BuildCell(pageData, fbStart, 1, 1, payloadValue, allEntries,
+                         headerSizeValue, encoding, dataOffset, hsVarint);
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────────────
 
     private static BTreeLeafCell? BuildCell(
-        byte[] pageData, int fbStart, int typicalP, int typicalR,
+        byte[] pageData, int fbStart, int pLen, int rLen,
         long payloadValue, List<HeaderEntry> entries, long headerSizeValue,
         TextEncoding encoding, int dataOffset, Varint? headerSizeVarint = null)
     {
         int totalContent = entries.Sum(e => e.ContentLength);
         if (dataOffset + totalContent > pageData.Length) return null;
 
-        var psVarint = new Varint(payloadValue, typicalP);
-        var ridVarint = new Varint(-1L, typicalR);
+        var psVarint = new Varint(payloadValue, pLen);
+        var ridVarint = new Varint(-1L, rLen);
         var hsVarint  = headerSizeVarint ?? new Varint(headerSizeValue, headerSizeValue < 128 ? 1 : 2);
 
         try
@@ -222,40 +317,32 @@ public static class FreeblockRecordParser
         return true;
     }
 
-    /// <summary>
-    /// Given a known content length for a lost column, determine the best-matching
-    /// <see cref="HeaderEntry"/> consistent with the column's allowed kinds.
-    /// Returns null if no allowed kind is consistent with that length.
-    /// </summary>
+    private static long Mode(IEnumerable<int> values) =>
+        values.GroupBy(v => v).MaxBy(g => g.Count())!.Key;
+
     private static HeaderEntry? InferHeaderEntry(int contentLength, SerialTypeKind[] allowedKinds)
     {
         if (contentLength == 0)
         {
-            if (allowedKinds.Contains(SerialTypeKind.Null))
-                return new HeaderEntry(new Varint(0L, 1));
-            if (allowedKinds.Contains(SerialTypeKind.Int0))
-                return new HeaderEntry(new Varint(8L, 1));
-            if (allowedKinds.Contains(SerialTypeKind.Int1))
-                return new HeaderEntry(new Varint(9L, 1));
+            if (allowedKinds.Contains(SerialTypeKind.Null))  return new HeaderEntry(new Varint(0L, 1));
+            if (allowedKinds.Contains(SerialTypeKind.Int0))  return new HeaderEntry(new Varint(8L, 1));
+            if (allowedKinds.Contains(SerialTypeKind.Int1))  return new HeaderEntry(new Varint(9L, 1));
         }
 
-        // Integer serial types 1-6 map to content lengths 1,2,3,4,6,8 respectively.
+        // Integer serial types 1-6 → content lengths 1,2,3,4,6,8.
         long intSerial = contentLength switch { 1 => 1, 2 => 2, 3 => 3, 4 => 4, 6 => 5, 8 => 6, _ => -1 };
         if (intSerial > 0 && allowedKinds.Contains(SerialTypeKind.Integer))
             return new HeaderEntry(new Varint(intSerial, 1));
 
-        // Float also uses 8 bytes (serial type 7).
         if (contentLength == 8 && allowedKinds.Contains(SerialTypeKind.Float))
             return new HeaderEntry(new Varint(7L, 1));
 
-        // Text: serial type = 13 + 2*length (odd, ≥ 13).
         if (allowedKinds.Contains(SerialTypeKind.Text))
         {
             long serial = 13L + 2L * contentLength;
             return new HeaderEntry(new Varint(serial, serial < 128 ? 1 : 2));
         }
 
-        // Blob: serial type = 12 + 2*length (even, ≥ 12).
         if (allowedKinds.Contains(SerialTypeKind.Blob))
         {
             long serial = 12L + 2L * contentLength;
@@ -264,7 +351,4 @@ public static class FreeblockRecordParser
 
         return null;
     }
-
-    private static int Mode(IEnumerable<int> values) =>
-        values.GroupBy(v => v).MaxBy(g => g.Count())!.Key;
 }

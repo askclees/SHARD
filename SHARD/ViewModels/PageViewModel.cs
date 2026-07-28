@@ -91,7 +91,7 @@ public sealed class PageViewModel : ViewModelBase
 
             var fbSections = new List<FreeBlockSectionViewModel>(tlp.FreeBlocks.Count);
             for (int i = 0; i < tlp.FreeBlocks.Count; i++)
-                fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i));
+                fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i, tlp.FreeblockCells));
             FreeBlockSections = fbSections;
 
             var urSections = new List<UnallocatedRegionSectionViewModel>(tlp.UnallocatedRegions.Count);
