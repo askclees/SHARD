@@ -209,6 +209,8 @@ public static class ShadowDatabaseBuilder
     /// <summary>
     /// Inserts a recovered (deleted) B-tree leaf cell into the
     /// <c>_shard_recovered_{tableName}</c> table of the already-open shadow connection.
+    /// Creates the table first if it does not yet exist (e.g. for sqlite_* tables that
+    /// are skipped during initial shadow DB construction).
     /// </summary>
     public static void InsertRecoveredRecord(
         SqliteConnection connection,
@@ -218,6 +220,7 @@ public static class ShadowDatabaseBuilder
         int cellOffset,
         string recoveryMethod = RecoveryMethodManual)
     {
+        EnsureRecoveredTableExists(connection, schema);
         string recoveredTable = RecoveredTablePrefix + schema.TableName;
 
         var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
@@ -572,6 +575,20 @@ public static class ShadowDatabaseBuilder
             cmd.ExecuteNonQuery();
         }
         transaction.Commit();
+    }
+
+    /// <summary>
+    /// Creates the <c>_shard_recovered_{tableName}</c> table if it does not already exist.
+    /// Used to lazily create recovered tables for sqlite_* tables that are skipped during
+    /// initial shadow DB construction.
+    /// </summary>
+    private static void EnsureRecoveredTableExists(SqliteConnection connection, TableSchema schema)
+    {
+        string sql = BuildCreateRecoveredTableSql(schema)
+            .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal);
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";

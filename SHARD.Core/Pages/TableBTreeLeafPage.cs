@@ -15,6 +15,8 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     public List<BTreeLeafCell> DeletedCells { get; } = new();
     public List<BTreeLeafCell> CarvedCells { get; } = new();
     public List<BTreeLeafCell> FreeblockCells { get; } = new();
+    /// <summary>Cells manually annotated by the user via the corrupt-record annotation dialog.</summary>
+    public List<BTreeLeafCell> AnnotatedCells { get; } = new();
     public List<(ushort Pointer, string Error)> DeletedCellParseErrors { get; } = new();
     public List<PageFreeBlock> FreeBlocks { get; } = new();
     public List<PageUnallocatedRegion> UnallocatedRegions { get; } = new();
