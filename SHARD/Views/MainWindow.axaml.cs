@@ -90,8 +90,11 @@ public partial class MainWindow : Window
 
     private void OnQueryBoxKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.Control)
+        if (e.Key == Key.Enter && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Control)
+        {
             Vm.QueryTab.RunQueryCommand.Execute(default).Subscribe();
+            e.Handled = true;
+        }
     }
 
     private void OnTableDoubleTapped(object? sender, TappedEventArgs e)

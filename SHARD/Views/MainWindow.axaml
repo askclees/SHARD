@@ -1082,7 +1082,7 @@
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBox Grid.Column="0"
                                                      Text="{Binding QueryTab.QueryText}"
-                                                     Watermark="SELECT * FROM table_name"
+                                                     Watermark="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
                                                      FontFamily="Courier New"
                                                      FontSize="12"
                                                      AcceptsReturn="True"
