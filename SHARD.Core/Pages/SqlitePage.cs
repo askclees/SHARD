@@ -1,5 +1,6 @@
 using System.IO;
 using SHARD.Core.Enums;
+using SHARD.Core.Records;
 
 namespace SHARD.Core.Pages;
 
@@ -21,6 +22,12 @@ public abstract class SqlitePage
 
     /// <summary>Classified type of this page.</summary>
     public abstract PageType PageType { get; }
+
+    /// <summary>
+    /// Cells carved from this page's raw bytes after the page was repurposed (e.g. added
+    /// to the freelist).  Populated lazily when the page is selected in the UI.
+    /// </summary>
+    public List<BTreeLeafCell> CarvedRecoveredCells { get; } = new();
 
     /// <summary>
     /// Byte offset within <see cref="Data"/> where the page header begins.
