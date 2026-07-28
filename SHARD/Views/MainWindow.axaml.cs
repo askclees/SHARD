@@ -236,6 +236,22 @@ public partial class MainWindow : Window
         this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
+    private void OnFreeBlockRecordClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: FreeBlockRecordEntry entry }) return;
+        var hexView = this.FindControl<HexView>("PageHexView");
+        hexView?.ScrollToByteOffset(entry.ByteOffset);
+        hexView?.SetCursorOffset(entry.ByteOffset);
+    }
+
+    private void OnWalFreeBlockRecordClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: FreeBlockRecordEntry entry }) return;
+        var hexView = this.FindControl<HexView>("WalHexView");
+        hexView?.ScrollToByteOffset(entry.ByteOffset);
+        hexView?.SetCursorOffset(entry.ByteOffset);
+    }
+
     private void OnUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
     {
         if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
