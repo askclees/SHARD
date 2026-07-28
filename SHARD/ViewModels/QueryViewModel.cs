@@ -162,10 +162,17 @@ public sealed class QueryViewModel : ViewModelBase
         var cols = GetTableColumns(recovered);
         if (cols.Count == 0) return QueryText;
 
-        string colList = string.Join(", ", cols.Select(QuoteIdentifier));
+        // Live shadow table has all recovered-table columns except _recovery_method.
+        // Substitute NULL on the live side so the UNION column counts match and the
+        // live SELECT doesn't fail with "no such column".
+        string colList     = string.Join(", ", cols.Select(QuoteIdentifier));
+        string liveColList = string.Join(", ", cols.Select(c =>
+            c == ShadowDatabaseBuilder.RecoveryMethodColumn
+                ? $"NULL AS {QuoteIdentifier(c)}"
+                : QuoteIdentifier(c)));
 
         return $"WITH _shard_q AS ({QueryText})\n" +
-               $"SELECT {colList}, 0 AS _is_recovered FROM _shard_q\n" +
+               $"SELECT {liveColList}, 0 AS _is_recovered FROM _shard_q\n" +
                $"UNION ALL\n" +
                $"SELECT {colList}, 1 AS _is_recovered FROM {QuoteIdentifier(recovered)}";
     }

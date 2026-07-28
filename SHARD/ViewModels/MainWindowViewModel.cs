@@ -464,6 +464,18 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Selects the page with <paramref name="pageNumber"/> in the Pages list.
+    /// Returns true when found; false when the page number is unknown.
+    /// </summary>
+    public bool NavigateToPage(uint pageNumber)
+    {
+        var entry = Pages.FirstOrDefault(p => p.PageNumber == pageNumber);
+        if (entry is null) return false;
+        SelectedPage = entry;
+        return true;
+    }
+
+    /// <summary>
     /// Returns the live cell whose byte range contains <paramref name="offset"/>,
     /// or null if the offset does not fall inside any cell on the current page.
     /// </summary>
@@ -562,6 +574,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (SelectedPageDetail?.Page is TableBTreeLeafPage tlp && annotationVm.DecodedCell is { } cell)
             {
                 tlp.AnnotatedCells.Add(cell);
+                SelectedPageDetail.AddAnnotatedCell(cell);
                 SelectedPageDetail.RefreshHighlights();
             }
         }
