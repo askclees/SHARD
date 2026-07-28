@@ -264,15 +264,82 @@ public sealed class PageViewModel : ViewModelBase
             }
 
             var unallocColour = Color.FromRgb(255, 165, 0);
+            var recoveredRanges = tlpFb.DeletedCells
+                .Concat(tlpFb.CarvedCells)
+                .Concat(tlpFb.FreeblockCells)
+                .Select(c => (Start: c.PageOffset, End: c.PageOffset + c.CellByteLengthOnPage))
+                .OrderBy(r => r.Start)
+                .ToList();
+
             for (int i = 0; i < tlpFb.UnallocatedRegions.Count; i++)
             {
                 var region = tlpFb.UnallocatedRegions[i];
-                if (region.Size > 0)
-                    list.Add(new HexHighlight(region.Offset, region.Size, unallocColour, $"Unallocated Region {i}"));
+                if (region.Size <= 0) continue;
+
+                int pos = region.Offset;
+                int regionEnd = region.Offset + region.Size;
+                foreach (var (rStart, rEnd) in recoveredRanges)
+                {
+                    if (rStart >= regionEnd) break;
+                    if (rEnd <= pos) continue;
+                    if (pos < rStart)
+                        list.Add(new HexHighlight(pos, rStart - pos, unallocColour, $"Unallocated Region {i}"));
+                    pos = Math.Max(pos, rEnd);
+                }
+                if (pos < regionEnd)
+                    list.Add(new HexHighlight(pos, regionEnd - pos, unallocColour, $"Unallocated Region {i}"));
+            }
+
+            // Deleted cells (via removed cell pointers) — layered on top of unallocated
+            foreach (var cell in tlpFb.DeletedCells)
+                AddDeletedCellHighlights(list, cell, "Deleted",
+                    Color.FromRgb(210, 60,  60),
+                    Color.FromRgb(180, 110, 20),
+                    Color.FromRgb( 50, 130, 160));
+
+            // Carved cells (found by scanning unallocated space)
+            foreach (var cell in tlpFb.CarvedCells)
+                AddDeletedCellHighlights(list, cell, "Carved",
+                    Color.FromRgb( 60, 180, 100),
+                    Color.FromRgb( 40, 150,  70),
+                    Color.FromRgb( 40, 160, 180));
+
+            // Freeblock cells (recovered from freeblocks) — highlight full range only
+            foreach (var cell in tlpFb.FreeblockCells)
+            {
+                string rowLabel = cell.RowId.Value >= 0
+                    ? $"Freeblock · Row {cell.RowId.Value}"
+                    : "Freeblock · Row unknown";
+                list.Add(new HexHighlight(cell.PageOffset, cell.CellByteLengthOnPage,
+                    Color.FromRgb(60, 140, 220), rowLabel));
             }
         }
 
         return list;
+    }
+
+    private static void AddDeletedCellHighlights(List<HexHighlight> list, BTreeLeafCell cell,
+        string kind, Color payloadColour, Color rowIdColour, Color headerColour)
+    {
+        string prefix = $"{kind} · Row {cell.RowId.Value}";
+        int pos = cell.PageOffset;
+
+        list.Add(new HexHighlight(pos, cell.SizeOfPayload.Length, payloadColour, $"{prefix} · Payload Size"));
+        pos += cell.SizeOfPayload.Length;
+
+        list.Add(new HexHighlight(pos, cell.RowId.Length, rowIdColour, $"{prefix} · Row ID"));
+        pos += cell.RowId.Length;
+
+        list.Add(new HexHighlight(pos, (int)cell.HeaderSize.Value, headerColour, $"{prefix} · Record Header"));
+        pos += (int)cell.HeaderSize.Value;
+
+        for (int i = 0; i < cell.HeaderEntries.Count; i++)
+        {
+            int len = cell.HeaderEntries[i].ContentLength;
+            if (len > 0)
+                list.Add(new HexHighlight(pos, len, ColumnColour(i), $"{prefix} · Col {i}"));
+            pos += len;
+        }
     }
 
     private static Color ColumnColour(int columnIndex)
