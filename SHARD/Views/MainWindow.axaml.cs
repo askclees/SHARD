@@ -109,6 +109,24 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private async void OnExportCsvClick(object? sender, RoutedEventArgs e)
+    {
+        var file = await (TopLevel.GetTopLevel(this)?.StorageProvider.SaveFilePickerAsync(
+            new FilePickerSaveOptions
+            {
+                Title = "Export Query Results as CSV",
+                SuggestedFileName = "query_results.csv",
+                FileTypeChoices = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }]
+            }) ?? Task.FromResult<IStorageFile?>(null));
+
+        if (file is null) return;
+
+        string csv = Vm.QueryTab.BuildCsv();
+        await using var stream = await file.OpenWriteAsync();
+        await using var writer = new System.IO.StreamWriter(stream, System.Text.Encoding.UTF8);
+        await writer.WriteAsync(csv);
+    }
+
     private void OnTableDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (sender is ListBox { SelectedItem: QueryTableViewModel table })

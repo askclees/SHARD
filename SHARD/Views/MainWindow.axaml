@@ -1115,12 +1115,22 @@
                                                Foreground="#E05C5C"
                                                Padding="10,4"
                                                FontSize="11" />
-                                    <TextBlock Grid.Row="3"
-                                               Text="{Binding QueryTab.Summary}"
-                                               IsVisible="{Binding QueryTab.HasRun}"
-                                               Opacity="0.55"
-                                               Padding="10,2"
-                                               FontSize="11" />
+                                    <Grid Grid.Row="3" ColumnDefinitions="*,Auto"
+                                          IsVisible="{Binding QueryTab.HasRun}">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding QueryTab.Summary}"
+                                                   Opacity="0.55"
+                                                   Padding="10,4"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11" />
+                                        <Button Grid.Column="1"
+                                                Content="Export CSV"
+                                                IsVisible="{Binding QueryTab.HasResults}"
+                                                Click="OnExportCsvClick"
+                                                Padding="10,3"
+                                                Margin="0,2,10,2"
+                                                FontSize="11" />
+                                    </Grid>
 
                                     <!-- Results grid -->
                                     <dg:DataGrid Grid.Row="4"
