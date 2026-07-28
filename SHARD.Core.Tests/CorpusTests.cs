@@ -307,75 +307,89 @@ public class CorpusTests(ITestOutputHelper output)
 
                 foreach (var expected in tables)
                 {
-                    if (expected.IsDeleted || expected.RowsDeleted == 0 || expected.DeletedRows.Count == 0) continue;
+                    if (expected.IsDeleted) continue;
                     if (!masterRows.TryGetValue(expected.Name, out var master)) continue;
                     if (master.RootPage is 0) continue;
 
                     var schema = db.GetTableSchema(expected.Name);
                     if (schema is null) continue;
 
-                    string? pkColName = FindPrimaryKeyColumn(schema);
-                    if (pkColName is null) continue;
-
-                    var recordStructure = RecordStructure.FromSchema(schema);
-                    var colMap = BuildColumnFieldMap(schema);
                     var colNames = schema.Columns.Select(c => c.Name).ToList();
 
-                    List<BTreeLeafCell> recovered;
-                    try
-                    {
-                        recovered = db.GetTreePageNumbers(master.RootPage!.Value)
-                            .Select(p => db.ReadPage(p))
-                            .OfType<TableBTreeLeafPage>()
-                            .SelectMany(p =>
-                            {
-                                p.CarveDeletedCells(recordStructure);
-                                p.CarveFreeblockCells(recordStructure);
-                                return p.DeletedCells.Concat(p.CarvedCells).Concat(p.FreeblockCells);
-                            })
-                            .ToList();
-                    }
-                    catch
-                    {
-                        continue;
-                    }
+                    // Live row check
+                    int liveFound = -1;
+                    try { liveFound = db.ReadTableRows(master.RootPage!.Value).Count(); }
+                    catch { }
 
+                    // Deleted row recovery
                     int exactCount = 0, partialCount = 0, missingCount = 0;
                     var missingRows = new List<IReadOnlyDictionary<string, string>>();
                     var changedRows = new List<(string Pk, List<FieldMismatch> Mismatches)>();
+                    string? pkColName = null;
 
-                    foreach (var expectedRow in expected.DeletedRows)
+                    if (expected.RowsDeleted > 0)
                     {
-                        string expectedPk = expectedRow.Fields.TryGetValue(pkColName, out string? pv) ? pv : "?";
+                        var recordStructure = RecordStructure.FromSchema(schema);
+                        pkColName = FindPrimaryKeyColumn(schema);
 
-                        (MatchLevel Level, List<FieldMismatch> Mismatches)? best = null;
-                        foreach (var cell in recovered)
+                        List<BTreeLeafCell> recovered;
+                        try
                         {
-                            var match = ClassifyRowMatch(cell, expectedRow, pkColName, colMap, schema);
-                            if (match is null) continue;
-                            if (best is null || match.Value.Mismatches.Count < best.Value.Mismatches.Count)
-                                best = match;
-                            if (best.Value.Level == MatchLevel.Exact) break;
+                            recovered = db.GetTreePageNumbers(master.RootPage!.Value)
+                                .Select(p => db.ReadPage(p))
+                                .OfType<TableBTreeLeafPage>()
+                                .SelectMany(p =>
+                                {
+                                    p.CarveDeletedCells(recordStructure);
+                                    p.CarveFreeblockCells(recordStructure);
+                                    return p.DeletedCells.Concat(p.CarvedCells).Concat(p.FreeblockCells);
+                                })
+                                .ToList();
                         }
+                        catch { recovered = []; }
 
-                        if (best is null)
+                        if (expected.DeletedRows.Count > 0 && pkColName is not null)
                         {
-                            missingCount++;
-                            missingRows.Add(expectedRow.Fields);
-                        }
-                        else if (best.Value.Level == MatchLevel.Exact)
-                        {
-                            exactCount++;
+                            var colMap = BuildColumnFieldMap(schema);
+                            foreach (var expectedRow in expected.DeletedRows)
+                            {
+                                string expectedPk = expectedRow.Fields.TryGetValue(pkColName, out string? pv) ? pv : "?";
+
+                                (MatchLevel Level, List<FieldMismatch> Mismatches)? best = null;
+                                foreach (var cell in recovered)
+                                {
+                                    var match = ClassifyRowMatch(cell, expectedRow, pkColName, colMap, schema);
+                                    if (match is null) continue;
+                                    if (best is null || match.Value.Mismatches.Count < best.Value.Mismatches.Count)
+                                        best = match;
+                                    if (best.Value.Level == MatchLevel.Exact) break;
+                                }
+
+                                if (best is null)
+                                {
+                                    missingCount++;
+                                    missingRows.Add(expectedRow.Fields);
+                                }
+                                else if (best.Value.Level == MatchLevel.Exact)
+                                    exactCount++;
+                                else
+                                {
+                                    partialCount++;
+                                    changedRows.Add((expectedPk, best.Value.Mismatches));
+                                }
+                            }
                         }
                         else
                         {
-                            partialCount++;
-                            changedRows.Add((expectedPk, best.Value.Mismatches));
+                            // Count-only: no per-row detail in corpus XML
+                            exactCount  = Math.Min(recovered.Count, expected.RowsDeleted);
+                            missingCount = Math.Max(0, expected.RowsDeleted - recovered.Count);
                         }
                     }
 
                     allResults.Add(new TestTableResult(testId, expected.Name, pkColName, colNames,
-                        expected.DeletedRows.Count, exactCount, partialCount, missingCount,
+                        expected.RowsAlive, liveFound,
+                        expected.RowsDeleted, exactCount, partialCount, missingCount,
                         missingRows, changedRows));
                 }
             }
@@ -406,30 +420,49 @@ public class CorpusTests(ITestOutputHelper output)
             .OrderBy(g => g.Key, StringComparer.Ordinal)
             .ToList();
 
-        // Per-test sections — only emit where something is missing or changed
+        // Per-test sections — all tests get a section
         foreach (var testGroup in byTest)
         {
-            if (!testGroup.Any(r => r.MissingCount > 0 || r.PartialCount > 0)) continue;
+            bool testHasIssues = testGroup.Any(r =>
+                (r.LiveFound >= 0 && r.LiveFound != r.LiveExpected) ||
+                r.MissingCount > 0 || r.PartialCount > 0);
 
             sb.AppendLine($"## {testGroup.Key}");
             sb.AppendLine();
-            sb.AppendLine("| Table | Expected | Recovered | Status |");
-            sb.AppendLine("|---|---|---|---|");
+            sb.AppendLine("| Table | Live Expected | Live Found | Deleted Expected | Deleted Recovered | Status |");
+            sb.AppendLine("|---|---|---|---|---|---|");
             foreach (var r in testGroup)
             {
-                int recoveredCount = r.ExactCount + r.PartialCount;
-                string status = r.MissingCount == 0 && r.PartialCount == 0
-                    ? "✅"
-                    : BuildStatusText(r.MissingCount, r.PartialCount);
-                sb.AppendLine($"| {r.TableName} | {r.Expected} | {recoveredCount} | {status} |");
+                string liveFound   = r.LiveFound >= 0 ? r.LiveFound.ToString() : "error";
+                string liveStatus  = r.LiveFound < 0 || r.LiveFound != r.LiveExpected ? "⚠️" : "✅";
+                string delExpected = r.DeletedExpected > 0 ? r.DeletedExpected.ToString() : "—";
+                string delFound    = r.DeletedExpected > 0 ? (r.ExactCount + r.PartialCount).ToString() : "—";
+                string delStatus   = r.DeletedExpected == 0 ? "—"
+                    : r.MissingCount == 0 && r.PartialCount == 0 ? "✅"
+                    : BuildDeletedStatusText(r.MissingCount, r.PartialCount);
+
+                bool rowOk = liveStatus == "✅" && (r.DeletedExpected == 0 || delStatus == "✅");
+                string rowStatus = rowOk ? "✅" : "⚠️";
+
+                sb.AppendLine($"| {r.TableName} | {r.LiveExpected} | {liveFound} | {delExpected} | {delFound} | {rowStatus} |");
             }
             sb.AppendLine();
 
-            foreach (var r in testGroup.Where(r => r.MissingCount > 0 || r.PartialCount > 0))
+            // Detail sub-sections for any table with failures
+            foreach (var r in testGroup)
             {
-                if (r.MissingCount > 0)
+                bool liveMismatch = r.LiveFound >= 0 && r.LiveFound != r.LiveExpected;
+                if (liveMismatch)
                 {
-                    sb.AppendLine($"### {r.TableName} — Missing Records");
+                    sb.AppendLine($"### {r.TableName} — Live Record Mismatch");
+                    sb.AppendLine();
+                    sb.AppendLine($"Expected {r.LiveExpected} live records, SHARD found {r.LiveFound}.");
+                    sb.AppendLine();
+                }
+
+                if (r.MissingCount > 0 && r.MissingRows.Count > 0)
+                {
+                    sb.AppendLine($"### {r.TableName} — Missing Deleted Records");
                     sb.AppendLine();
                     sb.AppendLine("| " + string.Join(" | ", r.ColNames) + " |");
                     sb.AppendLine("| " + string.Join(" | ", r.ColNames.Select(_ => "---")) + " |");
@@ -438,6 +471,13 @@ public class CorpusTests(ITestOutputHelper output)
                         var cells = r.ColNames.Select(c => row.TryGetValue(c, out var v) ? EscapeMd(v) : "");
                         sb.AppendLine("| " + string.Join(" | ", cells) + " |");
                     }
+                    sb.AppendLine();
+                }
+                else if (r.MissingCount > 0)
+                {
+                    sb.AppendLine($"### {r.TableName} — Missing Deleted Records");
+                    sb.AppendLine();
+                    sb.AppendLine($"{r.MissingCount} records missing (no per-row detail available in corpus).");
                     sb.AppendLine();
                 }
 
@@ -466,27 +506,36 @@ public class CorpusTests(ITestOutputHelper output)
         sb.AppendLine("## Summary");
         sb.AppendLine();
 
-        var perfectTests  = byTest.Where(g => g.All(r => r.MissingCount == 0 && r.PartialCount == 0)).ToList();
-        var imperfectTests = byTest.Where(g => g.Any(r => r.MissingCount > 0 || r.PartialCount > 0)).ToList();
+        bool TestPassed(IGrouping<string, TestTableResult> g) => g.All(r =>
+            (r.LiveFound < 0 || r.LiveFound == r.LiveExpected) &&
+            r.MissingCount == 0 && r.PartialCount == 0);
 
-        if (perfectTests.Count > 0)
+        var passedTests   = byTest.Where(TestPassed).ToList();
+        var failedTests   = byTest.Where(g => !TestPassed(g)).ToList();
+
+        if (passedTests.Count > 0)
         {
-            sb.AppendLine($"### ✅ Fully Recovered ({perfectTests.Count} tests)");
+            sb.AppendLine($"### ✅ All Records Matched ({passedTests.Count} tests)");
             sb.AppendLine();
-            sb.AppendLine(string.Join(", ", perfectTests.Select(g => g.Key)));
+            sb.AppendLine(string.Join(", ", passedTests.Select(g => g.Key)));
             sb.AppendLine();
         }
 
-        if (imperfectTests.Count > 0)
+        if (failedTests.Count > 0)
         {
-            sb.AppendLine($"### ⚠️ Partial Recovery ({imperfectTests.Count} tests)");
+            sb.AppendLine($"### ⚠️ Issues Found ({failedTests.Count} tests)");
             sb.AppendLine();
-            sb.AppendLine("| Test | Table | Expected | Recovered | Missing | Changed |");
-            sb.AppendLine("|---|---|---|---|---|---|");
-            foreach (var testGroup in imperfectTests)
+            sb.AppendLine("| Test | Table | Live Expected | Live Found | Deleted Expected | Deleted Recovered | Missing | Changed |");
+            sb.AppendLine("|---|---|---|---|---|---|---|---|");
+            foreach (var testGroup in failedTests)
             {
-                foreach (var r in testGroup.Where(r => r.MissingCount > 0 || r.PartialCount > 0))
-                    sb.AppendLine($"| {testGroup.Key} | {r.TableName} | {r.Expected} | {r.ExactCount + r.PartialCount} | {r.MissingCount} | {r.PartialCount} |");
+                foreach (var r in testGroup.Where(r =>
+                    (r.LiveFound >= 0 && r.LiveFound != r.LiveExpected) ||
+                    r.MissingCount > 0 || r.PartialCount > 0))
+                {
+                    string liveFound = r.LiveFound >= 0 ? r.LiveFound.ToString() : "error";
+                    sb.AppendLine($"| {testGroup.Key} | {r.TableName} | {r.LiveExpected} | {liveFound} | {r.DeletedExpected} | {r.ExactCount + r.PartialCount} | {r.MissingCount} | {r.PartialCount} |");
+                }
             }
             sb.AppendLine();
         }
@@ -494,7 +543,7 @@ public class CorpusTests(ITestOutputHelper output)
         return sb.ToString();
     }
 
-    private static string BuildStatusText(int missing, int partial)
+    private static string BuildDeletedStatusText(int missing, int partial)
     {
         var parts = new List<string>();
         if (missing > 0) parts.Add($"{missing} missing");
@@ -679,9 +728,11 @@ public class CorpusTests(ITestOutputHelper output)
     private record TestTableResult(
         string TestId,
         string TableName,
-        string PkColName,
+        string? PkColName,
         IReadOnlyList<string> ColNames,
-        int Expected,
+        int LiveExpected,
+        int LiveFound,       // -1 if reading threw
+        int DeletedExpected,
         int ExactCount,
         int PartialCount,
         int MissingCount,
