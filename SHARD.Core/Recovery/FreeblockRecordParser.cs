@@ -62,22 +62,47 @@ public static class FreeblockRecordParser
         if (first is null) yield break;
         yield return first;
 
-        // Subsequent records inside the same freeblock are fully intact.
+        // Subsequent records inside the same freeblock.
+        //
+        // Normally subsequent records are fully intact. However, when SQLite merges
+        // two adjacent freed cells into one freeblock it does NOT clear the inner
+        // cell's own old freeblock header — so the inner cell's first 4 bytes are
+        // also overwritten. We detect this by checking whether the 2-byte size field
+        // at [runStart+2] equals the number of bytes remaining to fbEnd; if so we
+        // apply the same k-template recovery we used for the first record.
         int nextOffset = fbStart + first.CellByteLengthOnPage;
         while (nextOffset < fbEnd - 4)
         {
+            int runStart = nextOffset;
             while (nextOffset < fbEnd && pageData[nextOffset] == 0x00)
                 nextOffset++;
             if (nextOffset >= fbEnd) break;
 
+            // Try as a fully-intact record first (the common case).
             var result = DeletedRecordParser.RecoverBTreeLeafRecord(pageData, nextOffset, encoding, recordStructure);
-            if (!result.IsValid) break;
+            if (result.IsValid)
+            {
+                long ps = result.Cell!.SizeOfPayload.Value;
+                if (ps < loPayload || ps > hiPayload) break;
+                yield return result.Cell;
+                nextOffset += result.Cell.CellByteLengthOnPage;
+                continue;
+            }
 
-            long ps = result.Cell!.SizeOfPayload.Value;
-            if (ps < loPayload || ps > hiPayload) break;
+            // Intact parse failed. Check if runStart holds an inner freeblock header
+            // whose size field encodes exactly the bytes remaining to fbEnd.
+            if (runStart + 4 > fbEnd) break;
+            int innerSize = (pageData[runStart + 2] << 8) | pageData[runStart + 3];
+            if (innerSize != fbEnd - runStart) break;
 
-            yield return result.Cell;
-            nextOffset += result.Cell.CellByteLengthOnPage;
+            BTreeLeafCell? inner =
+                TryK4(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
+                TryK3(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
+                TryK2(pageData, runStart, innerSize, loPayload, hiPayload, liveCells, encoding, recordStructure);
+            if (inner is null) break;
+
+            yield return inner;
+            nextOffset = runStart + inner.CellByteLengthOnPage;
         }
     }
 
