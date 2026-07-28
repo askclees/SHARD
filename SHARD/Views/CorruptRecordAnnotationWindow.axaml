@@ -1,0 +1,186 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SHARD.ViewModels"
+        xmlns:conv="using:Avalonia.Data.Converters"
+        x:Class="SHARD.Views.CorruptRecordAnnotationWindow"
+        x:DataType="vm:CorruptRecordAnnotationViewModel"
+        Title="{Binding WindowTitle}"
+        Width="700" Height="560"
+        MinWidth="500" MinHeight="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        ShowInTaskbar="False">
+
+    <Grid RowDefinitions="Auto,Auto,*,Auto,Auto,Auto" Margin="16">
+
+        <!-- Anchor column + Row ID selectors -->
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,*,24,Auto,*" Margin="0,0,0,12">
+            <TextBlock Grid.Column="0"
+                       Text="Anchor column:"
+                       VerticalAlignment="Center"
+                       FontSize="12"
+                       Margin="0,0,8,0" />
+            <ComboBox Grid.Column="1"
+                      ItemsSource="{Binding AnchorColumnLabels}"
+                      SelectedIndex="{Binding AnchorColumnIndex}"
+                      FontSize="12" />
+            <TextBlock Grid.Column="3"
+                       Text="Row ID:"
+                       VerticalAlignment="Center"
+                       FontSize="12"
+                       Margin="0,0,8,0" />
+            <TextBox Grid.Column="4"
+                     Text="{Binding RowIdText}"
+                     FontFamily="Courier New"
+                     FontSize="12"
+                     ToolTip.Tip="Enter the row ID for this record. Use -1 if unknown." />
+        </Grid>
+
+        <!-- Column table header -->
+        <Border Grid.Row="1"
+                Padding="4,4,4,4"
+                BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="32,130,72,72,64,64,*">
+                <TextBlock Grid.Column="0" Text="#"          FontSize="11" FontWeight="SemiBold" Opacity="0.55" />
+                <TextBlock Grid.Column="1" Text="Column"     FontSize="11" FontWeight="SemiBold" Opacity="0.55" />
+                <TextBlock Grid.Column="2" Text="Affinity"   FontSize="11" FontWeight="SemiBold" Opacity="0.55" />
+                <TextBlock Grid.Column="3" Text="Length"     FontSize="11" FontWeight="SemiBold" Opacity="0.55"
+                           ToolTip.Tip="Byte length of this column's data. Enter manually for pre-anchor columns." />
+                <TextBlock Grid.Column="4" Text="Ser. Type"  FontSize="11" FontWeight="SemiBold" Opacity="0.55"
+                           ToolTip.Tip="SQLite serial type value decoded from the page bytes (or synthesised for pre-anchor columns)." />
+                <TextBlock Grid.Column="5" Text="Bytes"      FontSize="11" FontWeight="SemiBold" Opacity="0.55"
+                           ToolTip.Tip="Content length in bytes as determined by the serial type." />
+                <TextBlock Grid.Column="6" Text="Decoded Value" FontSize="11" FontWeight="SemiBold" Opacity="0.55" />
+            </Grid>
+        </Border>
+
+        <!-- Column rows -->
+        <ScrollViewer Grid.Row="2"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding Columns}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:CorruptColumnEntryViewModel">
+                        <Grid ColumnDefinitions="32,130,72,72,64,64,*"
+                              Margin="0,2">
+
+                            <!-- Index -->
+                            <TextBlock Grid.Column="0"
+                                       Text="{Binding Index}"
+                                       FontSize="12"
+                                       Opacity="0.4"
+                                       VerticalAlignment="Center" />
+
+                            <!-- Column name (★ marks the anchor) -->
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding ColumnNameLabel}"
+                                       FontSize="12"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip.Tip="{Binding ColumnName}" />
+
+                            <!-- Affinity -->
+                            <TextBlock Grid.Column="2"
+                                       Text="{Binding TypeLabel}"
+                                       FontSize="11"
+                                       Opacity="0.65"
+                                       VerticalAlignment="Center" />
+
+                            <!-- Length: editable TextBox for pre-anchor, "auto" label for anchor+ -->
+                            <TextBox Grid.Column="3"
+                                     Text="{Binding ManualLength}"
+                                     IsVisible="{Binding IsBeforeAnchor}"
+                                     FontFamily="Courier New"
+                                     FontSize="11"
+                                     Padding="4,2"
+                                     VerticalAlignment="Center"
+                                     ToolTip.Tip="Byte count of this column's data in the original record" />
+                            <TextBlock Grid.Column="3"
+                                       Text="auto"
+                                       IsVisible="{Binding IsAutoDecoded}"
+                                       FontSize="11"
+                                       Opacity="0.4"
+                                       FontStyle="Italic"
+                                       VerticalAlignment="Center" />
+
+                            <!-- Serial type -->
+                            <TextBlock Grid.Column="4"
+                                       Text="{Binding SerialTypeLabel}"
+                                       FontFamily="Courier New"
+                                       FontSize="11"
+                                       Opacity="0.7"
+                                       VerticalAlignment="Center" />
+
+                            <!-- Content length -->
+                            <TextBlock Grid.Column="5"
+                                       Text="{Binding ContentLengthLabel}"
+                                       FontFamily="Courier New"
+                                       FontSize="11"
+                                       Opacity="0.7"
+                                       VerticalAlignment="Center" />
+
+                            <!-- Decoded value -->
+                            <TextBlock Grid.Column="6"
+                                       Text="{Binding DecodedValue}"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Detected schema info (visible when a CREATE TABLE SQL was found) -->
+        <Border Grid.Row="3"
+                IsVisible="{Binding HasExtractedSchema}"
+                Padding="10,8"
+                CornerRadius="4"
+                Margin="0,8,0,0">
+            <StackPanel Spacing="3">
+                <TextBlock Text="Detected table schema:"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Opacity="0.75" />
+                <TextBlock Text="{Binding SchemaDescription}"
+                           FontSize="11"
+                           TextWrapping="Wrap"
+                           Opacity="0.85" />
+            </StackPanel>
+        </Border>
+
+        <!-- Status message -->
+        <TextBlock Grid.Row="4"
+                   Text="{Binding StatusMessage}"
+                   IsVisible="{Binding StatusMessage,
+                               Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}"
+                   FontSize="11"
+                   TextWrapping="Wrap"
+                   Opacity="0.75"
+                   Margin="0,6,0,0" />
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="5"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,12,0,0">
+            <Button Content="Decode"
+                    Click="OnDecodeClicked"
+                    Padding="14,6" />
+            <Button Content="Register schema for carving"
+                    IsVisible="{Binding HasExtractedSchema}"
+                    Click="OnRegisterSchemaClicked"
+                    Padding="14,6"
+                    ToolTip.Tip="Register the detected CREATE TABLE schema so records on its root page can be carved" />
+            <Button Content="Save to project"
+                    IsEnabled="{Binding CanSave}"
+                    Click="OnSaveClicked"
+                    Padding="14,6" />
+            <Button Content="Close"
+                    Click="OnCloseClicked"
+                    Padding="14,6" />
+        </StackPanel>
+
+    </Grid>
+</Window>

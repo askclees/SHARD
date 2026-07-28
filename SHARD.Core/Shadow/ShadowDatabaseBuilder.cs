@@ -209,6 +209,8 @@ public static class ShadowDatabaseBuilder
     /// <summary>
     /// Inserts a recovered (deleted) B-tree leaf cell into the
     /// <c>_shard_recovered_{tableName}</c> table of the already-open shadow connection.
+    /// Creates the table first if it does not yet exist (e.g. for sqlite_* tables that
+    /// are skipped during initial shadow DB construction).
     /// </summary>
     public static void InsertRecoveredRecord(
         SqliteConnection connection,
@@ -218,6 +220,7 @@ public static class ShadowDatabaseBuilder
         int cellOffset,
         string recoveryMethod = RecoveryMethodManual)
     {
+        EnsureRecoveredTableExists(connection, schema);
         string recoveredTable = RecoveredTablePrefix + schema.TableName;
 
         var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
@@ -522,39 +525,17 @@ public static class ShadowDatabaseBuilder
     public static void CreateAndPopulateDeletedTable(
         SqliteConnection connection, TableSchema schema, IEnumerable<TableRow> rows)
     {
-        string shadowTable = DeletedTablePrefix + schema.TableName;
+        EnsureDeletedTableExists(connection, schema);
 
-        var columnSql = schema.Columns.Select(c =>
-        {
-            var parts = new List<string> { QuoteIdentifier(c.Name) };
-            if (!string.IsNullOrEmpty(c.DeclaredType)) parts.Add(c.DeclaredType);
-            return string.Join(' ', parts);
-        }).ToList();
-
-        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}    INTEGER NOT NULL");
-        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)}   INTEGER NOT NULL");
-        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)} INTEGER NOT NULL DEFAULT 0");
-
-        using (var create = connection.CreateCommand())
-        {
-            create.CommandText = $"CREATE TABLE IF NOT EXISTS {QuoteIdentifier(shadowTable)} (\n  {string.Join(",\n  ", columnSql)}\n)";
-            create.ExecuteNonQuery();
-        }
-
-        var colNames     = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
-        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
-        colNames.Add(QuoteIdentifier(PageNumberColumn));    placeholders.Add("@p_page");
-        colNames.Add(QuoteIdentifier(CellOffsetColumn));   placeholders.Add("@p_offset");
-        colNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
-
-        string insertSql = $"INSERT INTO {QuoteIdentifier(shadowTable)} ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", placeholders)})";
+        string shadowTable   = DeletedTablePrefix + schema.TableName;
+        string insertSql     = BuildDeletedTableInsertSql(schema, shadowTable);
 
         using var transaction = connection.BeginTransaction();
         foreach (var row in rows)
         {
             using var cmd = connection.CreateCommand();
-            cmd.Transaction  = transaction;
-            cmd.CommandText  = insertSql;
+            cmd.Transaction = transaction;
+            cmd.CommandText = insertSql;
 
             for (int i = 0; i < schema.Columns.Count; i++)
             {
@@ -572,6 +553,86 @@ public static class ShadowDatabaseBuilder
             cmd.ExecuteNonQuery();
         }
         transaction.Commit();
+    }
+
+    /// <summary>
+    /// Creates (if absent) and populates <c>_shard_deleted_{tableName}</c> with B-tree leaf
+    /// cells carved directly from a freed page's raw bytes, where no live cell list exists.
+    /// </summary>
+    public static void AppendCarvedCellsToDeletedTable(
+        SqliteConnection connection, TableSchema schema,
+        IEnumerable<BTreeLeafCell> cells, uint pageNumber)
+    {
+        EnsureDeletedTableExists(connection, schema);
+
+        string shadowTable = DeletedTablePrefix + schema.TableName;
+        string insertSql   = BuildDeletedTableInsertSql(schema, shadowTable);
+
+        using var transaction = connection.BeginTransaction();
+        foreach (var cell in cells)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = insertSql;
+
+            for (int i = 0; i < schema.Columns.Count; i++)
+            {
+                var col = schema.Columns[i];
+                object value = col.IsRowIdAlias
+                    ? cell.RowId.Value
+                    : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+                cmd.Parameters.AddWithValue($"@p{i}", value);
+            }
+
+            cmd.Parameters.AddWithValue("@p_page",    (long)pageNumber);
+            cmd.Parameters.AddWithValue("@p_offset",  cell.PageOffset);
+            cmd.Parameters.AddWithValue("@p_overflow", 0L);
+            cmd.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    private static void EnsureDeletedTableExists(SqliteConnection connection, TableSchema schema)
+    {
+        string shadowTable = DeletedTablePrefix + schema.TableName;
+
+        var columnSql = schema.Columns.Select(c =>
+        {
+            var parts = new List<string> { QuoteIdentifier(c.Name) };
+            if (!string.IsNullOrEmpty(c.DeclaredType)) parts.Add(c.DeclaredType);
+            return string.Join(' ', parts);
+        }).ToList();
+        columnSql.Add($"{QuoteIdentifier(PageNumberColumn)}    INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)}   INTEGER NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)} INTEGER NOT NULL DEFAULT 0");
+
+        using var create = connection.CreateCommand();
+        create.CommandText = $"CREATE TABLE IF NOT EXISTS {QuoteIdentifier(shadowTable)} (\n  {string.Join(",\n  ", columnSql)}\n)";
+        create.ExecuteNonQuery();
+    }
+
+    private static string BuildDeletedTableInsertSql(TableSchema schema, string shadowTable)
+    {
+        var colNames     = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        colNames.Add(QuoteIdentifier(PageNumberColumn));    placeholders.Add("@p_page");
+        colNames.Add(QuoteIdentifier(CellOffsetColumn));   placeholders.Add("@p_offset");
+        colNames.Add(QuoteIdentifier(OverflowPageColumn)); placeholders.Add("@p_overflow");
+        return $"INSERT INTO {QuoteIdentifier(shadowTable)} ({string.Join(", ", colNames)}) VALUES ({string.Join(", ", placeholders)})";
+    }
+
+    /// <summary>
+    /// Creates the <c>_shard_recovered_{tableName}</c> table if it does not already exist.
+    /// Used to lazily create recovered tables for sqlite_* tables that are skipped during
+    /// initial shadow DB construction.
+    /// </summary>
+    private static void EnsureRecoveredTableExists(SqliteConnection connection, TableSchema schema)
+    {
+        string sql = BuildCreateRecoveredTableSql(schema)
+            .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal);
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";

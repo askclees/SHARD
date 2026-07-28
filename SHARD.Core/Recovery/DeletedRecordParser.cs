@@ -88,4 +88,37 @@ public static class DeletedRecordParser
                 encoding,
                 offset));
     }
+
+    /// <summary>
+    /// Slides through <paramref name="data"/> byte-by-byte and collects every valid B-tree
+    /// leaf cell whose structure satisfies <paramref name="recordStructure"/>.  Zero runs are
+    /// skipped.  Used to carve records from freed pages whose raw bytes may still hold data
+    /// from when the page was a live table page.
+    /// </summary>
+    public static IReadOnlyList<BTreeLeafCell> CarveRawBytes(
+        byte[] data, TextEncoding encoding, RecordStructure? recordStructure = null)
+    {
+        var cells = new List<BTreeLeafCell>();
+        int pos   = 0;
+        int end   = data.Length;
+
+        while (pos < end)
+        {
+            while (pos < end && data[pos] == 0x00) pos++;
+            if (pos >= end) break;
+
+            var result = RecoverBTreeLeafRecord(data, pos, encoding, recordStructure);
+            if (result.IsValid)
+            {
+                cells.Add(result.Cell!);
+                pos += result.Cell!.CellByteLengthOnPage;
+            }
+            else
+            {
+                pos++;
+            }
+        }
+
+        return cells;
+    }
 }

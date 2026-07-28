@@ -642,6 +642,8 @@
                                                         <ContextMenu>
                                                             <MenuItem Header="Try to decode record at this location"
                                                                       Click="OnTryRecoverRecordClicked" />
+                                                            <MenuItem Header="Annotate corrupt record at this location…"
+                                                                      Click="OnAnnotateCorruptRecordClicked" />
                                                         </ContextMenu>
                                                     </controls:HexView.ContextMenu>
                                                 </controls:HexView>
@@ -1080,10 +1082,10 @@
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBox Grid.Column="0"
                                                      Text="{Binding QueryTab.QueryText}"
-                                                     Watermark="SELECT * FROM table_name"
+                                                     Watermark="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
                                                      FontFamily="Courier New"
                                                      FontSize="12"
-                                                     AcceptsReturn="True"
+                                                     AcceptsReturn="False"
                                                      MinHeight="32"
                                                      MaxHeight="120"
                                                      TextWrapping="Wrap"
@@ -1113,12 +1115,22 @@
                                                Foreground="#E05C5C"
                                                Padding="10,4"
                                                FontSize="11" />
-                                    <TextBlock Grid.Row="3"
-                                               Text="{Binding QueryTab.Summary}"
-                                               IsVisible="{Binding QueryTab.HasRun}"
-                                               Opacity="0.55"
-                                               Padding="10,2"
-                                               FontSize="11" />
+                                    <Grid Grid.Row="3" ColumnDefinitions="*,Auto"
+                                          IsVisible="{Binding QueryTab.HasRun}">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding QueryTab.Summary}"
+                                                   Opacity="0.55"
+                                                   Padding="10,4"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="11" />
+                                        <Button Grid.Column="1"
+                                                Content="Export CSV"
+                                                IsVisible="{Binding QueryTab.HasResults}"
+                                                Click="OnExportCsvClick"
+                                                Padding="10,3"
+                                                Margin="0,2,10,2"
+                                                FontSize="11" />
+                                    </Grid>
 
                                     <!-- Results grid -->
                                     <dg:DataGrid Grid.Row="4"

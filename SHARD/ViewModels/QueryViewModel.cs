@@ -1,6 +1,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Reactive;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using ReactiveUI;
@@ -49,6 +50,8 @@ public sealed class QueryViewModel : ViewModelBase
         get => _summary;
         private set => this.RaiseAndSetIfChanged(ref _summary, value);
     }
+
+    public bool HasResults => HasRun && !HasError && Results.Count > 0;
 
     // ── Results ───────────────────────────────────────────────────────────────
 
@@ -232,8 +235,28 @@ public sealed class QueryViewModel : ViewModelBase
         finally
         {
             HasRun = true;
+            this.RaisePropertyChanged(nameof(HasResults));
             ResultsUpdated?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    public string BuildCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(string.Join(",", ColumnNames.Select(CsvEscape)));
+        foreach (var row in Results)
+        {
+            sb.AppendLine(string.Join(",",
+                Enumerable.Range(0, ColumnNames.Count).Select(i => CsvEscape(row[i]))));
+        }
+        return sb.ToString();
+    }
+
+    private static string CsvEscape(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        return value;
     }
 
     // ── Reset ─────────────────────────────────────────────────────────────────
@@ -249,5 +272,6 @@ public sealed class QueryViewModel : ViewModelBase
         ColumnNames.Clear();
         TableNames.Clear();
         _shadowDbPath = null;
+        this.RaisePropertyChanged(nameof(HasResults));
     }
 }

@@ -29,6 +29,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     private Dictionary<uint, string>? _pageTableMap;
+    private readonly Dictionary<string, TableSchema> _manualSchemas  = new();
+    private readonly Dictionary<uint, TableSchema>   _freedPageSchemas = new();
 
     // ── Open / empty state ────────────────────────────────────────────────
     private bool _hasDatabase;
@@ -233,13 +235,22 @@ public sealed class MainWindowViewModel : ViewModelBase
                 : null;
             if (page is TableBTreeLeafPage tlp && value?.TableName is { } tn)
             {
-                var schema = Database!.GetTableSchema(tn);
+                var schema = Database!.GetTableSchema(tn)
+                          ?? (_manualSchemas.TryGetValue(tn, out var ms) ? ms : null);
                 if (schema is not null)
                 {
                     var rs = RecordStructure.FromSchema(schema);
                     tlp.CarveDeletedCells(rs);
                     tlp.CarveFreeblockCells(rs);
                 }
+            }
+            else if (page is not null && value is not null
+                     && _freedPageSchemas.TryGetValue(value.PageNumber, out var freedSchema)
+                     && Database is not null)
+            {
+                var rs     = RecordStructure.FromSchema(freedSchema);
+                var carved = DeletedRecordParser.CarveRawBytes(page.Data, Database.Header.TextEncoding, rs);
+                page.CarvedRecoveredCells.AddRange(carved);
             }
             SelectedPageDetail = page is not null ? new PageViewModel(page) : null;
             LastRecoveryResult = null;
@@ -518,6 +529,119 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    // ── Corrupt record annotation ─────────────────────────────────────────
+
+    /// <summary>
+    /// Saves a completed corrupt-record annotation to the shadow database and adds the decoded
+    /// cell to the page's <see cref="TableBTreeLeafPage.AnnotatedCells"/> so it is highlighted
+    /// in the hex view immediately.
+    /// Sets <see cref="StatusText"/> in both success and failure cases.
+    /// </summary>
+    public void SaveCorruptRecordAnnotation(CorruptRecordAnnotationViewModel annotationVm)
+    {
+        if (Project is null)
+        {
+            StatusText = "No project open — open or create a project to save records.";
+            return;
+        }
+
+        string? tableName = SelectedPage?.TableName;
+        if (tableName is null)
+        {
+            StatusText = "Cannot save: this page is not associated with a known table.";
+            return;
+        }
+
+        try
+        {
+            annotationVm.SaveToProject(Project, SelectedPage!.PageNumber);
+            StatusText = $"Corrupt record annotation saved at offset {SelectedByteOffset} " +
+                         $"→ {ShadowDatabaseBuilder.RecoveredTablePrefix}{tableName}";
+
+            // Add the decoded cell to the live page so it is highlighted immediately
+            if (SelectedPageDetail?.Page is TableBTreeLeafPage tlp && annotationVm.DecodedCell is { } cell)
+            {
+                tlp.AnnotatedCells.Add(cell);
+                SelectedPageDetail.RefreshHighlights();
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Save failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Registers a manually extracted table schema and adds it as a deleted-table entry in the UI.
+    /// Creates a shadow table and attempts to carve records from the root page if it is still valid.
+    /// </summary>
+    public void RegisterManualSchema(
+        TableSchema schema, long? rootPage, string? sql,
+        uint onPageNumber, int cellOffset, int cellLength)
+    {
+        // Keep in the manual schema map so navigating to the root page uses the correct columns.
+        _manualSchemas[schema.TableName] = schema;
+
+        // Determine root page validity.
+        uint? rootPageUint = rootPage is > 0 and <= (long)uint.MaxValue ? (uint)rootPage.Value : null;
+        RootPageStatus rootPageStatus = RootPageStatus.Invalid;
+        if (rootPageUint.HasValue && Database is not null)
+        {
+            try
+            {
+                var pg = Database.ReadPage(rootPageUint.Value);
+                if (pg is TableBTreeLeafPage)
+                {
+                    bool isClaimed = _pageTableMap?.ContainsKey(rootPageUint.Value) == true;
+                    rootPageStatus = isClaimed ? RootPageStatus.Reused : RootPageStatus.Valid;
+                }
+                else
+                {
+                    rootPageStatus = RootPageStatus.Freed;
+                }
+            }
+            catch { rootPageStatus = RootPageStatus.Invalid; }
+        }
+
+        // Build a synthetic sqlite_master entry and add it to the Deleted Tables panel.
+        var masterRow = new SqliteMasterRow
+        {
+            ObjectType = SqliteMasterObjectType.Table,
+            Name       = schema.TableName,
+            TableName  = schema.TableName,
+            RootPage   = rootPageUint,
+            Sql        = sql,
+            PageNumber = onPageNumber,
+            CellOffset = cellOffset,
+            CellLength = cellLength,
+        };
+        var deletedRow = new DeletedSqliteMasterRow(masterRow, "annotated", rootPageStatus);
+        DeletedSchemaRows.Add(new DeletedSchemaRowViewModel(deletedRow));
+        this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
+        this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
+
+        // Create shadow table and carve records from the root page when possible.
+        if (Project is not null && rootPageStatus == RootPageStatus.Valid && rootPageUint.HasValue && Database is not null)
+        {
+            try
+            {
+                var pageNums = Database.GetTreePageNumbers(rootPageUint.Value).ToList();
+                Project.AddDeletedTableRecords(schema, Database.ReadTableRows(rootPageUint.Value));
+                Project.TagDeletedTablePages(schema.TableName, pageNums);
+                StatusText = $"Registered '{schema.TableName}' — records carved from page {rootPageUint}.";
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Registered '{schema.TableName}' but carving failed: {ex.Message}";
+            }
+        }
+        else
+        {
+            string hint = rootPageUint is { } rp ? $" Navigate to page {rp} to carve records." : "";
+            StatusText = $"Registered '{schema.TableName}' ({rootPageStatus}).{hint}";
+        }
+    }
+
     // ── Status bar ────────────────────────────────────────────────────────
     private string _statusText = "Open a SQLite database to begin.";
     public string StatusText
@@ -667,6 +791,30 @@ public sealed class MainWindowViewModel : ViewModelBase
                     catch { }
                 }
 
+                // Carve freed pages: the root page is now a freelist page but may still
+                // hold the original table's bytes.
+                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Freed
+                                                                     && d.RootPage.HasValue
+                                                                     && d.Sql is not null))
+                {
+                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
+                    if (schema is null) continue;
+                    try
+                    {
+                        var rs       = RecordStructure.FromSchema(schema);
+                        var pageData = Database.ReadPage(deletedVm.RootPage!.Value).Data;
+                        var carved   = DeletedRecordParser.CarveRawBytes(pageData, Database.Header.TextEncoding, rs);
+                        if (carved.Count > 0)
+                        {
+                            project.AddFreedPageCarvedRecords(schema, carved, deletedVm.RootPage!.Value);
+                            project.TagDeletedTablePages(schema.TableName, [deletedVm.RootPage!.Value]);
+                        }
+                        // Register schema so navigating to the page triggers lazy carving for highlights.
+                        _freedPageSchemas[deletedVm.RootPage!.Value] = schema;
+                    }
+                    catch { }
+                }
+
                 QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
                 RefreshPagesFromShadowDatabase();
                 if (warnings.Count > 0)
@@ -721,6 +869,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         SelectedPage = null;
         HasDatabase  = false;
         WalTab       = null;
+        _manualSchemas.Clear();
+        _freedPageSchemas.Clear();
         _project?.Dispose();
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";

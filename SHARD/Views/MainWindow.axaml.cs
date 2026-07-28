@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using SHARD.Controls;
+using SHARD.Core.Enums;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
 using SHARD.ViewModels;
@@ -89,8 +90,41 @@ public partial class MainWindow : Window
 
     private void OnQueryBoxKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.Control)
+        if (e.Key != Key.Enter) return;
+
+        if (e.KeyModifiers == KeyModifiers.Shift)
+        {
+            // Insert a newline at the caret for multi-line SQL
+            if (sender is TextBox tb)
+            {
+                int pos = tb.CaretIndex;
+                tb.Text = (tb.Text ?? string.Empty).Insert(pos, "\n");
+                tb.CaretIndex = pos + 1;
+            }
+        }
+        else
+        {
             Vm.QueryTab.RunQueryCommand.Execute(default).Subscribe();
+        }
+        e.Handled = true;
+    }
+
+    private async void OnExportCsvClick(object? sender, RoutedEventArgs e)
+    {
+        var file = await (TopLevel.GetTopLevel(this)?.StorageProvider.SaveFilePickerAsync(
+            new FilePickerSaveOptions
+            {
+                Title = "Export Query Results as CSV",
+                SuggestedFileName = "query_results.csv",
+                FileTypeChoices = [new FilePickerFileType("CSV") { Patterns = ["*.csv"] }]
+            }) ?? Task.FromResult<IStorageFile?>(null));
+
+        if (file is null) return;
+
+        string csv = Vm.QueryTab.BuildCsv();
+        await using var stream = await file.OpenWriteAsync();
+        await using var writer = new System.IO.StreamWriter(stream, System.Text.Encoding.UTF8);
+        await writer.WriteAsync(csv);
     }
 
     private void OnTableDoubleTapped(object? sender, TappedEventArgs e)
@@ -350,6 +384,52 @@ public partial class MainWindow : Window
         dlg.Content = root;
 
         return dlg.ShowDialog<bool>(this);
+    }
+
+    // ── Corrupt record annotation ────────────────────────────────────────────
+
+    // Hardcoded sqlite_master schema used when annotating records on page 1.
+    private static readonly TableSchema SqliteMasterSchema = BuildSqliteMasterSchema();
+    private static TableSchema BuildSqliteMasterSchema()
+    {
+        var s = new TableSchema { TableName = "sqlite_master" };
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "type",     Affinity = TypeAffinity.Text });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "name",     Affinity = TypeAffinity.Text });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "tbl_name", Affinity = TypeAffinity.Text });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "rootpage", Affinity = TypeAffinity.Integer });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "sql",      Affinity = TypeAffinity.Text });
+        return s;
+    }
+
+    private async void OnAnnotateCorruptRecordClicked(object? sender, RoutedEventArgs e)
+    {
+        if (Vm.SelectedPage?.PageType != PageType.BTreeLeafTable ||
+            Vm.SelectedPage.TableName is null ||
+            Vm.SelectedByteOffset < 0 ||
+            Vm.SelectedPageDetail is null ||
+            Vm.Database is null)
+            return;
+
+        var schema = Vm.Database.GetTableSchema(Vm.SelectedPage.TableName)
+                  ?? (Vm.SelectedPage.TableName == "sqlite_master" ? SqliteMasterSchema : null);
+        if (schema is null) return;
+
+        var vm = new CorruptRecordAnnotationViewModel(
+            Vm.SelectedByteOffset,
+            Vm.SelectedPageDetail.PageBytes,
+            Vm.Database.Header.TextEncoding,
+            schema);
+
+        bool save = await new CorruptRecordAnnotationWindow(vm).ShowDialog<bool>(this);
+        if (save) Vm.SaveCorruptRecordAnnotation(vm);
+        if (vm.WantToRegisterSchema && vm.ExtractedSchema is not null)
+            Vm.RegisterManualSchema(
+                vm.ExtractedSchema,
+                vm.ExtractedRootPage,
+                vm.ExtractedSql,
+                Vm.SelectedPage!.PageNumber,
+                vm.AnchorOffset,
+                vm.DecodedCell?.CellByteLengthOnPage ?? 0);
     }
 
     // ── Convenience ──────────────────────────────────────────────────────────

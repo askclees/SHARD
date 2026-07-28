@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using Avalonia.Media;
+using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core.Decoding;
 using SHARD.Core.Enums;
@@ -27,6 +28,9 @@ public sealed class PageViewModel : ViewModelBase
     public byte[] PageBytes => Page.Data;
 
     public IReadOnlyList<HexHighlight> PageHighlights => BuildPageHighlights(Page);
+
+    /// <summary>Raise PropertyChanged for PageHighlights so the hex view re-renders after annotations are added.</summary>
+    public void RefreshHighlights() => this.RaisePropertyChanged(nameof(PageHighlights));
 
     // ── Cell pointers expander ────────────────────────────────────────────
     public bool HasCellPointers => Page is BTreePage bp && bp.CellPointers.Length > 0;
@@ -149,9 +153,17 @@ public sealed class PageViewModel : ViewModelBase
 
     private static IReadOnlyList<HexHighlight> BuildPageHighlights(SqlitePage page)
     {
-        if (page is not BTreePage bp) return [];
-
         var list = new List<HexHighlight>();
+
+        // Cells carved from freed pages — emit before early return so they show on non-BTree pages.
+        foreach (var cell in page.CarvedRecoveredCells)
+            AddDeletedCellHighlights(list, cell, "Recovered",
+                Color.FromRgb( 60, 180, 100),
+                Color.FromRgb( 40, 150,  70),
+                Color.FromRgb( 40, 160, 180));
+
+        if (page is not BTreePage bp) return list;
+
         int h = page.HeaderOffset;
 
         list.Add(new(h + 0, 1, Color.FromRgb( 86, 156, 214), "Page Type"));
@@ -267,6 +279,7 @@ public sealed class PageViewModel : ViewModelBase
             var recoveredRanges = tlpFb.DeletedCells
                 .Concat(tlpFb.CarvedCells)
                 .Concat(tlpFb.FreeblockCells)
+                .Concat(tlpFb.AnnotatedCells)
                 .Select(c => (Start: c.PageOffset, End: c.PageOffset + c.CellByteLengthOnPage))
                 .OrderBy(r => r.Start)
                 .ToList();
@@ -313,6 +326,13 @@ public sealed class PageViewModel : ViewModelBase
                 list.Add(new HexHighlight(cell.PageOffset, cell.CellByteLengthOnPage,
                     Color.FromRgb(60, 140, 220), rowLabel));
             }
+
+            // Manually annotated cells — purple, component breakdown
+            foreach (var cell in tlpFb.AnnotatedCells)
+                AddDeletedCellHighlights(list, cell, "Annotated",
+                    Color.FromRgb(180,  90, 240),
+                    Color.FromRgb(140,  60, 210),
+                    Color.FromRgb(210, 150, 255));
         }
 
         return list;
