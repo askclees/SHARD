@@ -170,7 +170,7 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     /// </summary>
     public void CarveFreeblockCells(RecordStructure recordStructure)
     {
-        if (FreeBlocks.Count == 0 || Cells.Count == 0) return;
+        if (FreeBlocks.Count == 0) return;
 
         var knownOffsets = new HashSet<int>(
             DeletedCells.Select(c => c.PageOffset)
