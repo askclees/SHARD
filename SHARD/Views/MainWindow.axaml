@@ -642,6 +642,8 @@
                                                         <ContextMenu>
                                                             <MenuItem Header="Try to decode record at this location"
                                                                       Click="OnTryRecoverRecordClicked" />
+                                                            <MenuItem Header="Annotate corrupt record at this location…"
+                                                                      Click="OnAnnotateCorruptRecordClicked" />
                                                         </ContextMenu>
                                                     </controls:HexView.ContextMenu>
                                                 </controls:HexView>

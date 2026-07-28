@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using SHARD.Controls;
+using SHARD.Core.Enums;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
 using SHARD.ViewModels;
@@ -350,6 +351,52 @@ public partial class MainWindow : Window
         dlg.Content = root;
 
         return dlg.ShowDialog<bool>(this);
+    }
+
+    // ── Corrupt record annotation ────────────────────────────────────────────
+
+    // Hardcoded sqlite_master schema used when annotating records on page 1.
+    private static readonly TableSchema SqliteMasterSchema = BuildSqliteMasterSchema();
+    private static TableSchema BuildSqliteMasterSchema()
+    {
+        var s = new TableSchema { TableName = "sqlite_master" };
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "type",     Affinity = TypeAffinity.Text });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "name",     Affinity = TypeAffinity.Text });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "tbl_name", Affinity = TypeAffinity.Text });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "rootpage", Affinity = TypeAffinity.Integer });
+        s.Columns.Add(new SHARD.Core.Schema.ColumnDefinition { Name = "sql",      Affinity = TypeAffinity.Text });
+        return s;
+    }
+
+    private async void OnAnnotateCorruptRecordClicked(object? sender, RoutedEventArgs e)
+    {
+        if (Vm.SelectedPage?.PageType != PageType.BTreeLeafTable ||
+            Vm.SelectedPage.TableName is null ||
+            Vm.SelectedByteOffset < 0 ||
+            Vm.SelectedPageDetail is null ||
+            Vm.Database is null)
+            return;
+
+        var schema = Vm.Database.GetTableSchema(Vm.SelectedPage.TableName)
+                  ?? (Vm.SelectedPage.TableName == "sqlite_master" ? SqliteMasterSchema : null);
+        if (schema is null) return;
+
+        var vm = new CorruptRecordAnnotationViewModel(
+            Vm.SelectedByteOffset,
+            Vm.SelectedPageDetail.PageBytes,
+            Vm.Database.Header.TextEncoding,
+            schema);
+
+        bool save = await new CorruptRecordAnnotationWindow(vm).ShowDialog<bool>(this);
+        if (save) Vm.SaveCorruptRecordAnnotation(vm);
+        if (vm.WantToRegisterSchema && vm.ExtractedSchema is not null)
+            Vm.RegisterManualSchema(
+                vm.ExtractedSchema,
+                vm.ExtractedRootPage,
+                vm.ExtractedSql,
+                Vm.SelectedPage!.PageNumber,
+                vm.AnchorOffset,
+                vm.DecodedCell?.CellByteLengthOnPage ?? 0);
     }
 
     // ── Convenience ──────────────────────────────────────────────────────────
