@@ -133,6 +133,57 @@ public partial class MainWindow : Window
             Vm.QueryTab.RunQueryForTable(table.ActualName);
     }
 
+    private void OnQueryResultDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is not DataGrid grid) return;
+        if (grid.SelectedItem is not QueryResultRow row) return;
+
+        var columns = Vm.QueryTab.ColumnNames;
+
+        int pageNumIdx = -1, offsetIdx = -1, methodIdx = -1;
+        for (int i = 0; i < columns.Count; i++)
+        {
+            if (columns[i] == "_page_number")  pageNumIdx = i;
+            else if (columns[i] == "_cell_offset")   offsetIdx  = i;
+            else if (columns[i] == "_recovery_method") methodIdx = i;
+        }
+
+        if (pageNumIdx < 0) return;
+        if (!uint.TryParse(row[pageNumIdx], out uint pageNumber) || pageNumber == 0) return;
+
+        string? recoveryMethod = methodIdx >= 0 ? row[methodIdx] : null;
+
+        // Switch outer tab to Pages (index 1) and select the page.
+        this.FindControl<TabControl>("MainTabControl")!.SelectedIndex = 1;
+        if (!Vm.NavigateToPage(pageNumber)) return;
+
+        // Derive which inner tab to show.
+        int innerTab = recoveryMethod switch
+        {
+            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodDeletedCell => 3, // Potential Deleted
+            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodCarving     => 4, // Recovered
+            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodFreeblock   => 4,
+            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodManual      => 4,
+            _                                                            => 1, // Cells (live)
+        };
+
+        int cellOffset = offsetIdx >= 0 && int.TryParse(row[offsetIdx], out int off) ? off : -1;
+
+        // Defer inner-tab switch and hex scroll until page bindings have settled.
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            this.FindControl<TabControl>("PageDetailTabControl")!.SelectedIndex = innerTab;
+
+            if (cellOffset >= 0)
+            {
+                Vm.SelectedByteOffset = cellOffset;
+                var hex = this.FindControl<HexView>("PageHexView");
+                hex?.ScrollToByteOffset(cellOffset);
+                hex?.SetCursorOffset(cellOffset);
+            }
+        });
+    }
+
     // ── File open ────────────────────────────────────────────────────────────
 
     private async void OnOpenClick(object? sender, RoutedEventArgs e)
@@ -210,10 +261,17 @@ public partial class MainWindow : Window
 
     private void OnCellSectionExpanded(object? sender, RoutedEventArgs e)
     {
-        if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
+        if (sender is not Expander exp) return;
         var hexView = this.FindControl<HexView>("PageHexView");
-        hexView?.ScrollToByteOffset(vm.ByteOffset);
-        hexView?.SetCursorOffset(vm.ByteOffset);
+        int offset = exp.DataContext switch
+        {
+            CellSectionViewModel vm            => vm.ByteOffset,
+            RemovableCellSectionViewModel rvm  => rvm.ByteOffset,
+            _                                  => -1,
+        };
+        if (offset < 0) return;
+        hexView?.ScrollToByteOffset(offset);
+        hexView?.SetCursorOffset(offset);
     }
 
     private void OnFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)

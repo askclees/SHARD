@@ -19,7 +19,7 @@ public static class ShadowDatabaseBuilder
     private const string PageNumberColumn    = "_page_number";
     private const string CellOffsetColumn   = "_cell_offset";
     private const string OverflowPageColumn = "_overflow_page";
-    private const string RecoveryMethodColumn = "_recovery_method";
+    public  const string RecoveryMethodColumn = "_recovery_method";
 
     public const string RecoveryMethodDeletedCell = "deleted_cell";
     public const string RecoveryMethodCarving     = "carving";
