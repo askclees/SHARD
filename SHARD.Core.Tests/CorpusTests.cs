@@ -569,8 +569,8 @@ public class CorpusTests(ITestOutputHelper output)
         {
             sb.AppendLine($"### ⚠️ Issues Found ({failedTests.Count} tests)");
             sb.AppendLine();
-            sb.AppendLine("| Test | Table | Live Expected | Live Found | Deleted Expected | Deleted Recovered | Missing | Changed |");
-            sb.AppendLine("|---|---|---|---|---|---|---|---|");
+            sb.AppendLine("| Test | Table | Live Expected | Live Found | Deleted Expected | Total Recovered | Exact Match | Partial | Missing |");
+            sb.AppendLine("|---|---|---|---|---|---|---|---|---|");
             foreach (var testGroup in failedTests)
             {
                 foreach (var r in testGroup.Where(r =>
@@ -578,7 +578,7 @@ public class CorpusTests(ITestOutputHelper output)
                     r.MissingCount > 0 || r.PartialCount > 0))
                 {
                     string liveFound = r.LiveFound >= 0 ? r.LiveFound.ToString() : "error";
-                    sb.AppendLine($"| {testGroup.Key} | {r.TableName} | {r.LiveExpected} | {liveFound} | {r.DeletedExpected} | {r.ExactCount + r.PartialCount} | {r.MissingCount} | {r.PartialCount} |");
+                    sb.AppendLine($"| {testGroup.Key} | {r.TableName} | {r.LiveExpected} | {liveFound} | {r.DeletedExpected} | {r.ExactCount + r.PartialCount} | {r.ExactCount} | {r.PartialCount} | {r.MissingCount} |");
                 }
             }
             sb.AppendLine();
