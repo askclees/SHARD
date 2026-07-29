@@ -84,11 +84,18 @@ public static class FreeblockRecordParser
             hiPayload = pageData.Length;
         }
 
+        // Build a page view where bytes beyond fbEnd are zeroed: those bytes may have
+        // been re-allocated by SQLite, so any cell data that spills past the freeblock
+        // boundary should read as 0x00 rather than borrowing from a different cell.
+        byte[] safePageData = fbEnd < pageData.Length
+            ? ZeroBeyond(pageData, fbEnd)
+            : pageData;
+
         // Try templates in confidence order.
         BTreeLeafCell? first =
-            TryK4(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
-            TryK3(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
-            TryK2(pageData, fbStart, fbSize, loPayload, hiPayload, liveCells, encoding, recordStructure, enforceBlockFit: false);
+            TryK4(safePageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
+            TryK3(safePageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
+            TryK2(safePageData, fbStart, fbSize, loPayload, hiPayload, liveCells, encoding, recordStructure, enforceBlockFit: false);
 
         if (first is null) yield break;
         yield return first;
@@ -318,6 +325,13 @@ public static class FreeblockRecordParser
         for (int i = 0; i < entries.Count; i++)
             if (!rs.AllowedKindsPerColumn[i].Contains(entries[i].Kind)) return false;
         return true;
+    }
+
+    private static byte[] ZeroBeyond(byte[] pageData, int safeEnd)
+    {
+        var copy = (byte[])pageData.Clone();
+        Array.Clear(copy, safeEnd, copy.Length - safeEnd);
+        return copy;
     }
 
     private static long Mode(IEnumerable<int> values) =>
