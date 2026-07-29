@@ -127,16 +127,17 @@ public static class FreeblockRecordParser
                 continue;
             }
 
-            // Intact parse failed. Check if runStart holds an inner freeblock header
-            // whose size field encodes exactly the bytes remaining to fbEnd.
+            // Intact parse failed — try k-templates at runStart.
+            // The cell's first 4 bytes may be an old inner freeblock header (classic
+            // SQLite merge) or simply the original PS/RowID/headerSize/col0Type bytes
+            // left intact when both cells were freed together.  Either way, the
+            // available space for the inner record is fbEnd - runStart.
             if (runStart + 4 > fbEnd) break;
-            int innerSize = (pageData[runStart + 2] << 8) | pageData[runStart + 3];
-            if (innerSize != fbEnd - runStart) break;
 
             BTreeLeafCell? inner =
                 TryK4(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
                 TryK3(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
-                TryK2(pageData, runStart, innerSize, loPayload, hiPayload, liveCells, encoding, recordStructure);
+                TryK2(pageData, runStart, fbEnd - runStart, loPayload, hiPayload, liveCells, encoding, recordStructure);
             if (inner is null) break;
 
             yield return inner;
