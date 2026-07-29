@@ -88,7 +88,7 @@ public static class FreeblockRecordParser
         BTreeLeafCell? first =
             TryK4(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
             TryK3(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
-            TryK2(pageData, fbStart, fbSize, loPayload, hiPayload, liveCells, encoding, recordStructure);
+            TryK2(pageData, fbStart, fbSize, loPayload, hiPayload, liveCells, encoding, recordStructure, enforceBlockFit: false);
 
         if (first is null) yield break;
         yield return first;
@@ -203,7 +203,8 @@ public static class FreeblockRecordParser
     private static BTreeLeafCell? TryK2(
         byte[] pageData, int fbStart, int fbSize, long loPayload, long hiPayload,
         IReadOnlyList<BTreeLeafCell> liveCells,
-        TextEncoding encoding, RecordStructure recordStructure)
+        TextEncoding encoding, RecordStructure recordStructure,
+        bool enforceBlockFit = true)
     {
         int N = recordStructure.NumColumns;
         if (N < 2) return null;
@@ -253,7 +254,9 @@ public static class FreeblockRecordParser
         long payloadValue    = headerSizeValue + col0.ContentLength + intactContentTotal;
 
         if (payloadValue < loPayload || payloadValue > hiPayload) return null;
-        if (2L + payloadValue > fbSize) return null;  // cell must fit inside the freeblock
+        // A cell can legitimately extend past its freeblock when SQLite partially re-allocated
+        // the freed space; in that case the caller opts out of this check.
+        if (enforceBlockFit && 2L + payloadValue > fbSize) return null;
 
         var allEntries = new List<HeaderEntry>(N) { col0 };
         allEntries.AddRange(intactEntries);
