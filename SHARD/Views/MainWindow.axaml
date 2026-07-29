@@ -374,7 +374,8 @@
                                            FontSize="13" />
 
                                 <!-- Page content -->
-                                <Grid IsVisible="{Binding SelectedPageDetail,
+                                <Grid x:Name="PageContentGrid"
+                                      IsVisible="{Binding SelectedPageDetail,
                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
                                       ColumnDefinitions="*,4,*">
 
@@ -815,7 +816,8 @@
                                             </StackPanel>
                                         </Border>
 
-                                        <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165">
+                                        <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165"
+                                              x:Name="PageHexGrid">
                                             <ScrollViewer Grid.Column="0"
                                                           VerticalScrollBarVisibility="Auto"
                                                           HorizontalScrollBarVisibility="Auto">
@@ -836,12 +838,15 @@
                                                     </controls:HexView.ContextMenu>
                                                 </controls:HexView>
                                             </ScrollViewer>
-                                            <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+                                            <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                                                          x:Name="PageInspectorSplitter" />
                                             <controls:DataInspectorControl Grid.Column="2"
+                                                                           x:Name="PageDataInspector"
                                                                            MinWidth="100"
                                                                            Data="{Binding #PageHexView.Data}"
                                                                            Offset="{Binding #PageHexView.CursorOffset}"
-                                                                           SelectionLength="{Binding #PageHexView.SelectionLength}" />
+                                                                           SelectionLength="{Binding #PageHexView.SelectionLength}"
+                                                                           PopOutRequested="OnPageInspectorPopOut" />
                                         </Grid>
 
                                     </Grid>
@@ -1220,7 +1225,8 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165">
+                                    <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165"
+                                          x:Name="SearchHexGrid">
                                         <ScrollViewer Grid.Column="0"
                                                       VerticalScrollBarVisibility="Auto"
                                                       HorizontalScrollBarVisibility="Auto">
@@ -1232,12 +1238,15 @@
                                                               UseDecimalOffsets="{Binding #SearchOffsetToggle.IsChecked}"
                                                               ShowHighlights="{Binding #SearchHighlightToggle.IsChecked}" />
                                         </ScrollViewer>
-                                        <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+                                        <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                                                      x:Name="SearchInspectorSplitter" />
                                         <controls:DataInspectorControl Grid.Column="2"
+                                                                       x:Name="SearchDataInspector"
                                                                        MinWidth="100"
                                                                        Data="{Binding #SearchHexView.Data}"
                                                                        Offset="{Binding #SearchHexView.CursorOffset}"
-                                                                       SelectionLength="{Binding #SearchHexView.SelectionLength}" />
+                                                                       SelectionLength="{Binding #SearchHexView.SelectionLength}"
+                                                                       PopOutRequested="OnSearchInspectorPopOut" />
                                     </Grid>
 
                                 </Grid>
@@ -1247,10 +1256,29 @@
                     </TabItem>
 
                     <!-- ── Tab 5: Query ── -->
-                    <TabItem Header="Query">
-                        <Grid RowDefinitions="Auto,Auto,Auto,*">
+                    <TabItem x:Name="QueryTabItem" Header="Query">
+                        <Grid>
 
-                            <Grid Grid.Row="0" Grid.RowSpan="4"
+                            <TextBlock x:Name="QueryFloatPlaceholder"
+                                       IsVisible="False"
+                                       Text="Query is open in a floating window"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Opacity="0.45"
+                                       FontSize="13" />
+
+                            <Grid x:Name="QueryContent" RowDefinitions="Auto,*">
+
+                            <!-- Query toolbar -->
+                            <Border Grid.Row="0" Padding="6,3" BorderThickness="0,0,0,1">
+                                <Button Content="⧉ Pop out"
+                                        Click="OnQueryPopOut"
+                                        Padding="8,2"
+                                        FontSize="11"
+                                        HorizontalAlignment="Right" />
+                            </Border>
+
+                            <Grid Grid.Row="1"
                                   ColumnDefinitions="220,4,*">
 
                                 <!-- Left: table list -->
@@ -1354,6 +1382,8 @@
 
                             </Grid>
 
+                            </Grid><!-- end QueryContent -->
+
                         </Grid>
                     </TabItem>
 
@@ -1455,7 +1485,8 @@
                                                Opacity="0.35"
                                                FontSize="13" />
 
-                                    <Grid IsVisible="{Binding WalTab.SelectedFrameDetail,
+                                    <Grid x:Name="WalContentGrid"
+                                          IsVisible="{Binding WalTab.SelectedFrameDetail,
                                                       Converter={x:Static conv:ObjectConverters.IsNotNull}}"
                                           ColumnDefinitions="*,4,*">
 
@@ -1690,7 +1721,8 @@
                                                                Margin="8,0,0,0" />
                                                 </StackPanel>
                                             </Border>
-                                            <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165">
+                                            <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165"
+                                                  x:Name="WalHexGrid">
                                                 <ScrollViewer Grid.Column="0"
                                                               VerticalScrollBarVisibility="Auto"
                                                               HorizontalScrollBarVisibility="Auto">
@@ -1702,12 +1734,15 @@
                                                                       UseDecimalOffsets="{Binding #WalOffsetToggle.IsChecked}"
                                                                       ShowHighlights="{Binding #WalHighlightToggle.IsChecked}" />
                                                 </ScrollViewer>
-                                                <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+                                                <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                                                              x:Name="WalInspectorSplitter" />
                                                 <controls:DataInspectorControl Grid.Column="2"
+                                                                               x:Name="WalDataInspector"
                                                                                MinWidth="100"
                                                                                Data="{Binding #WalHexView.Data}"
                                                                                Offset="{Binding #WalHexView.CursorOffset}"
-                                                                               SelectionLength="{Binding #WalHexView.SelectionLength}" />
+                                                                               SelectionLength="{Binding #WalHexView.SelectionLength}"
+                                                                               PopOutRequested="OnWalInspectorPopOut" />
                                             </Grid>
                                         </Grid>
 
