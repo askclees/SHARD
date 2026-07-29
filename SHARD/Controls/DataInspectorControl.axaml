@@ -4,9 +4,22 @@
              x:Class="SHARD.Controls.DataInspectorControl">
 
     <Border BorderThickness="1,0,0,0">
-        <Grid RowDefinitions="*,Auto">
+        <Grid RowDefinitions="Auto,*,Auto">
 
-            <ScrollViewer Grid.Row="0"
+            <!-- Pop-out toolbar -->
+            <Border Grid.Row="0" BorderThickness="0,0,0,1" Padding="4,2">
+                <Button x:Name="PopOutButton"
+                        HorizontalAlignment="Right"
+                        Padding="3,1"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        FontSize="11"
+                        Opacity="0.55"
+                        ToolTip.Tip="Open in floating window"
+                        Click="OnPopOutClicked">⧉</Button>
+            </Border>
+
+            <ScrollViewer Grid.Row="1"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled">
                 <ItemsControl x:Name="RowsControl" Margin="8,6,8,8">
@@ -29,7 +42,7 @@
             </ScrollViewer>
 
             <!-- Selection info: shown when a byte range is selected -->
-            <Border Grid.Row="1"
+            <Border Grid.Row="2"
                     x:Name="SelectionPanel"
                     IsVisible="False"
                     BorderThickness="0,1,0,0"

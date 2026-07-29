@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using SHARD.Core.Decoding;
 using SHARD.ViewModels;
 
@@ -10,6 +11,16 @@ namespace SHARD.Controls;
 
 public partial class DataInspectorControl : UserControl
 {
+    public static readonly RoutedEvent<RoutedEventArgs> PopOutRequestedEvent =
+        RoutedEvent.Register<DataInspectorControl, RoutedEventArgs>(
+            nameof(PopOutRequested), RoutingStrategies.Bubble);
+
+    public event EventHandler<RoutedEventArgs> PopOutRequested
+    {
+        add    => AddHandler(PopOutRequestedEvent, value);
+        remove => RemoveHandler(PopOutRequestedEvent, value);
+    }
+
     public static readonly StyledProperty<byte[]?> DataProperty =
         AvaloniaProperty.Register<DataInspectorControl, byte[]?>(nameof(Data));
 
@@ -48,6 +59,9 @@ public partial class DataInspectorControl : UserControl
     {
         InitializeComponent();
     }
+
+    private void OnPopOutClicked(object? sender, RoutedEventArgs e) =>
+        RaiseEvent(new RoutedEventArgs(PopOutRequestedEvent, this));
 
     private void Refresh()
     {

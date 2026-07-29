@@ -67,6 +67,13 @@ public sealed class QueryViewModel : ViewModelBase
     /// </summary>
     public event EventHandler? ResultsUpdated;
 
+    /// <summary>
+    /// Raised when the user double-clicks a query result row that has page-location
+    /// metadata. Both the main window and any floating query window subscribe so the
+    /// main window can switch to the correct page and tab.
+    /// </summary>
+    public event EventHandler<QueryNavigationEventArgs>? NavigationRequested;
+
     // ── Tables (for the table-list side panel) ──────────────────────────────────
 
     public ObservableCollection<QueryTableViewModel> TableNames { get; } = [];
@@ -264,6 +271,31 @@ public sealed class QueryViewModel : ViewModelBase
         if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
             return $"\"{value.Replace("\"", "\"\"")}\"";
         return value;
+    }
+
+    public record QueryNavigationEventArgs(uint PageNumber, string? RecoveryMethod, int CellOffset);
+
+    /// <summary>
+    /// Parses a double-clicked result row and fires <see cref="NavigationRequested"/> if the
+    /// row contains page-location metadata columns.
+    /// </summary>
+    public void RequestNavigationFromRow(QueryResultRow row)
+    {
+        int pageNumIdx = -1, offsetIdx = -1, methodIdx = -1;
+        for (int i = 0; i < ColumnNames.Count; i++)
+        {
+            if      (ColumnNames[i] == "_page_number")    pageNumIdx = i;
+            else if (ColumnNames[i] == "_cell_offset")    offsetIdx  = i;
+            else if (ColumnNames[i] == "_recovery_method") methodIdx = i;
+        }
+
+        if (pageNumIdx < 0) return;
+        if (!uint.TryParse(row[pageNumIdx], out uint pageNumber) || pageNumber == 0) return;
+
+        string? recoveryMethod = methodIdx >= 0 ? row[methodIdx] : null;
+        int cellOffset = offsetIdx >= 0 && int.TryParse(row[offsetIdx], out int off) ? off : -1;
+
+        NavigationRequested?.Invoke(this, new QueryNavigationEventArgs(pageNumber, recoveryMethod, cellOffset));
     }
 
     // ── Reset ─────────────────────────────────────────────────────────────────

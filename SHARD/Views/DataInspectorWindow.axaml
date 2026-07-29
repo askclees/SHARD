@@ -1,0 +1,25 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:SHARD.Controls"
+        x:Class="SHARD.Views.DataInspectorWindow"
+        Title="Data Inspector"
+        Width="220"
+        Height="500"
+        MinWidth="180"
+        MinHeight="200"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <Grid RowDefinitions="Auto,*">
+        <Border Grid.Row="0" BorderThickness="0,0,0,1" Padding="6,3">
+            <Button Content="← Dock"
+                    Click="OnDockClick"
+                    HorizontalAlignment="Left"
+                    Padding="8,2"
+                    FontSize="11"
+                    ToolTip.Tip="Return to inline panel" />
+        </Border>
+        <controls:DataInspectorControl Grid.Row="1" x:Name="InspectorControl" />
+    </Grid>
+
+</Window>

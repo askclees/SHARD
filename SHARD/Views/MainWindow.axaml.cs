@@ -65,7 +65,8 @@ public partial class MainWindow : Window
                             this.FindControl<HexView>("SchemaHexView")?.ScrollToByteOffset(row.CellOffset));
                 };
 
-                vm.QueryTab.ResultsUpdated += (_, _) => RebuildQueryResultColumns(vm.QueryTab);
+                vm.QueryTab.ResultsUpdated    += (_, _) => RebuildQueryResultColumns(vm.QueryTab);
+                vm.QueryTab.NavigationRequested += OnQueryNavigation;
             }
         };
     }
@@ -135,53 +136,152 @@ public partial class MainWindow : Window
 
     private void OnQueryResultDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (sender is not DataGrid grid) return;
-        if (grid.SelectedItem is not QueryResultRow row) return;
+        if (sender is not DataGrid { SelectedItem: QueryResultRow row }) return;
+        Vm.QueryTab.RequestNavigationFromRow(row);
+    }
 
-        var columns = Vm.QueryTab.ColumnNames;
-
-        int pageNumIdx = -1, offsetIdx = -1, methodIdx = -1;
-        for (int i = 0; i < columns.Count; i++)
-        {
-            if (columns[i] == "_page_number")  pageNumIdx = i;
-            else if (columns[i] == "_cell_offset")   offsetIdx  = i;
-            else if (columns[i] == "_recovery_method") methodIdx = i;
-        }
-
-        if (pageNumIdx < 0) return;
-        if (!uint.TryParse(row[pageNumIdx], out uint pageNumber) || pageNumber == 0) return;
-
-        string? recoveryMethod = methodIdx >= 0 ? row[methodIdx] : null;
-
-        // Switch outer tab to Pages (index 1) and select the page.
+    private void OnQueryNavigation(object? sender, QueryViewModel.QueryNavigationEventArgs e)
+    {
         this.FindControl<TabControl>("MainTabControl")!.SelectedIndex = 1;
-        if (!Vm.NavigateToPage(pageNumber)) return;
+        if (!Vm.NavigateToPage(e.PageNumber)) return;
 
-        // Derive which inner tab to show.
-        int innerTab = recoveryMethod switch
+        int innerTab = e.RecoveryMethod switch
         {
-            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodDeletedCell => 3, // Potential Deleted
-            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodCarving     => 4, // Recovered
+            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodDeletedCell => 3,
+            Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodCarving     => 4,
             Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodFreeblock   => 4,
             Core.Shadow.ShadowDatabaseBuilder.RecoveryMethodManual      => 4,
-            _                                                            => 1, // Cells (live)
+            _                                                            => 1,
         };
 
-        int cellOffset = offsetIdx >= 0 && int.TryParse(row[offsetIdx], out int off) ? off : -1;
-
-        // Defer inner-tab switch and hex scroll until page bindings have settled.
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             this.FindControl<TabControl>("PageDetailTabControl")!.SelectedIndex = innerTab;
-
-            if (cellOffset >= 0)
+            if (e.CellOffset >= 0)
             {
-                Vm.SelectedByteOffset = cellOffset;
+                Vm.SelectedByteOffset = e.CellOffset;
                 var hex = this.FindControl<HexView>("PageHexView");
-                hex?.ScrollToByteOffset(cellOffset);
-                hex?.SetCursorOffset(cellOffset);
+                hex?.ScrollToByteOffset(e.CellOffset);
+                hex?.SetCursorOffset(e.CellOffset);
             }
         });
+    }
+
+    // ── Pop-out panels ───────────────────────────────────────────────────────
+
+    private QueryWindow? _queryWindow;
+
+    private void OnQueryPopOut(object? sender, RoutedEventArgs e)
+    {
+        if (_queryWindow is not null) { _queryWindow.Activate(); return; }
+        _queryWindow = new QueryWindow(Vm.QueryTab);
+        MainTabControl.SelectedIndex = 1;  // switch to Pages before hiding the Query tab
+        QueryTabItem.IsVisible = false;
+        _queryWindow.Closed += (_, _) =>
+        {
+            _queryWindow = null;
+            QueryTabItem.IsVisible = true;
+        };
+        _queryWindow.Show(this);
+    }
+
+    private DataInspectorWindow? _pageInspectorWindow;
+    private DataInspectorWindow? _searchInspectorWindow;
+    private DataInspectorWindow? _walInspectorWindow;
+
+    private void OnPageInspectorPopOut(object? sender, RoutedEventArgs e) =>
+        OpenInspectorPopOut(
+            w => _pageInspectorWindow = w, () => _pageInspectorWindow,
+            "Data Inspector — Page",
+            this.FindControl<HexView>("PageHexView")!,
+            this.FindControl<Grid>("PageHexGrid")!,
+            this.FindControl<GridSplitter>("PageInspectorSplitter")!,
+            this.FindControl<DataInspectorControl>("PageDataInspector")!,
+            this.FindControl<Grid>("PageContentGrid")!);
+
+    private void OnSearchInspectorPopOut(object? sender, RoutedEventArgs e) =>
+        OpenInspectorPopOut(
+            w => _searchInspectorWindow = w, () => _searchInspectorWindow,
+            "Data Inspector — Search",
+            this.FindControl<HexView>("SearchHexView")!,
+            this.FindControl<Grid>("SearchHexGrid")!,
+            this.FindControl<GridSplitter>("SearchInspectorSplitter")!,
+            this.FindControl<DataInspectorControl>("SearchDataInspector")!);
+
+    private void OnWalInspectorPopOut(object? sender, RoutedEventArgs e) =>
+        OpenInspectorPopOut(
+            w => _walInspectorWindow = w, () => _walInspectorWindow,
+            "Data Inspector — WAL",
+            this.FindControl<HexView>("WalHexView")!,
+            this.FindControl<Grid>("WalHexGrid")!,
+            this.FindControl<GridSplitter>("WalInspectorSplitter")!,
+            this.FindControl<DataInspectorControl>("WalDataInspector")!,
+            this.FindControl<Grid>("WalContentGrid")!);
+
+    private void OpenInspectorPopOut(
+        Action<DataInspectorWindow?> setField,
+        Func<DataInspectorWindow?> getField,
+        string title,
+        HexView hexView,
+        Grid hexGrid,
+        GridSplitter splitter,
+        DataInspectorControl inlineInspector,
+        Grid? outerContentGrid = null)
+    {
+        var existing = getField();
+        if (existing is not null) { existing.Activate(); return; }
+
+        var win = new DataInspectorWindow(title);
+        win.Inspector.Data            = hexView.Data;
+        win.Inspector.Offset          = hexView.CursorOffset;
+        win.Inspector.SelectionLength = hexView.SelectionLength;
+
+        void OnHexChanged(object? s, AvaloniaPropertyChangedEventArgs pe)
+        {
+            if      (pe.Property == HexView.DataProperty)            win.Inspector.Data            = hexView.Data;
+            else if (pe.Property == HexView.CursorOffsetProperty)    win.Inspector.Offset          = hexView.CursorOffset;
+            else if (pe.Property == HexView.SelectionLengthProperty) win.Inspector.SelectionLength = hexView.SelectionLength;
+        }
+
+        hexView.PropertyChanged += OnHexChanged;
+
+        // Collapse the splitter and inspector columns in the inner hex grid
+        var savedCol0 = hexGrid.ColumnDefinitions[0].Width;
+        var savedCol1 = hexGrid.ColumnDefinitions[1].Width;
+        var savedCol2 = hexGrid.ColumnDefinitions[2].Width;
+        hexGrid.ColumnDefinitions[1].Width = new GridLength(0);
+        hexGrid.ColumnDefinitions[2].Width = new GridLength(0);
+        splitter.IsVisible        = false;
+        inlineInspector.IsVisible = false;
+
+        // Pages/WAL: shrink the outer *,4,* col to Auto so the detail tabs expand.
+        // Search: no outer grid — expand inner col 0 to fill the outer * instead.
+        GridLength savedOuterCol2 = default;
+        if (outerContentGrid is not null)
+        {
+            savedOuterCol2 = outerContentGrid.ColumnDefinitions[2].Width;
+            outerContentGrid.ColumnDefinitions[2].Width = GridLength.Auto;
+        }
+        else
+        {
+            hexGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+        }
+
+        win.Closed += (_, _) =>
+        {
+            hexView.PropertyChanged -= OnHexChanged;
+            hexGrid.ColumnDefinitions[0].Width = savedCol0;
+            hexGrid.ColumnDefinitions[1].Width = savedCol1;
+            hexGrid.ColumnDefinitions[2].Width = savedCol2;
+            splitter.IsVisible        = true;
+            inlineInspector.IsVisible = true;
+            if (outerContentGrid is not null)
+                outerContentGrid.ColumnDefinitions[2].Width = savedOuterCol2;
+            setField(null);
+        };
+
+        setField(win);
+        win.Show(this);
     }
 
     // ── File open ────────────────────────────────────────────────────────────
