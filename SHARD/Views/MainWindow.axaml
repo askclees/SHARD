@@ -9,8 +9,9 @@
         x:DataType="vm:MainWindowViewModel"
         Title="SHARD — SQLite Forensic Analyser"
         Icon="avares://SHARD/Assets/shard-icon.png"
-        Width="1200" Height="760"
+        Width="1050" Height="720"
         MinWidth="800" MinHeight="500"
+        WindowState="Maximized"
         DragDrop.AllowDrop="True">
 
     <DockPanel>
@@ -129,7 +130,7 @@
                             <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
                             <!-- Right: hex dump of first 100 bytes -->
-                            <Grid Grid.Column="2" RowDefinitions="Auto,*">
+                            <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto">
 
                                 <!-- Toolbar -->
                                 <Border Grid.Row="0"
@@ -165,11 +166,23 @@
                                               HorizontalScrollBarVisibility="Auto">
                                     <controls:HexView x:Name="HdrHexView"
                                                       Margin="14,8,14,16"
+                                                      HorizontalAlignment="Left"
                                                       Data="{Binding HeaderBytes}"
                                                       Highlights="{Binding HeaderHighlights}"
                                                       UseDecimalOffsets="{Binding #HdrOffsetToggle.IsChecked}"
                                                       ShowHighlights="{Binding #HdrHighlightToggle.IsChecked}" />
                                 </ScrollViewer>
+
+                                <Border Grid.Row="2"
+                                        Padding="8,3"
+                                        BorderThickness="0,1,0,0"
+                                        IsVisible="{Binding #HdrHexView.SelectionInfo,
+                                                    Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                    <TextBlock Text="{Binding #HdrHexView.SelectionInfo}"
+                                               FontFamily="Courier New"
+                                               FontSize="11"
+                                               Opacity="0.7" />
+                                </Border>
 
                             </Grid>
 
@@ -802,12 +815,13 @@
                                             </StackPanel>
                                         </Border>
 
-                                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                        <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165">
                                             <ScrollViewer Grid.Column="0"
                                                           VerticalScrollBarVisibility="Auto"
                                                           HorizontalScrollBarVisibility="Auto">
                                                 <controls:HexView x:Name="PageHexView"
                                                                   Margin="14,8,14,16"
+                                                                  HorizontalAlignment="Left"
                                                                   Data="{Binding SelectedPageDetail.PageBytes}"
                                                                   Highlights="{Binding SelectedPageDetail.PageHighlights}"
                                                                   UseDecimalOffsets="{Binding #PageOffsetToggle.IsChecked}"
@@ -822,9 +836,12 @@
                                                     </controls:HexView.ContextMenu>
                                                 </controls:HexView>
                                             </ScrollViewer>
-                                            <controls:DataInspectorControl Grid.Column="1"
+                                            <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+                                            <controls:DataInspectorControl Grid.Column="2"
+                                                                           MinWidth="100"
                                                                            Data="{Binding #PageHexView.Data}"
-                                                                           Offset="{Binding #PageHexView.CursorOffset}" />
+                                                                           Offset="{Binding #PageHexView.CursorOffset}"
+                                                                           SelectionLength="{Binding #PageHexView.SelectionLength}" />
                                         </Grid>
 
                                     </Grid>
@@ -975,7 +992,7 @@
 
                                     <!-- Tab: Hex View -->
                                     <TabItem Header="Hex View">
-                                        <Grid RowDefinitions="Auto,*">
+                                        <Grid RowDefinitions="Auto,*,Auto">
 
                                             <Border Grid.Row="0"
                                                     Padding="8,4"
@@ -1006,11 +1023,23 @@
                                                           HorizontalScrollBarVisibility="Auto">
                                                 <controls:HexView x:Name="SchemaHexView"
                                                                   Margin="14,8,14,16"
+                                                                  HorizontalAlignment="Left"
                                                                   Data="{Binding SchemaPageBytes}"
                                                                   Highlights="{Binding SchemaHighlights}"
                                                                   UseDecimalOffsets="{Binding #SchemaOffsetToggle.IsChecked}"
                                                                   ShowHighlights="{Binding #SchemaHighlightToggle.IsChecked}" />
                                             </ScrollViewer>
+
+                                            <Border Grid.Row="2"
+                                                    Padding="8,3"
+                                                    BorderThickness="0,1,0,0"
+                                                    IsVisible="{Binding #SchemaHexView.SelectionInfo,
+                                                                Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                                <TextBlock Text="{Binding #SchemaHexView.SelectionInfo}"
+                                                           FontFamily="Courier New"
+                                                           FontSize="11"
+                                                           Opacity="0.7" />
+                                            </Border>
 
                                         </Grid>
                                     </TabItem>
@@ -1191,20 +1220,24 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                    <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165">
                                         <ScrollViewer Grid.Column="0"
                                                       VerticalScrollBarVisibility="Auto"
                                                       HorizontalScrollBarVisibility="Auto">
                                             <controls:HexView x:Name="SearchHexView"
                                                               Margin="14,8,14,16"
+                                                              HorizontalAlignment="Left"
                                                               Data="{Binding SearchTab.SelectedPageBytes}"
                                                               Highlights="{Binding SearchTab.SelectedHighlights}"
                                                               UseDecimalOffsets="{Binding #SearchOffsetToggle.IsChecked}"
                                                               ShowHighlights="{Binding #SearchHighlightToggle.IsChecked}" />
                                         </ScrollViewer>
-                                        <controls:DataInspectorControl Grid.Column="1"
+                                        <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+                                        <controls:DataInspectorControl Grid.Column="2"
+                                                                       MinWidth="100"
                                                                        Data="{Binding #SearchHexView.Data}"
-                                                                       Offset="{Binding #SearchHexView.CursorOffset}" />
+                                                                       Offset="{Binding #SearchHexView.CursorOffset}"
+                                                                       SelectionLength="{Binding #SearchHexView.SelectionLength}" />
                                     </Grid>
 
                                 </Grid>
@@ -1657,20 +1690,24 @@
                                                                Margin="8,0,0,0" />
                                                 </StackPanel>
                                             </Border>
-                                            <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                            <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165">
                                                 <ScrollViewer Grid.Column="0"
                                                               VerticalScrollBarVisibility="Auto"
                                                               HorizontalScrollBarVisibility="Auto">
                                                     <controls:HexView x:Name="WalHexView"
                                                                       Margin="14,8,14,16"
+                                                                      HorizontalAlignment="Left"
                                                                       Data="{Binding WalTab.SelectedFrameDetail.PageBytes}"
                                                                       Highlights="{Binding WalTab.SelectedFrameDetail.PageHighlights}"
                                                                       UseDecimalOffsets="{Binding #WalOffsetToggle.IsChecked}"
                                                                       ShowHighlights="{Binding #WalHighlightToggle.IsChecked}" />
                                                 </ScrollViewer>
-                                                <controls:DataInspectorControl Grid.Column="1"
+                                                <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+                                                <controls:DataInspectorControl Grid.Column="2"
+                                                                               MinWidth="100"
                                                                                Data="{Binding #WalHexView.Data}"
-                                                                               Offset="{Binding #WalHexView.CursorOffset}" />
+                                                                               Offset="{Binding #WalHexView.CursorOffset}"
+                                                                               SelectionLength="{Binding #WalHexView.SelectionLength}" />
                                             </Grid>
                                         </Grid>
 

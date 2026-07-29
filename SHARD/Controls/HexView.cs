@@ -210,6 +210,45 @@ public sealed class HexView : Control
 
     private string? _lastLabel;
 
+    // ── Selection info / length ───────────────────────────────────────────────
+
+    public static readonly StyledProperty<string?> SelectionInfoProperty =
+        AvaloniaProperty.Register<HexView, string?>(nameof(SelectionInfo));
+
+    /// <summary>Human-readable selection length, e.g. "12 bytes  (0x0C)". Null when no range is selected.</summary>
+    public string? SelectionInfo
+    {
+        get => GetValue(SelectionInfoProperty);
+        private set => SetValue(SelectionInfoProperty, value);
+    }
+
+    public static readonly StyledProperty<int> SelectionLengthProperty =
+        AvaloniaProperty.Register<HexView, int>(nameof(SelectionLength), defaultValue: 0);
+
+    /// <summary>Number of bytes in the current selection range; 0 when no range is selected.</summary>
+    public int SelectionLength
+    {
+        get => GetValue(SelectionLengthProperty);
+        private set => SetValue(SelectionLengthProperty, value);
+    }
+
+    private void UpdateSelectionInfo()
+    {
+        if (_selStart < 0 || _selEnd < 0 || _selStart == _selEnd)
+        {
+            SelectionInfo  = null;
+            SelectionLength = 0;
+            return;
+        }
+
+        int lo  = Math.Min(_selStart, _selEnd);
+        int hi  = Math.Max(_selStart, _selEnd);
+        int len = hi - lo + 1;
+
+        SelectionInfo   = $"{len} byte{(len == 1 ? "" : "s")}  (0x{len:X})";
+        SelectionLength = len;
+    }
+
     // ── Selection / cursor ────────────────────────────────────────────────────
 
     private int  _selStart  = -1;
@@ -218,9 +257,11 @@ public sealed class HexView : Control
 
     private void ClearSelection()
     {
-        _selStart    = -1;
-        _selEnd      = -1;
-        CursorOffset = -1;
+        _selStart      = -1;
+        _selEnd        = -1;
+        CursorOffset   = -1;
+        SelectionInfo  = null;
+        SelectionLength = 0;
     }
 
     // ── Scroll to offset ──────────────────────────────────────────────────────
@@ -239,9 +280,11 @@ public sealed class HexView : Control
     /// <summary>Moves the cursor to <paramref name="byteOffset"/> without scrolling.</summary>
     public void SetCursorOffset(int byteOffset)
     {
-        _selStart    = byteOffset;
-        _selEnd      = byteOffset;
-        CursorOffset = byteOffset;
+        _selStart      = byteOffset;
+        _selEnd        = byteOffset;
+        CursorOffset   = byteOffset;
+        SelectionInfo  = null;
+        SelectionLength = 0;
         InvalidateVisual();
     }
 
@@ -292,6 +335,7 @@ public sealed class HexView : Control
         if (hit >= 0 && hit != _selEnd)
         {
             _selEnd = hit;
+            UpdateSelectionInfo();
             InvalidateVisual();
         }
     }
@@ -300,6 +344,7 @@ public sealed class HexView : Control
     {
         base.OnPointerReleased(e);
         _isDragging = false;
+        UpdateSelectionInfo();
         e.Handled   = true;
     }
 
