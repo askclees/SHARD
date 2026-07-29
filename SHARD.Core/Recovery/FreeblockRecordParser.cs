@@ -84,11 +84,18 @@ public static class FreeblockRecordParser
             hiPayload = pageData.Length;
         }
 
+        // Build a page view where bytes beyond fbEnd are zeroed: those bytes may have
+        // been re-allocated by SQLite, so any cell data that spills past the freeblock
+        // boundary should read as 0x00 rather than borrowing from a different cell.
+        byte[] safePageData = fbEnd < pageData.Length
+            ? ZeroBeyond(pageData, fbEnd)
+            : pageData;
+
         // Try templates in confidence order.
         BTreeLeafCell? first =
-            TryK4(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
-            TryK3(pageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
-            TryK2(pageData, fbStart, fbSize, loPayload, hiPayload, liveCells, encoding, recordStructure);
+            TryK4(safePageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
+            TryK3(safePageData, fbStart, loPayload, hiPayload, encoding, recordStructure) ??
+            TryK2(safePageData, fbStart, fbSize, loPayload, hiPayload, liveCells, encoding, recordStructure, enforceBlockFit: false);
 
         if (first is null) yield break;
         yield return first;
@@ -120,16 +127,17 @@ public static class FreeblockRecordParser
                 continue;
             }
 
-            // Intact parse failed. Check if runStart holds an inner freeblock header
-            // whose size field encodes exactly the bytes remaining to fbEnd.
+            // Intact parse failed — try k-templates at runStart.
+            // The cell's first 4 bytes may be an old inner freeblock header (classic
+            // SQLite merge) or simply the original PS/RowID/headerSize/col0Type bytes
+            // left intact when both cells were freed together.  Either way, the
+            // available space for the inner record is fbEnd - runStart.
             if (runStart + 4 > fbEnd) break;
-            int innerSize = (pageData[runStart + 2] << 8) | pageData[runStart + 3];
-            if (innerSize != fbEnd - runStart) break;
 
             BTreeLeafCell? inner =
                 TryK4(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
                 TryK3(pageData, runStart, loPayload, hiPayload, encoding, recordStructure) ??
-                TryK2(pageData, runStart, innerSize, loPayload, hiPayload, liveCells, encoding, recordStructure);
+                TryK2(pageData, runStart, fbEnd - runStart, loPayload, hiPayload, liveCells, encoding, recordStructure);
             if (inner is null) break;
 
             yield return inner;
@@ -203,7 +211,8 @@ public static class FreeblockRecordParser
     private static BTreeLeafCell? TryK2(
         byte[] pageData, int fbStart, int fbSize, long loPayload, long hiPayload,
         IReadOnlyList<BTreeLeafCell> liveCells,
-        TextEncoding encoding, RecordStructure recordStructure)
+        TextEncoding encoding, RecordStructure recordStructure,
+        bool enforceBlockFit = true)
     {
         int N = recordStructure.NumColumns;
         if (N < 2) return null;
@@ -253,7 +262,9 @@ public static class FreeblockRecordParser
         long payloadValue    = headerSizeValue + col0.ContentLength + intactContentTotal;
 
         if (payloadValue < loPayload || payloadValue > hiPayload) return null;
-        if (2L + payloadValue > fbSize) return null;  // cell must fit inside the freeblock
+        // A cell can legitimately extend past its freeblock when SQLite partially re-allocated
+        // the freed space; in that case the caller opts out of this check.
+        if (enforceBlockFit && 2L + payloadValue > fbSize) return null;
 
         var allEntries = new List<HeaderEntry>(N) { col0 };
         allEntries.AddRange(intactEntries);
@@ -315,6 +326,13 @@ public static class FreeblockRecordParser
         for (int i = 0; i < entries.Count; i++)
             if (!rs.AllowedKindsPerColumn[i].Contains(entries[i].Kind)) return false;
         return true;
+    }
+
+    private static byte[] ZeroBeyond(byte[] pageData, int safeEnd)
+    {
+        var copy = (byte[])pageData.Clone();
+        Array.Clear(copy, safeEnd, copy.Length - safeEnd);
+        return copy;
     }
 
     private static long Mode(IEnumerable<int> values) =>
