@@ -63,9 +63,41 @@ jobs:
           name: ${{ steps.name.outputs.artifact }}
           path: ${{ steps.name.outputs.artifact }}
 
+  test:
+    name: Corpus Report
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore and build
+        run: dotnet build --configuration Release
+
+      - name: Run tests
+        run: dotnet test --no-build --configuration Release --verbosity normal --filter "Category!=Corpus"
+
+      - name: Generate corpus report
+        continue-on-error: true
+        env:
+          CORPUS_REPORT_FILE: corpus-recovery-report.md
+        run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~GenerateCorpusReport"
+
+      - name: Upload corpus report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-recovery-report
+          path: corpus-recovery-report.md
+          if-no-files-found: ignore
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
