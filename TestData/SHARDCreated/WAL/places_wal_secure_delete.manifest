@@ -1,0 +1,27 @@
+# SHARD WAL Test Data Manifest — secure_delete variant
+# Database: places_wal_secure_delete.db
+# Created by: create_places_wal_secure_delete.py
+# Created: 2026-08-07
+#
+# PRAGMA secure_delete=ON was active during all delete transactions.
+# Freed cell space is zeroed in every WAL frame written after a deletion,
+# making page-level carving unable to recover the deleted rows.
+# All three files were captured as-is after SIGKILL with no SQLite cleanup.
+
+[places_wal_secure_delete.db]
+size    = 8192
+md5     = c7c71b90d9048ecd9d8ff13043f9e1bd
+sha1    = 0a6d7e57baa22f41cfffa46075952df065110ada
+sha256  = 27af9c72d7ff3eacfc73f8ed4f5abcd0dc1385d31a6a7495494fa1603db22991
+
+[places_wal_secure_delete.db-shm]
+size    = 32768
+md5     = 66ff5ea57c0d942f039396789da1a4cf
+sha1    = 39d78086946640bc30d9c6bc9e41960205a35253
+sha256  = 5aa0b0ea03cf1635c74614608f6c5916733494e26e6f7ecffe5da77a809777d7
+
+[places_wal_secure_delete.db-wal]
+size    = 24752
+md5     = 757b4711744bfac8f4f9fbd592a33a6a
+sha1    = 3e858c2ee3e76e6be519bafa3f2d923cb85145a1
+sha256  = 712eccddee8e553b5415d2da665ee0f811de24cd263ad1776b6cafb2bb9474b8

@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SHARD WAL deleted-record recovery test expectations for places_wal_secure_delete.db.
+
+  PRAGMA secure_delete=ON was active for every delete.  This overwrites freed cell
+  space with zeros inside each WAL frame at the moment of deletion, so the post-delete
+  frames (4, 5, 6) cannot yield the deleted rows by page-level carving.
+
+  Frame 3 (IsCurrent=False) contains the page image from BEFORE any deletions — all
+  30 rows intact.  SHARD's InsertWalDeletedRows reads that frame and recovers all 15
+  deleted rows as wal_frame records.
+
+  Live rows (main DB raw, bypassing WAL):  15  (ids 1-5, 11-15, 21-25)
+  Page-level carving:                       0  (secure_delete wiped freed space)
+  WAL-recovered (wal_frame):               15  (ids 6-10, 16-20, 26-30)
+
+  Deletion stages (each a separate transaction / WAL frame):
+    Stage 1 — ids  6-10  (WAL frame 4, freed space zeroed)
+    Stage 2 — ids 16-20  (WAL frame 5, freed space zeroed)
+    Stage 3 — ids 26-30  (WAL frame 6, freed space zeroed)
+-->
+<database>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>moz_places</name>
+            <deleted>False</deleted>
+            <rowsAlive>15</rowsAlive>
+            <rowsDeleted>15</rowsDeleted>
+        </meta>
+        <rows>
+            <!-- Stage 1: rows 6-10 — deleted first, recovered from Frame 3 -->
+            <row deleted="1">
+                <column><name>id</name><content>6</content></column>
+                <column><name>url</name><content>https://example6.com/</content></column>
+                <column><name>title</name><content>Title 6</content></column>
+                <column><name>visit_count</name><content>6</content></column>
+                <column><name>last_visit_date</name><content>1700000006</content></column>
+                <column><name>frecency</name><content>60</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>7</content></column>
+                <column><name>url</name><content>https://example7.com/</content></column>
+                <column><name>title</name><content>Title 7</content></column>
+                <column><name>visit_count</name><content>7</content></column>
+                <column><name>last_visit_date</name><content>1700000007</content></column>
+                <column><name>frecency</name><content>70</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>8</content></column>
+                <column><name>url</name><content>https://example8.com/</content></column>
+                <column><name>title</name><content>Title 8</content></column>
+                <column><name>visit_count</name><content>8</content></column>
+                <column><name>last_visit_date</name><content>1700000008</content></column>
+                <column><name>frecency</name><content>80</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>9</content></column>
+                <column><name>url</name><content>https://example9.com/</content></column>
+                <column><name>title</name><content>Title 9</content></column>
+                <column><name>visit_count</name><content>9</content></column>
+                <column><name>last_visit_date</name><content>1700000009</content></column>
+                <column><name>frecency</name><content>90</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>10</content></column>
+                <column><name>url</name><content>https://example10.com/</content></column>
+                <column><name>title</name><content>Title 10</content></column>
+                <column><name>visit_count</name><content>10</content></column>
+                <column><name>last_visit_date</name><content>1700000010</content></column>
+                <column><name>frecency</name><content>100</content></column>
+            </row>
+            <!-- Stage 2: rows 16-20 — interleaved with surviving rows 11-15 -->
+            <row deleted="1">
+                <column><name>id</name><content>16</content></column>
+                <column><name>url</name><content>https://example16.com/</content></column>
+                <column><name>title</name><content>Title 16</content></column>
+                <column><name>visit_count</name><content>16</content></column>
+                <column><name>last_visit_date</name><content>1700000016</content></column>
+                <column><name>frecency</name><content>160</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>17</content></column>
+                <column><name>url</name><content>https://example17.com/</content></column>
+                <column><name>title</name><content>Title 17</content></column>
+                <column><name>visit_count</name><content>17</content></column>
+                <column><name>last_visit_date</name><content>1700000017</content></column>
+                <column><name>frecency</name><content>170</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>18</content></column>
+                <column><name>url</name><content>https://example18.com/</content></column>
+                <column><name>title</name><content>Title 18</content></column>
+                <column><name>visit_count</name><content>18</content></column>
+                <column><name>last_visit_date</name><content>1700000018</content></column>
+                <column><name>frecency</name><content>180</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>19</content></column>
+                <column><name>url</name><content>https://example19.com/</content></column>
+                <column><name>title</name><content>Title 19</content></column>
+                <column><name>visit_count</name><content>19</content></column>
+                <column><name>last_visit_date</name><content>1700000019</content></column>
+                <column><name>frecency</name><content>190</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>20</content></column>
+                <column><name>url</name><content>https://example20.com/</content></column>
+                <column><name>title</name><content>Title 20</content></column>
+                <column><name>visit_count</name><content>20</content></column>
+                <column><name>last_visit_date</name><content>1700000020</content></column>
+                <column><name>frecency</name><content>200</content></column>
+            </row>
+            <!-- Stage 3: rows 26-30 — interleaved with surviving rows 21-25 -->
+            <row deleted="1">
+                <column><name>id</name><content>26</content></column>
+                <column><name>url</name><content>https://example26.com/</content></column>
+                <column><name>title</name><content>Title 26</content></column>
+                <column><name>visit_count</name><content>26</content></column>
+                <column><name>last_visit_date</name><content>1700000026</content></column>
+                <column><name>frecency</name><content>260</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>27</content></column>
+                <column><name>url</name><content>https://example27.com/</content></column>
+                <column><name>title</name><content>Title 27</content></column>
+                <column><name>visit_count</name><content>27</content></column>
+                <column><name>last_visit_date</name><content>1700000027</content></column>
+                <column><name>frecency</name><content>270</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>28</content></column>
+                <column><name>url</name><content>https://example28.com/</content></column>
+                <column><name>title</name><content>Title 28</content></column>
+                <column><name>visit_count</name><content>28</content></column>
+                <column><name>last_visit_date</name><content>1700000028</content></column>
+                <column><name>frecency</name><content>280</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>29</content></column>
+                <column><name>url</name><content>https://example29.com/</content></column>
+                <column><name>title</name><content>Title 29</content></column>
+                <column><name>visit_count</name><content>29</content></column>
+                <column><name>last_visit_date</name><content>1700000029</content></column>
+                <column><name>frecency</name><content>290</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>30</content></column>
+                <column><name>url</name><content>https://example30.com/</content></column>
+                <column><name>title</name><content>Title 30</content></column>
+                <column><name>visit_count</name><content>30</content></column>
+                <column><name>last_visit_date</name><content>1700000030</content></column>
+                <column><name>frecency</name><content>300</content></column>
+            </row>
+        </rows>
+    </element>
+</database>
