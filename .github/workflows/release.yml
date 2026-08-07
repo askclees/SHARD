@@ -87,12 +87,17 @@ jobs:
           CORPUS_REPORT_FILE: corpus-recovery-report.md
         run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~GenerateCorpusReport"
 
+      - name: Rename corpus report
+        if: always()
+        run: |
+          mv corpus-recovery-report.md "SHARD-${{ github.ref_name }}-Validation-Report.md" 2>/dev/null || true
+
       - name: Upload corpus report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: corpus-recovery-report
-          path: corpus-recovery-report.md
+          path: "SHARD-${{ github.ref_name }}-Validation-Report.md"
           if-no-files-found: ignore
 
   release:
