@@ -1004,6 +1004,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             StatusText += $"  ·  WAL sync failed: {ex.Message}";
         }
+
+        try
+        {
+            int recovered = Project.RecoverWalDeletedRows(WalTab.WalFile, Database);
+            if (recovered > 0)
+                StatusText += $"  ·  {recovered} deleted WAL record{(recovered == 1 ? "" : "s")} recovered";
+        }
+        catch (Exception ex)
+        {
+            StatusText += $"  ·  WAL deleted recovery failed: {ex.Message}";
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

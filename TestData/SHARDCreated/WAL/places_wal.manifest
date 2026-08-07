@@ -1,0 +1,25 @@
+# SHARD WAL Test Data Manifest
+# Database: places_wal.db
+# Created by: create_places_wal.py
+# Created: 2026-08-07
+#
+# All three files were captured as-is after SIGKILL (os.kill(os.getpid(), signal.SIGKILL))
+# with no SQLite cleanup — the WAL is in the exact state left by the killed process.
+
+[places_wal.db]
+size    = 8192
+md5     = 8d8d808fa0b9b2e797c9a2db357e4c45
+sha1    = fa18e4f0b363d8dc5b27d3060d9d77bd1015a51b
+sha256  = e6f007c40937b097d8bbd6810b2b276a3cc0c96843b0b07ac547da0d4a08846f
+
+[places_wal.db-shm]
+size    = 32768
+md5     = d4c2e97b6ea76f6c173ecdbdb133abc4
+sha1    = c9af3a23aaa23fe07ccc1a64b54f8004eda62c2d
+sha256  = 2d0732eb826ac955e0f49c249af8429bab82c99990820b59ed4d2ec7fa3c8a5e
+
+[places_wal.db-wal]
+size    = 20632
+md5     = bad0c1bc740514415db2f5423fa5fdd3
+sha1    = 25a1b408e31d3fb05df0ec2dd5a1b0bc043c1e01
+sha256  = 521647e367baf7472d1bacfeae31a80c0143217558e2f27f3b5bc090793f5ee5
