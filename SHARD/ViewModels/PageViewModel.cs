@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Text;
 using Avalonia.Media;
 using ReactiveUI;
@@ -32,6 +33,23 @@ public sealed class PageViewModel : ViewModelBase
     /// <summary>Raise PropertyChanged for PageHighlights so the hex view re-renders after annotations are added.</summary>
     public void RefreshHighlights() => this.RaisePropertyChanged(nameof(PageHighlights));
 
+    /// <summary>
+    /// Adds a newly annotated cell to the Recovered tab after the page was already loaded.
+    /// </summary>
+    public void AddAnnotatedCell(BTreeLeafCell cell)
+    {
+        if (Page is not TableBTreeLeafPage tlp) return;
+        int index = AnnotatedCellSections.Count;
+        RemovableCellSectionViewModel? vm = null;
+        vm = new RemovableCellSectionViewModel(cell, index, cell.PageOffset, () =>
+        {
+            tlp.AnnotatedCells.Remove(cell);
+            AnnotatedCellSections.Remove(vm!);
+            RefreshHighlights();
+        });
+        AnnotatedCellSections.Add(vm);
+    }
+
     // ── Cell pointers expander ────────────────────────────────────────────
     public bool HasCellPointers => Page is BTreePage bp && bp.CellPointers.Length > 0;
 
@@ -53,6 +71,14 @@ public sealed class PageViewModel : ViewModelBase
     public IReadOnlyList<UnallocatedRegionSectionViewModel> UnallocatedRegionSections { get; }
     public bool HasUnallocatedRegions => UnallocatedRegionSections.Count > 0;
 
+    // ── Recovered cell expanders (carved / freeblock / annotated) ────────
+    public ObservableCollection<RemovableCellSectionViewModel> CarvedCellSections      { get; } = [];
+    public ObservableCollection<RemovableCellSectionViewModel> FreeblockCellSections   { get; } = [];
+    public ObservableCollection<RemovableCellSectionViewModel> AnnotatedCellSections   { get; } = [];
+
+    public bool HasRecoveredSections =>
+        CarvedCellSections.Count > 0 || FreeblockCellSections.Count > 0 || AnnotatedCellSections.Count > 0;
+
     // ── Tab headers with counts ───────────────────────────────────────────
     public string CellsTabHeader         => CellSections.Count > 0        ? $"Cells ({CellSections.Count})"               : "Cells";
     public string DeletedCellsTabHeader  => DeletedCellSections.Count > 0 ? $"Potential Deleted ({DeletedCellSections.Count})" : "Potential Deleted";
@@ -60,6 +86,15 @@ public sealed class PageViewModel : ViewModelBase
     public string UnallocatedTabHeader => UnallocatedRegionSections.Count > 0
         ? $"Unallocated ({UnallocatedRegionSections.Count})"
         : "Unallocated";
+
+    public string RecoveredTabHeader
+    {
+        get
+        {
+            int total = CarvedCellSections.Count + FreeblockCellSections.Count + AnnotatedCellSections.Count;
+            return total > 0 ? $"Recovered ({total})" : "Recovered";
+        }
+    }
 
     public PageViewModel(SqlitePage page)
     {
@@ -91,13 +126,15 @@ public sealed class PageViewModel : ViewModelBase
 
             var fbSections = new List<FreeBlockSectionViewModel>(tlp.FreeBlocks.Count);
             for (int i = 0; i < tlp.FreeBlocks.Count; i++)
-                fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i));
+                fbSections.Add(new FreeBlockSectionViewModel(tlp.FreeBlocks[i], i, tlp.FreeblockCells));
             FreeBlockSections = fbSections;
 
             var urSections = new List<UnallocatedRegionSectionViewModel>(tlp.UnallocatedRegions.Count);
             for (int i = 0; i < tlp.UnallocatedRegions.Count; i++)
                 urSections.Add(new UnallocatedRegionSectionViewModel(tlp.UnallocatedRegions[i], i));
             UnallocatedRegionSections = urSections;
+
+            PopulateRecoveredSections(tlp);
         }
         else if (page is IndexBTreeLeafPage ilp)
         {
@@ -116,6 +153,52 @@ public sealed class PageViewModel : ViewModelBase
             FreeBlockSections         = [];
             UnallocatedRegionSections = [];
         }
+    }
+
+    private void PopulateRecoveredSections(TableBTreeLeafPage tlp)
+    {
+        for (int i = 0; i < tlp.CarvedCells.Count; i++)
+        {
+            var cell = tlp.CarvedCells[i];
+            RemovableCellSectionViewModel? vm = null;
+            vm = new RemovableCellSectionViewModel(cell, i, cell.PageOffset, () =>
+            {
+                tlp.CarvedCells.Remove(cell);
+                CarvedCellSections.Remove(vm!);
+                RefreshHighlights();
+            });
+            CarvedCellSections.Add(vm);
+        }
+
+        for (int i = 0; i < tlp.FreeblockCells.Count; i++)
+        {
+            var cell = tlp.FreeblockCells[i];
+            RemovableCellSectionViewModel? vm = null;
+            vm = new RemovableCellSectionViewModel(cell, i, cell.PageOffset, () =>
+            {
+                tlp.FreeblockCells.Remove(cell);
+                FreeblockCellSections.Remove(vm!);
+                RefreshHighlights();
+            });
+            FreeblockCellSections.Add(vm);
+        }
+
+        for (int i = 0; i < tlp.AnnotatedCells.Count; i++)
+        {
+            var cell = tlp.AnnotatedCells[i];
+            RemovableCellSectionViewModel? vm = null;
+            vm = new RemovableCellSectionViewModel(cell, i, cell.PageOffset, () =>
+            {
+                tlp.AnnotatedCells.Remove(cell);
+                AnnotatedCellSections.Remove(vm!);
+                RefreshHighlights();
+            });
+            AnnotatedCellSections.Add(vm);
+        }
+
+        CarvedCellSections.CollectionChanged    += (_, _) => this.RaisePropertyChanged(nameof(RecoveredTabHeader));
+        FreeblockCellSections.CollectionChanged += (_, _) => this.RaisePropertyChanged(nameof(RecoveredTabHeader));
+        AnnotatedCellSections.CollectionChanged += (_, _) => this.RaisePropertyChanged(nameof(RecoveredTabHeader));
     }
 
     private static string BuildSummary(SqlitePage page)

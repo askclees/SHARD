@@ -9,8 +9,9 @@
         x:DataType="vm:MainWindowViewModel"
         Title="SHARD — SQLite Forensic Analyser"
         Icon="avares://SHARD/Assets/shard-icon.png"
-        Width="1200" Height="760"
+        Width="1050" Height="720"
         MinWidth="800" MinHeight="500"
+        WindowState="Maximized"
         DragDrop.AllowDrop="True">
 
     <DockPanel>
@@ -96,7 +97,7 @@
             <!-- ─── Main view ────────────────────────────────────────────── -->
             <Grid IsVisible="{Binding HasDatabase}">
 
-                <TabControl Padding="0">
+                <TabControl x:Name="MainTabControl" Padding="0">
 
                     <!-- ── Tab 1: Database Header ── -->
                     <TabItem Header="Database Header">
@@ -129,7 +130,7 @@
                             <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
 
                             <!-- Right: hex dump of first 100 bytes -->
-                            <Grid Grid.Column="2" RowDefinitions="Auto,*">
+                            <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto">
 
                                 <!-- Toolbar -->
                                 <Border Grid.Row="0"
@@ -165,11 +166,23 @@
                                               HorizontalScrollBarVisibility="Auto">
                                     <controls:HexView x:Name="HdrHexView"
                                                       Margin="14,8,14,16"
+                                                      HorizontalAlignment="Left"
                                                       Data="{Binding HeaderBytes}"
                                                       Highlights="{Binding HeaderHighlights}"
                                                       UseDecimalOffsets="{Binding #HdrOffsetToggle.IsChecked}"
                                                       ShowHighlights="{Binding #HdrHighlightToggle.IsChecked}" />
                                 </ScrollViewer>
+
+                                <Border Grid.Row="2"
+                                        Padding="8,3"
+                                        BorderThickness="0,1,0,0"
+                                        IsVisible="{Binding #HdrHexView.SelectionInfo,
+                                                    Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                    <TextBlock Text="{Binding #HdrHexView.SelectionInfo}"
+                                               FontFamily="Courier New"
+                                               FontSize="11"
+                                               Opacity="0.7" />
+                                </Border>
 
                             </Grid>
 
@@ -361,12 +374,13 @@
                                            FontSize="13" />
 
                                 <!-- Page content -->
-                                <Grid IsVisible="{Binding SelectedPageDetail,
+                                <Grid x:Name="PageContentGrid"
+                                      IsVisible="{Binding SelectedPageDetail,
                                                   Converter={x:Static conv:ObjectConverters.IsNotNull}}"
                                       ColumnDefinitions="*,4,*">
 
                                     <!-- Left: tabbed detail sections -->
-                                    <TabControl Grid.Column="0" Padding="0">
+                                    <TabControl Grid.Column="0" x:Name="PageDetailTabControl" Padding="0">
 
                                         <!-- Tab 1: Page Information -->
                                         <TabItem Header="Page Information">
@@ -470,24 +484,46 @@
                                                                           IsExpanded="False"
                                                                           Expanded="OnFreeBlockSectionExpanded"
                                                                           Margin="0,2,0,0">
-                                                                    <ItemsControl ItemsSource="{Binding Rows}"
-                                                                                  Margin="8,4,0,4">
-                                                                        <ItemsControl.ItemTemplate>
-                                                                            <DataTemplate x:DataType="vm:InfoRow">
-                                                                                <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                                    <TextBlock Grid.Column="0"
-                                                                                               Text="{Binding Label}"
-                                                                                               FontSize="12"
-                                                                                               FontWeight="SemiBold"
-                                                                                               Opacity="0.6" />
-                                                                                    <TextBlock Grid.Column="1"
-                                                                                               Text="{Binding Value}"
-                                                                                               FontSize="12"
-                                                                                               TextWrapping="Wrap" />
-                                                                                </Grid>
-                                                                            </DataTemplate>
-                                                                        </ItemsControl.ItemTemplate>
-                                                                    </ItemsControl>
+                                                                    <StackPanel>
+                                                                        <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                      Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0"
+                                                                                                   Text="{Binding Label}"
+                                                                                                   FontSize="12"
+                                                                                                   FontWeight="SemiBold"
+                                                                                                   Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1"
+                                                                                                   Text="{Binding Value}"
+                                                                                                   FontSize="12"
+                                                                                                   TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                        <StackPanel IsVisible="{Binding HasRecoveredRecords}"
+                                                                                    Margin="8,2,0,4">
+                                                                            <TextBlock Text="Recovered Records"
+                                                                                       FontSize="11"
+                                                                                       FontWeight="SemiBold"
+                                                                                       Opacity="0.6"
+                                                                                       Margin="0,4,0,4" />
+                                                                            <ItemsControl ItemsSource="{Binding RecoveredRecords}">
+                                                                                <ItemsControl.ItemTemplate>
+                                                                                    <DataTemplate x:DataType="vm:FreeBlockRecordEntry">
+                                                                                        <Button Content="{Binding Label}"
+                                                                                                Click="OnFreeBlockRecordClick"
+                                                                                                Padding="4,2"
+                                                                                                Margin="0,1"
+                                                                                                FontSize="11"
+                                                                                                HorizontalAlignment="Left" />
+                                                                                    </DataTemplate>
+                                                                                </ItemsControl.ItemTemplate>
+                                                                            </ItemsControl>
+                                                                        </StackPanel>
+                                                                    </StackPanel>
                                                                 </Expander>
                                                             </DataTemplate>
                                                         </ItemsControl.ItemTemplate>
@@ -545,7 +581,159 @@
                                             </Grid>
                                         </TabItem>
 
-                                        <!-- Tab 5: Unallocated Regions -->
+                                        <!-- Tab 5: Recovered Records -->
+                                        <TabItem Header="{Binding SelectedPageDetail.RecoveredTabHeader}">
+                                            <Grid>
+                                                <TextBlock IsVisible="{Binding SelectedPageDetail.HasRecoveredSections,
+                                                                       Converter={x:Static conv:BoolConverters.Not}}"
+                                                           Text="No recovered records on this page"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Opacity="0.35"
+                                                           FontSize="12"
+                                                           TextWrapping="Wrap"
+                                                           MaxWidth="260"
+                                                           TextAlignment="Center" />
+                                                <ScrollViewer IsVisible="{Binding SelectedPageDetail.HasRecoveredSections}"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <StackPanel Margin="14,10" Spacing="4">
+
+                                                        <!-- Carved cells -->
+                                                        <TextBlock IsVisible="{Binding SelectedPageDetail.CarvedCellSections.Count}"
+                                                                   Text="Carved (from unallocated space)"
+                                                                   FontSize="11"
+                                                                   FontWeight="SemiBold"
+                                                                   Opacity="0.5"
+                                                                   Margin="0,0,0,2" />
+                                                        <ItemsControl ItemsSource="{Binding SelectedPageDetail.CarvedCellSections}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:RemovableCellSectionViewModel">
+                                                                    <Expander IsExpanded="False"
+                                                                              Expanded="OnCellSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <Expander.Header>
+                                                                            <Grid ColumnDefinitions="*,Auto">
+                                                                                <TextBlock Grid.Column="0"
+                                                                                           Text="{Binding Header}"
+                                                                                           VerticalAlignment="Center" />
+                                                                                <Button Grid.Column="1"
+                                                                                        Content="✕"
+                                                                                        Command="{Binding RemoveCommand}"
+                                                                                        Padding="5,1"
+                                                                                        FontSize="10"
+                                                                                        Margin="8,0,0,0"
+                                                                                        VerticalAlignment="Center" />
+                                                                            </Grid>
+                                                                        </Expander.Header>
+                                                                        <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                      Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
+                                                        <!-- Freeblock cells -->
+                                                        <TextBlock IsVisible="{Binding SelectedPageDetail.FreeblockCellSections.Count}"
+                                                                   Text="Freeblock (recovered from freed space)"
+                                                                   FontSize="11"
+                                                                   FontWeight="SemiBold"
+                                                                   Opacity="0.5"
+                                                                   Margin="0,8,0,2" />
+                                                        <ItemsControl ItemsSource="{Binding SelectedPageDetail.FreeblockCellSections}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:RemovableCellSectionViewModel">
+                                                                    <Expander IsExpanded="False"
+                                                                              Expanded="OnCellSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <Expander.Header>
+                                                                            <Grid ColumnDefinitions="*,Auto">
+                                                                                <TextBlock Grid.Column="0"
+                                                                                           Text="{Binding Header}"
+                                                                                           VerticalAlignment="Center" />
+                                                                                <Button Grid.Column="1"
+                                                                                        Content="✕"
+                                                                                        Command="{Binding RemoveCommand}"
+                                                                                        Padding="5,1"
+                                                                                        FontSize="10"
+                                                                                        Margin="8,0,0,0"
+                                                                                        VerticalAlignment="Center" />
+                                                                            </Grid>
+                                                                        </Expander.Header>
+                                                                        <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                      Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
+                                                        <!-- Annotated cells -->
+                                                        <TextBlock IsVisible="{Binding SelectedPageDetail.AnnotatedCellSections.Count}"
+                                                                   Text="Annotated (manually added)"
+                                                                   FontSize="11"
+                                                                   FontWeight="SemiBold"
+                                                                   Opacity="0.5"
+                                                                   Margin="0,8,0,2" />
+                                                        <ItemsControl ItemsSource="{Binding SelectedPageDetail.AnnotatedCellSections}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:RemovableCellSectionViewModel">
+                                                                    <Expander IsExpanded="False"
+                                                                              Expanded="OnCellSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <Expander.Header>
+                                                                            <Grid ColumnDefinitions="*,Auto">
+                                                                                <TextBlock Grid.Column="0"
+                                                                                           Text="{Binding Header}"
+                                                                                           VerticalAlignment="Center" />
+                                                                                <Button Grid.Column="1"
+                                                                                        Content="✕"
+                                                                                        Command="{Binding RemoveCommand}"
+                                                                                        Padding="5,1"
+                                                                                        FontSize="10"
+                                                                                        Margin="8,0,0,0"
+                                                                                        VerticalAlignment="Center" />
+                                                                            </Grid>
+                                                                        </Expander.Header>
+                                                                        <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                      Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
+                                                    </StackPanel>
+                                                </ScrollViewer>
+                                            </Grid>
+                                        </TabItem>
+
+                                        <!-- Tab 6: Unallocated Regions -->
                                         <TabItem Header="{Binding FilteredUnallocatedTabHeader}">
                                             <Grid>
                                                 <TextBlock IsVisible="{Binding HasFilteredUnallocatedSections,
@@ -628,12 +816,14 @@
                                             </StackPanel>
                                         </Border>
 
-                                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                        <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165"
+                                              x:Name="PageHexGrid">
                                             <ScrollViewer Grid.Column="0"
                                                           VerticalScrollBarVisibility="Auto"
                                                           HorizontalScrollBarVisibility="Auto">
                                                 <controls:HexView x:Name="PageHexView"
                                                                   Margin="14,8,14,16"
+                                                                  HorizontalAlignment="Left"
                                                                   Data="{Binding SelectedPageDetail.PageBytes}"
                                                                   Highlights="{Binding SelectedPageDetail.PageHighlights}"
                                                                   UseDecimalOffsets="{Binding #PageOffsetToggle.IsChecked}"
@@ -648,9 +838,15 @@
                                                     </controls:HexView.ContextMenu>
                                                 </controls:HexView>
                                             </ScrollViewer>
-                                            <controls:DataInspectorControl Grid.Column="1"
+                                            <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                                                          x:Name="PageInspectorSplitter" />
+                                            <controls:DataInspectorControl Grid.Column="2"
+                                                                           x:Name="PageDataInspector"
+                                                                           MinWidth="100"
                                                                            Data="{Binding #PageHexView.Data}"
-                                                                           Offset="{Binding #PageHexView.CursorOffset}" />
+                                                                           Offset="{Binding #PageHexView.CursorOffset}"
+                                                                           SelectionLength="{Binding #PageHexView.SelectionLength}"
+                                                                           PopOutRequested="OnPageInspectorPopOut" />
                                         </Grid>
 
                                     </Grid>
@@ -801,7 +997,7 @@
 
                                     <!-- Tab: Hex View -->
                                     <TabItem Header="Hex View">
-                                        <Grid RowDefinitions="Auto,*">
+                                        <Grid RowDefinitions="Auto,*,Auto">
 
                                             <Border Grid.Row="0"
                                                     Padding="8,4"
@@ -832,11 +1028,23 @@
                                                           HorizontalScrollBarVisibility="Auto">
                                                 <controls:HexView x:Name="SchemaHexView"
                                                                   Margin="14,8,14,16"
+                                                                  HorizontalAlignment="Left"
                                                                   Data="{Binding SchemaPageBytes}"
                                                                   Highlights="{Binding SchemaHighlights}"
                                                                   UseDecimalOffsets="{Binding #SchemaOffsetToggle.IsChecked}"
                                                                   ShowHighlights="{Binding #SchemaHighlightToggle.IsChecked}" />
                                             </ScrollViewer>
+
+                                            <Border Grid.Row="2"
+                                                    Padding="8,3"
+                                                    BorderThickness="0,1,0,0"
+                                                    IsVisible="{Binding #SchemaHexView.SelectionInfo,
+                                                                Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                                <TextBlock Text="{Binding #SchemaHexView.SelectionInfo}"
+                                                           FontFamily="Courier New"
+                                                           FontSize="11"
+                                                           Opacity="0.7" />
+                                            </Border>
 
                                         </Grid>
                                     </TabItem>
@@ -1017,20 +1225,28 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                    <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165"
+                                          x:Name="SearchHexGrid">
                                         <ScrollViewer Grid.Column="0"
                                                       VerticalScrollBarVisibility="Auto"
                                                       HorizontalScrollBarVisibility="Auto">
                                             <controls:HexView x:Name="SearchHexView"
                                                               Margin="14,8,14,16"
+                                                              HorizontalAlignment="Left"
                                                               Data="{Binding SearchTab.SelectedPageBytes}"
                                                               Highlights="{Binding SearchTab.SelectedHighlights}"
                                                               UseDecimalOffsets="{Binding #SearchOffsetToggle.IsChecked}"
                                                               ShowHighlights="{Binding #SearchHighlightToggle.IsChecked}" />
                                         </ScrollViewer>
-                                        <controls:DataInspectorControl Grid.Column="1"
+                                        <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                                                      x:Name="SearchInspectorSplitter" />
+                                        <controls:DataInspectorControl Grid.Column="2"
+                                                                       x:Name="SearchDataInspector"
+                                                                       MinWidth="100"
                                                                        Data="{Binding #SearchHexView.Data}"
-                                                                       Offset="{Binding #SearchHexView.CursorOffset}" />
+                                                                       Offset="{Binding #SearchHexView.CursorOffset}"
+                                                                       SelectionLength="{Binding #SearchHexView.SelectionLength}"
+                                                                       PopOutRequested="OnSearchInspectorPopOut" />
                                     </Grid>
 
                                 </Grid>
@@ -1040,10 +1256,29 @@
                     </TabItem>
 
                     <!-- ── Tab 5: Query ── -->
-                    <TabItem Header="Query">
-                        <Grid RowDefinitions="Auto,Auto,Auto,*">
+                    <TabItem x:Name="QueryTabItem" Header="Query">
+                        <Grid>
 
-                            <Grid Grid.Row="0" Grid.RowSpan="4"
+                            <TextBlock x:Name="QueryFloatPlaceholder"
+                                       IsVisible="False"
+                                       Text="Query is open in a floating window"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Opacity="0.45"
+                                       FontSize="13" />
+
+                            <Grid x:Name="QueryContent" RowDefinitions="Auto,*">
+
+                            <!-- Query toolbar -->
+                            <Border Grid.Row="0" Padding="6,3" BorderThickness="0,0,0,1">
+                                <Button Content="⧉ Pop out"
+                                        Click="OnQueryPopOut"
+                                        Padding="8,2"
+                                        FontSize="11"
+                                        HorizontalAlignment="Right" />
+                            </Border>
+
+                            <Grid Grid.Row="1"
                                   ColumnDefinitions="220,4,*">
 
                                 <!-- Left: table list -->
@@ -1140,11 +1375,14 @@
                                                  IsReadOnly="True"
                                                  GridLinesVisibility="All"
                                                  Margin="10"
-                                                 FontSize="12" />
+                                                 FontSize="12"
+                                                 DoubleTapped="OnQueryResultDoubleTapped" />
 
                                 </Grid>
 
                             </Grid>
+
+                            </Grid><!-- end QueryContent -->
 
                         </Grid>
                     </TabItem>
@@ -1247,7 +1485,8 @@
                                                Opacity="0.35"
                                                FontSize="13" />
 
-                                    <Grid IsVisible="{Binding WalTab.SelectedFrameDetail,
+                                    <Grid x:Name="WalContentGrid"
+                                          IsVisible="{Binding WalTab.SelectedFrameDetail,
                                                       Converter={x:Static conv:ObjectConverters.IsNotNull}}"
                                           ColumnDefinitions="*,4,*">
 
@@ -1307,16 +1546,38 @@
                                                                               IsExpanded="False"
                                                                               Expanded="OnWalFreeBlockSectionExpanded"
                                                                               Margin="0,2,0,0">
-                                                                        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
-                                                                            <ItemsControl.ItemTemplate>
-                                                                                <DataTemplate x:DataType="vm:InfoRow">
-                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
-                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
-                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
-                                                                                    </Grid>
-                                                                                </DataTemplate>
-                                                                            </ItemsControl.ItemTemplate>
-                                                                        </ItemsControl>
+                                                                        <StackPanel>
+                                                                            <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                                <ItemsControl.ItemTemplate>
+                                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                        </Grid>
+                                                                                    </DataTemplate>
+                                                                                </ItemsControl.ItemTemplate>
+                                                                            </ItemsControl>
+                                                                            <StackPanel IsVisible="{Binding HasRecoveredRecords}"
+                                                                                        Margin="8,2,0,4">
+                                                                                <TextBlock Text="Recovered Records"
+                                                                                           FontSize="11"
+                                                                                           FontWeight="SemiBold"
+                                                                                           Opacity="0.6"
+                                                                                           Margin="0,4,0,4" />
+                                                                                <ItemsControl ItemsSource="{Binding RecoveredRecords}">
+                                                                                    <ItemsControl.ItemTemplate>
+                                                                                        <DataTemplate x:DataType="vm:FreeBlockRecordEntry">
+                                                                                            <Button Content="{Binding Label}"
+                                                                                                    Click="OnWalFreeBlockRecordClick"
+                                                                                                    Padding="4,2"
+                                                                                                    Margin="0,1"
+                                                                                                    FontSize="11"
+                                                                                                    HorizontalAlignment="Left" />
+                                                                                        </DataTemplate>
+                                                                                    </ItemsControl.ItemTemplate>
+                                                                                </ItemsControl>
+                                                                            </StackPanel>
+                                                                        </StackPanel>
                                                                     </Expander>
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
@@ -1460,20 +1721,28 @@
                                                                Margin="8,0,0,0" />
                                                 </StackPanel>
                                             </Border>
-                                            <Grid Grid.Row="1" ColumnDefinitions="*,Auto">
+                                            <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165"
+                                                  x:Name="WalHexGrid">
                                                 <ScrollViewer Grid.Column="0"
                                                               VerticalScrollBarVisibility="Auto"
                                                               HorizontalScrollBarVisibility="Auto">
                                                     <controls:HexView x:Name="WalHexView"
                                                                       Margin="14,8,14,16"
+                                                                      HorizontalAlignment="Left"
                                                                       Data="{Binding WalTab.SelectedFrameDetail.PageBytes}"
                                                                       Highlights="{Binding WalTab.SelectedFrameDetail.PageHighlights}"
                                                                       UseDecimalOffsets="{Binding #WalOffsetToggle.IsChecked}"
                                                                       ShowHighlights="{Binding #WalHighlightToggle.IsChecked}" />
                                                 </ScrollViewer>
-                                                <controls:DataInspectorControl Grid.Column="1"
+                                                <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                                                              x:Name="WalInspectorSplitter" />
+                                                <controls:DataInspectorControl Grid.Column="2"
+                                                                               x:Name="WalDataInspector"
+                                                                               MinWidth="100"
                                                                                Data="{Binding #WalHexView.Data}"
-                                                                               Offset="{Binding #WalHexView.CursorOffset}" />
+                                                                               Offset="{Binding #WalHexView.CursorOffset}"
+                                                                               SelectionLength="{Binding #WalHexView.SelectionLength}"
+                                                                               PopOutRequested="OnWalInspectorPopOut" />
                                             </Grid>
                                         </Grid>
 

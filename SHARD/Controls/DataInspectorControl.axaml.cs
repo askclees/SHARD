@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Interactivity;
 using SHARD.Core.Decoding;
 using SHARD.ViewModels;
 
@@ -10,11 +11,24 @@ namespace SHARD.Controls;
 
 public partial class DataInspectorControl : UserControl
 {
+    public static readonly RoutedEvent<RoutedEventArgs> PopOutRequestedEvent =
+        RoutedEvent.Register<DataInspectorControl, RoutedEventArgs>(
+            nameof(PopOutRequested), RoutingStrategies.Bubble);
+
+    public event EventHandler<RoutedEventArgs> PopOutRequested
+    {
+        add    => AddHandler(PopOutRequestedEvent, value);
+        remove => RemoveHandler(PopOutRequestedEvent, value);
+    }
+
     public static readonly StyledProperty<byte[]?> DataProperty =
         AvaloniaProperty.Register<DataInspectorControl, byte[]?>(nameof(Data));
 
     public static readonly StyledProperty<int> OffsetProperty =
         AvaloniaProperty.Register<DataInspectorControl, int>(nameof(Offset), defaultValue: -1);
+
+    public static readonly StyledProperty<int> SelectionLengthProperty =
+        AvaloniaProperty.Register<DataInspectorControl, int>(nameof(SelectionLength), defaultValue: 0);
 
     public byte[]? Data
     {
@@ -28,10 +42,17 @@ public partial class DataInspectorControl : UserControl
         set => SetValue(OffsetProperty, value);
     }
 
+    public int SelectionLength
+    {
+        get => GetValue(SelectionLengthProperty);
+        set => SetValue(SelectionLengthProperty, value);
+    }
+
     static DataInspectorControl()
     {
         DataProperty.Changed.AddClassHandler<DataInspectorControl>((c, _) => c.Refresh());
         OffsetProperty.Changed.AddClassHandler<DataInspectorControl>((c, _) => c.Refresh());
+        SelectionLengthProperty.Changed.AddClassHandler<DataInspectorControl>((c, _) => c.RefreshSelection());
     }
 
     public DataInspectorControl()
@@ -39,10 +60,33 @@ public partial class DataInspectorControl : UserControl
         InitializeComponent();
     }
 
+    private void OnPopOutClicked(object? sender, RoutedEventArgs e) =>
+        RaiseEvent(new RoutedEventArgs(PopOutRequestedEvent, this));
+
     private void Refresh()
     {
         if (RowsControl is null) return;
         RowsControl.ItemsSource = ComputeRows(Data, Offset);
+    }
+
+    private void RefreshSelection()
+    {
+        if (SelectionPanel is null || SelectionRowsControl is null) return;
+        int len = SelectionLength;
+        if (len <= 0)
+        {
+            SelectionPanel.IsVisible = false;
+            return;
+        }
+        long textType = (long)len * 2 + 13;
+        long blobType = (long)len * 2 + 12;
+        SelectionRowsControl.ItemsSource = new[]
+        {
+            new InfoRow("Length", $"{len}  (0x{len:X})"),
+            new InfoRow("Text type", $"{textType}  (0x{textType:X})"),
+            new InfoRow("Blob type", $"{blobType}  (0x{blobType:X})"),
+        };
+        SelectionPanel.IsVisible = true;
     }
 
     private static IReadOnlyList<InfoRow> ComputeRows(byte[]? data, int offset)
@@ -127,9 +171,33 @@ public partial class DataInspectorControl : UserControl
         {
             var varint = Varint.ReadAt(data, offset);
             rows.Add(new InfoRow("Varint", $"{varint.Value}  ({varint.Length}B)"));
+            rows.Add(new InfoRow("Serial type", SerialTypeLabel(varint.Value)));
         }
-        else rows.Add(new InfoRow("Varint", "—"));
+        else
+        {
+            rows.Add(new InfoRow("Varint", "—"));
+            rows.Add(new InfoRow("Serial type", "—"));
+        }
 
         return rows;
     }
+
+    private static string SerialTypeLabel(long v) => v switch
+    {
+        0  => "NULL",
+        1  => "Integer  1 byte",
+        2  => "Integer  2 bytes",
+        3  => "Integer  3 bytes",
+        4  => "Integer  4 bytes",
+        5  => "Integer  6 bytes",
+        6  => "Integer  8 bytes",
+        7  => "Float  8 bytes",
+        8  => "Integer  0 (const)",
+        9  => "Integer  1 (const)",
+        10 => "Reserved",
+        11 => "Reserved",
+        _  when v >= 12 && v % 2 == 0 => $"Blob  {(v - 12) / 2} bytes",
+        _  when v >= 13 && v % 2 == 1 => $"Text  {(v - 13) / 2} chars",
+        _  => "—"
+    };
 }
