@@ -1,0 +1,27 @@
+# SHARD WAL Test Data Manifest — no-post-restart-writes (no false positive) variant
+# Database: places_wal_no_post_restart_writes.db
+# Created by: create_places_wal_no_post_restart_writes.py
+# Created: 2026-08-07
+#
+# PRAGMA wal_checkpoint(RESTART) was issued with NO subsequent write, so the
+# WAL salt was never changed.  All frames are IsCurrent=True.  SHARD must
+# recover zero records even though deleted rows exist in the WAL file.
+# All three files were captured as-is after SIGKILL with no SQLite cleanup.
+
+[places_wal_no_post_restart_writes.db]
+size    = 8192
+md5     = 1c3a11a714faa8ed17f62dab30fb7c8b
+sha1    = a4b4501cb3e08115ba33ce3def010cac91b4529a
+sha256  = bb968695ba22f5cbb0a351bc38de51007f5beec5efadfb00d30e24b411fb91d4
+
+[places_wal_no_post_restart_writes.db-shm]
+size    = 32768
+md5     = 2321864a4b6e2063bfc7a6b4ee78bf11
+sha1    = 01feff84611a54ff74cf3e46b03d7e05d429f8f3
+sha256  = 9600be9255dcf914c5a6caeefa3a1f42407a71b23ba01cb3593a6ac2bc6c0a6f
+
+[places_wal_no_post_restart_writes.db-wal]
+size    = 16512
+md5     = f06ec88f6a86237029ecd54ff564664a
+sha1    = e5379eb601b33bb92371181df8d67693b70ccc0e
+sha256  = 2c1d6e32375ab8a2fb1259c45f1cf732b832a1461569b0dedf4ed86e12ae5282

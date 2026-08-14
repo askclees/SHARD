@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SHARD WAL deleted-record recovery test expectations for places_wal_multi_table.db.
+
+  Two tables — one page each — verify that WAL frame correlation is per-table.
+  Records recovered from page 2 only appear in _shard_recovered_moz_places;
+  records from page 3 only appear in _shard_recovered_moz_historyvisits.
+
+  Live rows (main DB raw, bypassing WAL):
+    moz_places        7  (ids 1-3, 7-10)    — row 11 is in current WAL frame only
+    moz_historyvisits 15 (ids 1-7, 13-20)
+
+  WAL-recovered rows (IsCurrent=False frames):
+    moz_places        3  wal_frame (ids 4-6  — Frame 5)
+    moz_historyvisits 5  wal_frame (ids 8-12 — Frame 6)
+-->
+<database>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>moz_places</name>
+            <deleted>False</deleted>
+            <rowsAlive>7</rowsAlive>
+            <rowsDeleted>3</rowsDeleted>
+        </meta>
+        <rows>
+            <row deleted="1">
+                <column><name>id</name><content>4</content></column>
+                <column><name>url</name><content>https://example4.com/</content></column>
+                <column><name>title</name><content>Title 4</content></column>
+                <column><name>visit_count</name><content>4</content></column>
+                <column><name>last_visit_date</name><content>1700000004</content></column>
+                <column><name>frecency</name><content>40</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>5</content></column>
+                <column><name>url</name><content>https://example5.com/</content></column>
+                <column><name>title</name><content>Title 5</content></column>
+                <column><name>visit_count</name><content>5</content></column>
+                <column><name>last_visit_date</name><content>1700000005</content></column>
+                <column><name>frecency</name><content>50</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>6</content></column>
+                <column><name>url</name><content>https://example6.com/</content></column>
+                <column><name>title</name><content>Title 6</content></column>
+                <column><name>visit_count</name><content>6</content></column>
+                <column><name>last_visit_date</name><content>1700000006</content></column>
+                <column><name>frecency</name><content>60</content></column>
+            </row>
+        </rows>
+    </element>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>moz_historyvisits</name>
+            <deleted>False</deleted>
+            <rowsAlive>15</rowsAlive>
+            <rowsDeleted>5</rowsDeleted>
+        </meta>
+        <rows>
+            <row deleted="1">
+                <column><name>id</name><content>8</content></column>
+                <column><name>place_id</name><content>8</content></column>
+                <column><name>visit_date</name><content>1700008000</content></column>
+                <column><name>visit_type</name><content>4</content></column>
+                <column><name>from_visit</name><content>0</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>9</content></column>
+                <column><name>place_id</name><content>9</content></column>
+                <column><name>visit_date</name><content>1700009000</content></column>
+                <column><name>visit_type</name><content>5</content></column>
+                <column><name>from_visit</name><content>0</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>10</content></column>
+                <column><name>place_id</name><content>10</content></column>
+                <column><name>visit_date</name><content>1700010000</content></column>
+                <column><name>visit_type</name><content>1</content></column>
+                <column><name>from_visit</name><content>0</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>11</content></column>
+                <column><name>place_id</name><content>11</content></column>
+                <column><name>visit_date</name><content>1700011000</content></column>
+                <column><name>visit_type</name><content>2</content></column>
+                <column><name>from_visit</name><content>0</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>12</content></column>
+                <column><name>place_id</name><content>12</content></column>
+                <column><name>visit_date</name><content>1700012000</content></column>
+                <column><name>visit_type</name><content>3</content></column>
+                <column><name>from_visit</name><content>0</content></column>
+            </row>
+        </rows>
+    </element>
+</database>

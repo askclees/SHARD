@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SHARD WAL no-false-positive test expectations for places_wal_no_post_restart_writes.db.
+
+  PRAGMA wal_checkpoint(RESTART) was issued with NO subsequent write.
+  The WAL salt only changes on the first write after a RESTART, so every
+  frame in the file retains the original salt and is IsCurrent=True.
+  InsertWalDeletedRows must skip all frames and recover ZERO records.
+
+  Deleted rows 4-6 physically exist in the WAL (Frame 4) but MUST NOT be
+  recovered — recovering IsCurrent=True frames would be a false positive.
+
+  Live rows (main DB raw, bypassing WAL):  7  (ids 1-3, 7-10)
+  WAL-recovered rows:                      0  (no IsCurrent=False frames)
+-->
+<database>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>moz_places</name>
+            <deleted>False</deleted>
+            <rowsAlive>7</rowsAlive>
+            <rowsDeleted>0</rowsDeleted>
+        </meta>
+        <rows>
+        </rows>
+    </element>
+</database>

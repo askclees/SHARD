@@ -67,7 +67,6 @@ public class SHARDCreatedTests(ITestOutputHelper output)
     public void WalDeletedRecords_CountMatchesExpected(string file, string dbPath, string walPath, string xmlPath)
     {
         var tables = TryParseXml(xmlPath) ?? [];
-        if (tables.All(t => t.RowsDeleted == 0)) return;
 
         using var db  = SqliteForensicDatabase.Open(dbPath);
         var wal = new WalFile(walPath, db.Header.TextEncoding, db.Header.ReservedBytesPerPage);
@@ -83,14 +82,22 @@ public class SHARDCreatedTests(ITestOutputHelper output)
 
         foreach (var expected in tables)
         {
-            if (expected.IsDeleted || expected.RowsDeleted == 0) continue;
-            if (!masterRows.TryGetValue(expected.Name, out var master)) continue;
+            if (expected.IsDeleted) continue;
+            if (!masterRows.ContainsKey(expected.Name)) continue;
 
             string recoveredTable = $"\"{ShadowDatabaseBuilder.RecoveredTablePrefix}{expected.Name}\"";
-            int count = QueryCount(conn, recoveredTable,
-                $"\"{ ShadowDatabaseBuilder.RecoveryMethodColumn}\" IN " +
-                $"('{ShadowDatabaseBuilder.RecoveryMethodWalFrame}', " +
-                $"'{ShadowDatabaseBuilder.RecoveryMethodWalPreviousVersion}')");
+            int count;
+            try
+            {
+                count = QueryCount(conn, recoveredTable,
+                    $"\"{ShadowDatabaseBuilder.RecoveryMethodColumn}\" IN " +
+                    $"('{ShadowDatabaseBuilder.RecoveryMethodWalFrame}', " +
+                    $"'{ShadowDatabaseBuilder.RecoveryMethodWalPreviousVersion}')");
+            }
+            catch
+            {
+                count = 0;
+            }
 
             Assert.True(count == expected.RowsDeleted,
                 $"{file} table '{expected.Name}': expected {expected.RowsDeleted} WAL-recovered records, found {count}");
