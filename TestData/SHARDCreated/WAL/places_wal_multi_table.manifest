@@ -1,0 +1,27 @@
+# SHARD WAL Test Data Manifest — multi-table variant
+# Database: places_wal_multi_table.db
+# Created by: create_places_wal_multi_table.py
+# Created: 2026-08-07
+#
+# Two tables (moz_places page 2, moz_historyvisits page 3) populate separate
+# leaf pages.  Deletions from each table before a RESTART checkpoint verify
+# that WAL frame correlation produces no cross-table contamination.
+# All three files were captured as-is after SIGKILL with no SQLite cleanup.
+
+[places_wal_multi_table.db]
+size    = 12288
+md5     = 30cf56e961587ab655e8456acd2222f3
+sha1    = 79f7b16fc1e645f5bc4fa4334aff05d4f24b4c68
+sha256  = 50c80e2829167a9079a28d0ed5d1e8e951f5f4e929f2b87fbd0742d75759ae90
+
+[places_wal_multi_table.db-shm]
+size    = 32768
+md5     = 619ab2aa7ef207b1116f807b14ac39a5
+sha1    = 699d1a8d46d0ba3df35f303d779fe7c510dc10d3
+sha256  = 70ea9386f56b6931642d70f847a7793a3c1516457530aadeb03abce2ff79ae09
+
+[places_wal_multi_table.db-wal]
+size    = 32992
+md5     = e3e05bd5259f76a386cefdf448c682fa
+sha1    = 980272ad948218208454cd0785c2af9c35c2ce8a
+sha256  = d829088f668eaa43df94be20f7cbd58a4682cb815e27a89de9fedd578ed9c072

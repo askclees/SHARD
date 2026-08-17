@@ -149,6 +149,19 @@ public sealed class ShadowProject : IDisposable
     }
 
     /// <summary>
+    /// Walks all WAL frames (including frames past the checkpoint boundary) and
+    /// inserts into the recovered shadow tables any records that were deleted or
+    /// overwritten before the current database version.
+    /// Returns the number of records inserted.
+    /// </summary>
+    public int RecoverWalDeletedRows(WalFile walFile, SqliteForensicDatabase database)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        return ShadowDatabaseBuilder.InsertWalDeletedRows(connection, database, walFile);
+    }
+
+    /// <summary>
     /// Compares each WAL frame against the current database page and inserts any
     /// records that are new in the WAL into the corresponding live shadow table.
     /// Returns the number of records inserted.
