@@ -93,6 +93,12 @@ jobs:
           CORPUS_REPORT_FILE: corpus-recovery-report.md
         run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~GenerateSHARDCreatedReport"
 
+      - name: Generate orphan-carving report
+        continue-on-error: true
+        env:
+          CORPUS_REPORT_FILE: corpus-recovery-report.md
+        run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~GenerateCarvingReport"
+
       - name: Rename corpus report
         if: always()
         run: |

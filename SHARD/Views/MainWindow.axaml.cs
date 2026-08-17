@@ -9,6 +9,7 @@ using Avalonia.Platform.Storage;
 using SHARD.Controls;
 using SHARD.Core.Enums;
 using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
 using SHARD.ViewModels;
 
@@ -337,6 +338,20 @@ public partial class MainWindow : Window
 
         if (folders is [var folder])
             Vm.OpenProject(folder.Path.LocalPath);
+    }
+
+    // ── Recovery ─────────────────────────────────────────────────────────────
+
+    private void OnRunStandardCarveClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel { CarveTab: { } carveTab } vm) return;
+        vm.CarveUnknownPages(carveTab.RunStandardCandidates());
+    }
+
+    private void OnRunFocusedCarveClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel { CarveTab: { } carveTab } vm) return;
+        vm.CarveUnknownPages(carveTab.RunFocusedCandidates());
     }
 
     // ── Drag-and-drop ────────────────────────────────────────────────────────

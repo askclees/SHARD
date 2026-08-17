@@ -25,7 +25,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     public SqliteForensicDatabase? Database
     {
         get => _database;
-        private set => this.RaiseAndSetIfChanged(ref _database, value);
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _database, value);
+            // CarveTab is a lazily-computed property (built on first access from Database, not a
+            // stored field Database's setter would otherwise refresh) — without this, a binding
+            // that evaluated CarveTab before any database was open would stay stuck on that
+            // stale null result even after one loads.
+            this.RaisePropertyChanged(nameof(CarveTab));
+        }
     }
 
     private Dictionary<uint, string>? _pageTableMap;
@@ -429,6 +437,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
     public bool HasProject => Project is not null;
     public string? ProjectFolderPath => Project?.IsUnsaved == true ? "(unsaved)" : Project?.ProjectFolder;
+
+    // ── Carve Unknown Pages tab ──────────────────────────────────────────────
+    // Lazily created the first time the tab is actually opened (Avalonia's TabControl only
+    // realizes — and therefore binds — a tab's content once it's selected), since building the
+    // Focused review grid reads every candidate table's live rows. Once created it stays alive
+    // for the rest of the session, so edited ranges survive switching tabs and coming back.
+    private CarveUnknownPagesViewModel? _carveTab;
+    public CarveUnknownPagesViewModel? CarveTab =>
+        _carveTab ??= Database is not null ? new CarveUnknownPagesViewModel(Database) : null;
 
     // ── Record recovery ────────────────────────────────────────────────────
     private int _selectedByteOffset = -1;
@@ -845,6 +862,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             string walPath = path + "-wal";
             if (File.Exists(walPath))
                 LoadWalFile(walPath);
+
+            if (AutoCarveUnknownPagesOnOpen)
+                CarveUnknownPages(OrphanPageCarver.BuildCandidates(Database, CarveMode.Loose));
         }
         catch (InvalidDataException ex)
         {
@@ -860,6 +880,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public void CloseFile()
     {
         Database?.Dispose();
+        _carveTab = null; // clear before Database, so Database's setter-driven CarveTab notification sees it already gone
         Database = null;
         _currentFilePath = null;
         _pageTableMap = null;
@@ -970,6 +991,35 @@ public sealed class MainWindowViewModel : ViewModelBase
             StatusText = $"Error reading persisted page classifications: {ex.Message}";
         }
     }
+
+    /// <summary>
+    /// Explicit, user-triggered scan of pages with no known owning table (see
+    /// <see cref="ShadowProject.CarveUnknownPages"/>). Not part of <see cref="LoadFile"/> —
+    /// invoked on demand from the UI (via the Carve Unknown Pages dialog, see
+    /// <see cref="CarveUnknownPagesViewModel"/>) or, when <see cref="AutoCarveUnknownPagesOnOpen"/>
+    /// is checked, automatically in Standard mode right after a file finishes loading.
+    /// </summary>
+    public void CarveUnknownPages(IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> candidates)
+    {
+        if (Database is null || Project is null) return;
+        try
+        {
+            int carved = Project.CarveUnknownPages(Database, candidates, out int ambiguousSkipped);
+            StatusText = carved > 0
+                ? $"Carved {carved} record{(carved == 1 ? "" : "s")} from unknown pages" +
+                  (ambiguousSkipped > 0 ? $"  ·  {ambiguousSkipped} ambiguous byte range{(ambiguousSkipped == 1 ? "" : "s")} skipped" : "")
+                : "Carve unknown pages: nothing recovered" +
+                  (ambiguousSkipped > 0 ? $"  ·  {ambiguousSkipped} ambiguous byte range{(ambiguousSkipped == 1 ? "" : "s")} skipped" : "");
+            RefreshPagesFromShadowDatabase();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Carve unknown pages failed: {ex.Message}";
+        }
+    }
+
+    /// <summary>When true, <see cref="LoadFile"/> automatically runs <see cref="CarveUnknownPages"/> in loose mode right after a file finishes loading.</summary>
+    public bool AutoCarveUnknownPagesOnOpen { get; set; }
 
     public void LoadWalFile(string walPath)
     {

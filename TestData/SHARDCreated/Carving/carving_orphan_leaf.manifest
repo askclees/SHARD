@@ -1,0 +1,18 @@
+# SHARD Orphan-Page Carving Test Data Manifest — single-table variant
+# Database: carving_orphan_leaf.db
+# Created by: create_carving_orphan_leaf.py
+# Created: 2026-08-17
+#
+# 500 rows force moz_places across several leaf pages. A bulk DELETE of ids
+# 200-400 causes SQLite to unlink and freelist page 8 outright, leaving its
+# original 78 cells (ids 400-477) fully intact but unreachable from the live
+# tree and unassociated with any dropped-table sqlite_master entry — a
+# genuine no-hint orphan for the multi-schema carving feature to target.
+# PRAGMA secure_delete=OFF was set explicitly; the file was closed normally
+# (no WAL involved).
+
+[carving_orphan_leaf.db]
+size    = 36864
+md5     = 4ce834632b3fc39d0c8b0603a20a6b6d
+sha1    = 4a05514b7a030aa77157a504d288a8bf89f1e581
+sha256  = d8bf9353a0618a6adf49d48f3668d7f8cfb13c7e6d12962e8e2b07d06269939e
