@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using SHARD.Core;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
+using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
 
 var Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
@@ -60,6 +61,7 @@ return command switch
     "schema"  => RunSchema(positional, outputPath, format),
     "pages"   => RunPages(positional, outputPath, format),
     "header"  => RunHeader(positional, outputPath, format),
+    "carve"   => RunCarve(positional, outputPath, format),
     _         => Die($"Unknown command '{command}'. Run 'shard-cli --help' for usage."),
 };
 
@@ -249,6 +251,66 @@ int RunHeader(List<string> pos, string? outPath, string fmt)
     return 0;
 }
 
+// ── carve ─────────────────────────────────────────────────────────────────────
+
+int RunCarve(List<string> pos, string? outPath, string fmt)
+{
+    string? dbPath = null;
+    string  modeArg = "loose";
+    var     tableFilter = new List<string>();
+
+    for (int i = 1; i < pos.Count; i++)
+    {
+        switch (pos[i])
+        {
+            case "--mode":
+                if (++i >= pos.Count) Die("--mode requires a value.");
+                modeArg = pos[i].ToLowerInvariant();
+                break;
+            case "--table":
+                if (++i >= pos.Count) Die("--table requires a value.");
+                tableFilter.Add(pos[i]);
+                break;
+            default:
+                if (dbPath is null) dbPath = pos[i];
+                else Die($"Unexpected argument '{pos[i]}'.");
+                break;
+        }
+    }
+    if (dbPath is null) Die("Usage: shard-cli carve <db-file> [--mode loose|tight] [--table <name> ...]");
+    if (modeArg is not ("loose" or "tight")) Die($"Unknown mode '{modeArg}'. Use 'loose' or 'tight'.");
+    var mode = modeArg == "tight" ? CarveMode.Tight : CarveMode.Loose;
+
+    using var db = OpenDb(dbPath!);
+    var candidates = OrphanPageCarver.BuildCandidates(db, mode, tableFilter.Count > 0 ? tableFilter : null);
+    var carved = OrphanPageCarver.Carve(db, candidates, out int ambiguousSkipped);
+
+    var doc = new
+    {
+        mode            = modeArg,
+        candidateTables = candidates.Select(c => c.Schema.TableName).ToList(),
+        count           = carved.Count,
+        ambiguousSkipped,
+        records = carved.Select(r =>
+        {
+            var columns = BuildColumnNames(r.Schema);
+            var dict = RowToDict(r.Cell.FieldValues, r.Cell.RowId.Value, r.PageNumber, r.Cell.PageOffset, columns, r.Schema);
+            dict["_table"] = r.Schema.TableName;
+            return dict;
+        }).ToList(),
+    };
+
+    Write(outPath, fmt, doc, d =>
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Mode: {d.mode}  Candidates: {d.candidateTables.Count}  Carved: {d.count}  Ambiguous skipped: {d.ambiguousSkipped}");
+        foreach (var r in d.records)
+            sb.AppendLine(JsonSerializer.Serialize(r));
+        return sb.ToString();
+    });
+    return 0;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 SqliteForensicDatabase OpenDb(string path)
@@ -323,6 +385,8 @@ static void PrintHelp() => Console.WriteLine("""
       schema  <db>           List all sqlite_master entries
       pages   <db>           List all pages with type and table assignment
       header  <db>           Dump database header fields
+      carve   <db>           Try every live table's schema against unclaimed pages
+                              [--mode loose|tight] [--table <name> ...]
 
     Global options:
       -f, --format json|text   Output format (default: json)
@@ -340,4 +404,6 @@ static void PrintHelp() => Console.WriteLine("""
       shard-cli pages   mydb.sqlite -f text
       shard-cli header  mydb.sqlite
       shard-cli rows    mydb.sqlite users -o rows.json
+      shard-cli carve   mydb.sqlite --mode tight
+      shard-cli carve   mydb.sqlite --mode loose --table users --table notes
     """);

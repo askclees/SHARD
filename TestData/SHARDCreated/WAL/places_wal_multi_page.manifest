@@ -1,0 +1,29 @@
+# SHARD WAL Test Data Manifest — multi-page B-tree variant
+# Database: places_wal_multi_page.db
+# Created by: create_places_wal_multi_page.py
+# Created: 2026-08-07
+#
+# 100 rows force a B-tree page split so moz_places spans an interior root
+# (page 2) plus two leaf pages (page 3: rows 1-85, page 4: rows 86-100).
+# Deletions from both leaf pages verify SHARD can correlate non-root leaf
+# WAL frames to the correct table.  SQLite rebalanced the B-tree after the
+# second delete, but recovery still succeeds from the pre-deletion snapshots.
+# All three files were captured as-is after SIGKILL with no SQLite cleanup.
+
+[places_wal_multi_page.db]
+size    = 16384
+md5     = c00726be9aaba58c8e37cd51f1e27f40
+sha1    = 04323488c45698e55820761e36e89a7298d36451
+sha256  = 787167a05871d47b26cecfb98cca58d8d4b176eac78a7c110949975df2eb40cf
+
+[places_wal_multi_page.db-shm]
+size    = 32768
+md5     = 2cea9194d40e0093093b2379bc107570
+sha1    = 86b0e2bae48379199fd44a50681081436aaf7b8c
+sha256  = 4264e03c5c95cd62dd0828316603f5d3287c78f0c35efbeef2e622165362be95
+
+[places_wal_multi_page.db-wal]
+size    = 41232
+md5     = 28cdd579c2f8744ab30fbdad3cd494cc
+sha1    = 0b6bb6adad55c17edd790e07dca09f94436b1b96
+sha256  = 9b8220fd15f1499b29e32e643c4606007601ea7d3a51d4dfdc1cb28d5df5bd3d

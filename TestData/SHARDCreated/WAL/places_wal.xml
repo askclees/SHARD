@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SHARD WAL deleted-record recovery test expectations for places_wal.db.
+
+  Live rows (main DB raw, bypassing WAL):  15  (ids 1-5 and 11-20)
+  WAL-recovered deleted rows:               8
+    wal_frame (deleted before checkpoint):           ids 6-10   (5 records)
+    wal_previous_version (updated before checkpoint): ids 11-13  (3 records, original values)
+
+  The deleted rows listed below are the values that SHARD must recover from the
+  IsCurrent=False WAL frames.  Rows 11-13 appear with their original (pre-update)
+  field values; the live database holds their updated values (visit_count=999,
+  title='Updated Title').
+
+  Recovery method key:
+    wal_frame            — row existed in a historical WAL frame but is absent from the live DB
+    wal_previous_version — row exists in the live DB but with different values; the WAL frame
+                           holds an older snapshot
+-->
+<database>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>moz_places</name>
+            <deleted>False</deleted>
+            <rowsAlive>15</rowsAlive>
+            <rowsDeleted>8</rowsDeleted>
+        </meta>
+        <rows>
+            <!-- wal_frame: rows deleted before RESTART checkpoint -->
+            <row deleted="1">
+                <column><name>id</name><content>6</content></column>
+                <column><name>url</name><content>https://example6.com/</content></column>
+                <column><name>title</name><content>Title 6</content></column>
+                <column><name>visit_count</name><content>6</content></column>
+                <column><name>last_visit_date</name><content>1700000006</content></column>
+                <column><name>frecency</name><content>60</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>7</content></column>
+                <column><name>url</name><content>https://example7.com/</content></column>
+                <column><name>title</name><content>Title 7</content></column>
+                <column><name>visit_count</name><content>7</content></column>
+                <column><name>last_visit_date</name><content>1700000007</content></column>
+                <column><name>frecency</name><content>70</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>8</content></column>
+                <column><name>url</name><content>https://example8.com/</content></column>
+                <column><name>title</name><content>Title 8</content></column>
+                <column><name>visit_count</name><content>8</content></column>
+                <column><name>last_visit_date</name><content>1700000008</content></column>
+                <column><name>frecency</name><content>80</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>9</content></column>
+                <column><name>url</name><content>https://example9.com/</content></column>
+                <column><name>title</name><content>Title 9</content></column>
+                <column><name>visit_count</name><content>9</content></column>
+                <column><name>last_visit_date</name><content>1700000009</content></column>
+                <column><name>frecency</name><content>90</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>10</content></column>
+                <column><name>url</name><content>https://example10.com/</content></column>
+                <column><name>title</name><content>Title 10</content></column>
+                <column><name>visit_count</name><content>10</content></column>
+                <column><name>last_visit_date</name><content>1700000010</content></column>
+                <column><name>frecency</name><content>100</content></column>
+            </row>
+            <!-- wal_previous_version: rows updated before RESTART checkpoint (original values) -->
+            <row deleted="1">
+                <column><name>id</name><content>11</content></column>
+                <column><name>url</name><content>https://example11.com/</content></column>
+                <column><name>title</name><content>Title 11</content></column>
+                <column><name>visit_count</name><content>11</content></column>
+                <column><name>last_visit_date</name><content>1700000011</content></column>
+                <column><name>frecency</name><content>110</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>12</content></column>
+                <column><name>url</name><content>https://example12.com/</content></column>
+                <column><name>title</name><content>Title 12</content></column>
+                <column><name>visit_count</name><content>12</content></column>
+                <column><name>last_visit_date</name><content>1700000012</content></column>
+                <column><name>frecency</name><content>120</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>13</content></column>
+                <column><name>url</name><content>https://example13.com/</content></column>
+                <column><name>title</name><content>Title 13</content></column>
+                <column><name>visit_count</name><content>13</content></column>
+                <column><name>last_visit_date</name><content>1700000013</content></column>
+                <column><name>frecency</name><content>130</content></column>
+            </row>
+        </rows>
+    </element>
+</database>

@@ -1,0 +1,19 @@
+# SHARD Orphan-Page Carving Test Data Manifest — ambiguous-schema / tight-mode variant
+# Database: carving_ambiguous_tables.db
+# Created by: create_carving_ambiguous_tables.py
+# Created: 2026-08-17
+#
+# table_a and table_b share byte-identical column shape. A bulk DELETE of
+# ids 150-450 from table_a only frees one of its leaf pages outright (page
+# 7), leaving its original 54 cells (ids 447-500) intact but unreachable.
+# table_b is never touched. Loose (affinity-only) matching cannot tell the
+# two tables' records apart; tight (observed-data-narrowed) matching can,
+# since table_a's `num` column is always a 1-byte integer and table_b's is
+# always a 4-byte integer. PRAGMA secure_delete=OFF was set explicitly; the
+# file was closed normally (no WAL involved).
+
+[carving_ambiguous_tables.db]
+size    = 45056
+md5     = 898371b2325c17451839881042139158
+sha1    = 4fa92121afc730451921afc07c88ce73bcf7e46f
+sha256  = 0e748282aeb3797e13b0ed71c9118fc2b35c4ce9d63d906f399dffea4f19e547

@@ -2,7 +2,9 @@ using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Core.WAL;
 
 namespace SHARD.Core.Shadow;
 
@@ -21,10 +23,14 @@ public static class ShadowDatabaseBuilder
     private const string OverflowPageColumn = "_overflow_page";
     public  const string RecoveryMethodColumn = "_recovery_method";
 
-    public const string RecoveryMethodDeletedCell = "deleted_cell";
-    public const string RecoveryMethodCarving     = "carving";
-    public const string RecoveryMethodFreeblock   = "freeblock";
-    public const string RecoveryMethodManual      = "manual";
+    public const string RecoveryMethodDeletedCell        = "deleted_cell";
+    public const string RecoveryMethodCarving            = "carving";
+    public const string RecoveryMethodFreeblock          = "freeblock";
+    public const string RecoveryMethodManual             = "manual";
+    public const string RecoveryMethodWalFrame           = "wal_frame";
+    public const string RecoveryMethodWalPreviousVersion = "wal_previous_version";
+    /// <summary>Attributed to a live table purely by content-matching an unattributed page's bytes against its <see cref="RecordStructure"/> — see <see cref="OrphanPageCarver"/>.</summary>
+    public const string RecoveryMethodOrphanCarving       = "orphan_carving";
 
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
     public const string InternalTablePrefix  = "_shard_";
@@ -335,42 +341,34 @@ public static class ShadowDatabaseBuilder
 
     private static void TagFreelistPages(SqliteConnection connection, SqliteForensicDatabase database)
     {
-        try
-        {
-            using var transaction = connection.BeginTransaction();
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = $"""
-                UPDATE {QuoteIdentifier(PagesTableName)} SET page_type = @type WHERE page_number = @page
-                """;
-            var pageParam = command.CreateParameter();
-            pageParam.ParameterName = "@page";
-            command.Parameters.Add(pageParam);
-            var typeParam = command.CreateParameter();
-            typeParam.ParameterName = "@type";
-            command.Parameters.Add(typeParam);
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            UPDATE {QuoteIdentifier(PagesTableName)} SET page_type = @type WHERE page_number = @page
+            """;
+        var pageParam = command.CreateParameter();
+        pageParam.ParameterName = "@page";
+        command.Parameters.Add(pageParam);
+        var typeParam = command.CreateParameter();
+        typeParam.ParameterName = "@type";
+        command.Parameters.Add(typeParam);
 
-            foreach (var trunk in database.ReadFreelistChain())
+        foreach (var trunk in database.ReadFreelistChain())
+        {
+            pageParam.Value = trunk.PageNumber;
+            typeParam.Value = nameof(PageType.FreelistTrunk);
+            command.ExecuteNonQuery();
+
+            foreach (uint leafPageNumber in trunk.LeafPageNumbers)
             {
-                pageParam.Value = trunk.PageNumber;
-                typeParam.Value = nameof(PageType.FreelistTrunk);
+                pageParam.Value = leafPageNumber;
+                typeParam.Value = nameof(PageType.FreelistLeaf);
                 command.ExecuteNonQuery();
-
-                foreach (uint leafPageNumber in trunk.LeafPageNumbers)
-                {
-                    pageParam.Value = leafPageNumber;
-                    typeParam.Value = nameof(PageType.FreelistLeaf);
-                    command.ExecuteNonQuery();
-                }
             }
+        }
 
-            transaction.Commit();
-        }
-        catch (NotImplementedException)
-        {
-            // Freelist chain walking isn't implemented yet; pages remain classified by
-            // their type-byte baseline (Unknown) until ReadFreelistChain is filled in.
-        }
+        transaction.Commit();
     }
 
     private static void InsertRows(SqliteConnection connection, TableSchema schema, IEnumerable<TableRow> rows)
@@ -518,6 +516,61 @@ public static class ShadowDatabaseBuilder
     }
 
     /// <summary>
+    /// Tags the given page numbers in <c>_shard_pages</c> with <c>"{tableName} (carved)"</c>.
+    /// Distinct from <see cref="TagDeletedTablePages"/>'s "(deleted)" suffix: this label means the
+    /// page's table attribution was inferred purely by matching record-shaped byte content against a
+    /// live table's <see cref="RecordStructure"/> (see <see cref="OrphanPageCarver"/>) — not confirmed
+    /// by any b-tree pointer, deleted-cell-pointer, or sqlite_master evidence.
+    /// </summary>
+    public static void TagCarvedTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
+    {
+        TagTablePages(connection, $"{tableName} (carved)", pageNumbers);
+    }
+
+    /// <summary>
+    /// Persists the results of an <see cref="OrphanPageCarver.Carve"/> run into
+    /// <c>_shard_recovered_{tableName}</c>, tagged <see cref="RecoveryMethodOrphanCarving"/>, and
+    /// labels each carved page in <c>_shard_pages</c> via <see cref="TagCarvedTablePages"/> (joining
+    /// table names if a single page's carved cells matched more than one table). Never called
+    /// automatically from <see cref="Create"/> — this is an explicit, on-demand step.
+    /// </summary>
+    public static void PersistCarvedOrphanRecords(SqliteConnection connection, IReadOnlyList<CarvedOrphanRecord> results)
+    {
+        if (results.Count == 0) return;
+
+        using (var transaction = connection.BeginTransaction())
+        {
+            var insertSqlByTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var schema in results.Select(r => r.Schema).DistinctBy(s => s.TableName, StringComparer.OrdinalIgnoreCase))
+            {
+                EnsureRecoveredTableExists(connection, schema);
+                var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+                var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+                columnNames.Add(QuoteIdentifier(PageNumberColumn));     placeholders.Add("@p_page");
+                columnNames.Add(QuoteIdentifier(CellOffsetColumn));     placeholders.Add("@p_offset");
+                columnNames.Add(QuoteIdentifier(OverflowPageColumn));   placeholders.Add("@p_overflow");
+                columnNames.Add(QuoteIdentifier(RecoveryMethodColumn)); placeholders.Add("@p_method");
+                string recoveredTable = RecoveredTablePrefix + schema.TableName;
+                insertSqlByTable[schema.TableName] =
+                    $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+            }
+
+            foreach (var result in results)
+                InsertRecoveredCellInTransaction(
+                    connection, transaction, insertSqlByTable[result.Schema.TableName],
+                    result.Schema, result.Cell, result.PageNumber, RecoveryMethodOrphanCarving);
+
+            transaction.Commit();
+        }
+
+        foreach (var pageGroup in results.GroupBy(r => r.PageNumber))
+        {
+            string label = string.Join(", ", pageGroup.Select(r => r.Schema.TableName).Distinct(StringComparer.OrdinalIgnoreCase));
+            TagCarvedTablePages(connection, label, new[] { pageGroup.Key });
+        }
+    }
+
+    /// <summary>
     /// Creates a <c>_shard_deleted_{tableName}</c> table in the shadow database and
     /// populates it with rows read directly from a dropped table's still-valid root page.
     /// Uses <c>CREATE TABLE IF NOT EXISTS</c> so it is safe to call more than once.
@@ -633,6 +686,249 @@ public static class ShadowDatabaseBuilder
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Walks all WAL frames oldest-to-newest and inserts into the shadow database
+    /// any deleted or superseded records that do not already appear in the live or
+    /// recovered tables. Returns the number of records inserted.
+    /// </summary>
+    public static int InsertWalDeletedRows(
+        SqliteConnection connection,
+        SqliteForensicDatabase database,
+        WalFile wal)
+    {
+        if (wal.Frames.Count == 0) return 0;
+
+        var pageTableMap = database.BuildPageTableMap();
+
+        // Collect all parseable user-table schemas
+        var allSchemas = new Dictionary<string, (TableSchema Schema, uint RootPage)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var masterRow in database.ReadSqliteMaster())
+        {
+            if (masterRow.ObjectType != SqliteMasterObjectType.Table) continue;
+            if (masterRow.Name is null || masterRow.Sql is null || masterRow.RootPage is null) continue;
+            if (masterRow.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase)) continue;
+            if (masterRow.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase)) continue;
+            var schema = CreateTableParser.ExtractTableSchema(masterRow.Sql);
+            if (schema is null || schema.Columns.Count == 0) continue;
+            allSchemas[masterRow.Name] = (schema, masterRow.RootPage.Value);
+        }
+        if (allSchemas.Count == 0) return 0;
+
+        // Pre-compute freelist page numbers for correlation
+        var freelistPages = new HashSet<uint>();
+        try
+        {
+            foreach (var trunk in database.ReadFreelistChain())
+            {
+                freelistPages.Add(trunk.PageNumber);
+                foreach (uint leaf in trunk.LeafPageNumbers)
+                    freelistPages.Add(leaf);
+            }
+        }
+        catch { }
+
+        // Build per-table: live rowid sets and current field-value snapshots
+        var liveRowIds   = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
+        var livePayloads = new Dictionary<string, Dictionary<long, List<SqliteValue?>>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (tableName, (schema, rootPage)) in allSchemas)
+        {
+            var ids      = new HashSet<long>();
+            var payloads = new Dictionary<long, List<SqliteValue?>>();
+            foreach (var row in database.ReadTableRows(rootPage))
+            {
+                ids.Add(row.RowId);
+                payloads[row.RowId] = row.FieldValues;
+            }
+            liveRowIds[tableName]   = ids;
+            livePayloads[tableName] = payloads;
+        }
+
+        // Build per-table: already-recovered rowid sets from the shadow DB
+        var recoveredRowIds = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (tableName, (schema, _)) in allSchemas)
+            recoveredRowIds[tableName] = GetRecoveredRowIdsFromShadow(connection, schema);
+
+        // Ensure recovered tables exist for every schema before opening a transaction
+        foreach (var (_, (schema, _)) in allSchemas)
+            EnsureRecoveredTableExists(connection, schema);
+
+        // Pre-build INSERT SQL per table (recovery method is a parameter, not in SQL)
+        var insertSqlPerTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (tableName, (schema, _)) in allSchemas)
+        {
+            string recoveredTable = RecoveredTablePrefix + tableName;
+            var cols = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+            var phs  = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+            cols.Add(QuoteIdentifier(PageNumberColumn));     phs.Add("@p_page");
+            cols.Add(QuoteIdentifier(CellOffsetColumn));     phs.Add("@p_offset");
+            cols.Add(QuoteIdentifier(OverflowPageColumn));   phs.Add("@p_overflow");
+            cols.Add(QuoteIdentifier(RecoveryMethodColumn)); phs.Add("@p_method");
+            insertSqlPerTable[tableName] =
+                $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", cols)}) VALUES ({string.Join(", ", phs)})";
+        }
+
+        // Track which WAL rowids have already been inserted per table (oldest version wins)
+        var walAdded = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
+        int inserted = 0;
+
+        using var transaction = connection.BeginTransaction();
+
+        foreach (var frame in wal.Frames)
+        {
+            // Skip current-generation frames — those are live data handled by SyncWalFramesToShadow,
+            // not historical deleted data. Only salt-mismatched (pre-checkpoint) frames hold
+            // records that may have been deleted or overwritten.
+            if (frame.Header.IsCurrent) continue;
+            if (frame.Page is not TableBTreeLeafPage framePage) continue;
+            uint pageNum = frame.Header.PageNumber;
+
+            var schema = CorrelateWalFrameToSchema(
+                framePage, pageNum, database, pageTableMap, allSchemas,
+                liveRowIds, recoveredRowIds, freelistPages);
+            if (schema is null) continue;
+
+            string tableName = schema.TableName;
+            var knownLive      = liveRowIds.GetValueOrDefault(tableName)    ?? [];
+            var knownRecovered = recoveredRowIds.GetValueOrDefault(tableName) ?? [];
+            var knownPayloads  = livePayloads.GetValueOrDefault(tableName)  ?? [];
+
+            if (!walAdded.TryGetValue(tableName, out var addedSet))
+            {
+                addedSet = new HashSet<long>();
+                walAdded[tableName] = addedSet;
+            }
+
+            string insertSql = insertSqlPerTable[tableName];
+
+            foreach (var cell in framePage.Cells)
+            {
+                long rowId = cell.RowId.Value;
+                if (addedSet.Contains(rowId)) continue;
+
+                if (!knownLive.Contains(rowId) && !knownRecovered.Contains(rowId))
+                {
+                    // Stage 2: record deleted before the current DB version
+                    InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, RecoveryMethodWalFrame);
+                    addedSet.Add(rowId);
+                    inserted++;
+                }
+                else if (knownLive.Contains(rowId) && knownPayloads.TryGetValue(rowId, out var livePayload))
+                {
+                    // Stage 3: record still exists but payload has changed — keep the older version
+                    if (WalFieldsDiffer(cell.FieldValues, livePayload))
+                    {
+                        InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, RecoveryMethodWalPreviousVersion);
+                        addedSet.Add(rowId);
+                        inserted++;
+                    }
+                }
+            }
+        }
+
+        transaction.Commit();
+        return inserted;
+    }
+
+    private static TableSchema? CorrelateWalFrameToSchema(
+        TableBTreeLeafPage framePage,
+        uint pageNum,
+        SqliteForensicDatabase database,
+        Dictionary<uint, string> pageTableMap,
+        Dictionary<string, (TableSchema Schema, uint RootPage)> allSchemas,
+        Dictionary<string, HashSet<long>> liveRowIds,
+        Dictionary<string, HashSet<long>> recoveredRowIds,
+        HashSet<uint> freelistPages)
+    {
+        var frameRowIds = framePage.Cells.Select(c => c.RowId.Value).ToHashSet();
+        if (frameRowIds.Count == 0) return null;
+
+        if (pageNum <= database.PageCount)
+        {
+            SqlitePage currentPage;
+            try { currentPage = database.ReadPage(pageNum); }
+            catch { return null; }
+
+            if (currentPage is TableBTreeLeafPage currentLeaf)
+            {
+                if (!pageTableMap.TryGetValue(pageNum, out var tableName)) return null;
+                if (!allSchemas.TryGetValue(tableName, out var entry)) return null;
+
+                // Validate correlation: at least one frame rowid must appear in live or recovered records
+                var knownIds = new HashSet<long>(currentLeaf.Cells.Select(c => c.RowId.Value));
+                knownIds.UnionWith(liveRowIds.GetValueOrDefault(tableName) ?? []);
+                knownIds.UnionWith(recoveredRowIds.GetValueOrDefault(tableName) ?? []);
+                return frameRowIds.Any(id => knownIds.Contains(id)) ? entry.Schema : null;
+            }
+
+            if (freelistPages.Contains(pageNum))
+            {
+                // Page freed — match against all tables' known rowids; accept if exactly one table matches
+                TableSchema? matched = null;
+                foreach (var (tableName, (schema, _)) in allSchemas)
+                {
+                    var live      = liveRowIds.GetValueOrDefault(tableName)      ?? [];
+                    var recovered = recoveredRowIds.GetValueOrDefault(tableName) ?? [];
+                    if (frameRowIds.Any(id => live.Contains(id) || recovered.Contains(id)))
+                    {
+                        if (matched is not null) return null; // Ambiguous
+                        matched = schema;
+                    }
+                }
+                return matched;
+            }
+
+            // Interior, index, overflow, or other non-leaf type → skip
+            return null;
+        }
+
+        // Page number beyond current DB page count (e.g., database was VACUUMed)
+        // Accept only if exactly one known schema matches every cell's column count
+        var candidates = allSchemas.Values
+            .Where(e => framePage.Cells.All(c => WalCellMatchesSchema(c, e.Schema)))
+            .Select(e => e.Schema)
+            .ToList();
+        return candidates.Count == 1 ? candidates[0] : null;
+    }
+
+    private static bool WalCellMatchesSchema(BTreeLeafCell cell, TableSchema schema)
+    {
+        int expected = schema.Columns.Count(c => !c.IsRowIdAlias);
+        return cell.FieldValues.Count == expected;
+    }
+
+    private static bool WalFieldsDiffer(List<SqliteValue?> frameFields, List<SqliteValue?> liveFields)
+    {
+        if (frameFields.Count != liveFields.Count) return true;
+        for (int i = 0; i < frameFields.Count; i++)
+        {
+            var fv = frameFields[i];
+            var lv = liveFields[i];
+            if (fv is null && lv is null) continue;
+            if (fv is null || lv is null) return true;
+            if (!fv.Equals(lv)) return true;
+        }
+        return false;
+    }
+
+    private static HashSet<long> GetRecoveredRowIdsFromShadow(SqliteConnection connection, TableSchema schema)
+    {
+        var ids = new HashSet<long>();
+        var rowIdCol = schema.Columns.FirstOrDefault(c => c.IsRowIdAlias);
+        if (rowIdCol is null) return ids; // No rowid alias — can't retrieve rowids
+
+        string recoveredTable = RecoveredTablePrefix + schema.TableName;
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $"SELECT {QuoteIdentifier(rowIdCol.Name)} FROM {QuoteIdentifier(recoveredTable)} WHERE {QuoteIdentifier(rowIdCol.Name)} IS NOT NULL";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) ids.Add(reader.GetInt64(0));
+        }
+        catch { /* table may not exist for this schema */ }
+
+        return ids;
     }
 
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";

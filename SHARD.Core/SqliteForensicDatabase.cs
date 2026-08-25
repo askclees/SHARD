@@ -510,7 +510,77 @@ public sealed class SqliteForensicDatabase : IDisposable
         }
         return retVal;
     }
-        
+
+    /// <summary>
+    /// Returns every page number that isn't explained by anything this database knows about:
+    /// not part of the sqlite_master tree, not part of any live table/index's tree, and not an
+    /// overflow page for a live row. This includes pages whose type byte is unrecognizable, freelist
+    /// leaf pages, and freelist <em>trunk</em> pages — SQLite doesn't zero freed pages, and a trunk
+    /// page only has its first ~8-12 bytes overwritten with the trunk header/leaf-pointer array;
+    /// the rest of the page (especially common when a whole small table's only page becomes the
+    /// sole freelist entry after a DROP TABLE) can still be exactly what it was before, so trunk
+    /// pages are scanned too rather than skipped wholesale — the byte-level scanner already discards
+    /// the handful of header bytes as non-record-shaped on its own.
+    /// Connection-free: works directly off the evidence file, no shadow database required.
+    /// </summary>
+    /// <param name="excludeDroppedTablePages">
+    /// When true, also subtracts pages already explained by a recovered deleted sqlite_master
+    /// entry (<see cref="ReadDeletedSqliteMaster"/>) — a still-valid dropped table's whole tree, or
+    /// a freed dropped table's root page. Defaults to false: <see cref="OrphanPageCarver"/> now
+    /// includes dropped-table schemas as carving candidates too (writing to a different shadow
+    /// table, <c>_shard_recovered_*</c>, than the structural dropped-table flow's
+    /// <c>_shard_deleted_*</c>), so there's no collision to avoid — excluding these pages by default
+    /// would make orphan carving blind to the common "just dropped a table" case entirely,
+    /// including small single-page tables where the whole thing is a single "unclaimed" page.
+    /// </param>
+    public IReadOnlyList<uint> GetUnclaimedPageNumbers(bool excludeDroppedTablePages = false)
+    {
+        var claimed = new HashSet<uint>();
+
+        foreach (uint p in GetTreePageNumbers(1)) claimed.Add(p); // sqlite_master
+
+        foreach (var row in ReadSqliteMaster())
+        {
+            if (!row.RootPage.HasValue) continue;
+            foreach (uint p in GetTreePageNumbers(row.RootPage.Value)) claimed.Add(p);
+
+            if (row.ObjectType == SqliteMasterObjectType.Table)
+            {
+                foreach (var tableRow in ReadTableRows(row.RootPage.Value))
+                    foreach (var fragment in tableRow.OverflowFragments)
+                        claimed.Add(fragment.PageNumber);
+            }
+        }
+
+        if (excludeDroppedTablePages)
+        {
+            try
+            {
+                foreach (var deleted in ReadDeletedSqliteMaster())
+                {
+                    if (!deleted.Row.RootPage.HasValue) continue;
+                    switch (deleted.RootPageStatus)
+                    {
+                        case RootPageStatus.Valid:
+                            foreach (uint p in GetTreePageNumbers(deleted.Row.RootPage.Value)) claimed.Add(p);
+                            break;
+                        case RootPageStatus.Freed:
+                            claimed.Add(deleted.Row.RootPage.Value);
+                            break;
+                    }
+                }
+            }
+            catch
+            {
+                // Best-effort: dropped-table detection is a forensic aid, not required for correctness.
+            }
+        }
+
+        var unclaimed = new List<uint>();
+        for (uint p = 1; p <= PageCount; p++)
+            if (!claimed.Contains(p)) unclaimed.Add(p);
+        return unclaimed;
+    }
 
     public void Dispose() => _stream.Dispose();
 }

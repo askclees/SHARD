@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SHARD WAL multi-page B-tree recovery test expectations for places_wal_multi_page.db.
+
+  100 rows split the B-tree into an interior root (page 2) plus two leaf pages
+  (page 3: rows 1-85, page 4: rows 86-100).  Records are deleted from both
+  leaf pages, then a RESTART checkpoint is issued.  After the second delete,
+  SQLite rebalanced the B-tree so the final page layout before checkpoint was:
+    Page 3: rowids 1-39, 51-56  (45 cells)
+    Page 4: rowids 57-89, 96-100 (38 cells)
+
+  SHARD recovers deleted rows from the first historical (IsCurrent=False) snapshot
+  of each leaf page — before deletions reorganised the data:
+    Frame 5  (pg=3, rowids 1-85):    rows 40-50 absent from live → 11 wal_frame records
+    Frame 6  (pg=4, rowids 86-100):  rows 90-95 absent from live →  6 wal_frame records
+
+  Live rows (main DB raw, bypassing WAL):  83  (ids 1-39, 51-89, 96-100)
+    row 101 is in the current WAL frame only and is NOT counted here
+  WAL-recovered rows:                      17  (all wal_frame)
+-->
+<database>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>moz_places</name>
+            <deleted>False</deleted>
+            <rowsAlive>83</rowsAlive>
+            <rowsDeleted>17</rowsDeleted>
+        </meta>
+        <rows>
+            <!-- wal_frame: rows 40-50 from page-3 leaf (Frame 5) -->
+            <row deleted="1">
+                <column><name>id</name><content>40</content></column>
+                <column><name>url</name><content>https://example40.com/</content></column>
+                <column><name>title</name><content>Title 40</content></column>
+                <column><name>visit_count</name><content>40</content></column>
+                <column><name>last_visit_date</name><content>1700000040</content></column>
+                <column><name>frecency</name><content>400</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>41</content></column>
+                <column><name>url</name><content>https://example41.com/</content></column>
+                <column><name>title</name><content>Title 41</content></column>
+                <column><name>visit_count</name><content>41</content></column>
+                <column><name>last_visit_date</name><content>1700000041</content></column>
+                <column><name>frecency</name><content>410</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>42</content></column>
+                <column><name>url</name><content>https://example42.com/</content></column>
+                <column><name>title</name><content>Title 42</content></column>
+                <column><name>visit_count</name><content>42</content></column>
+                <column><name>last_visit_date</name><content>1700000042</content></column>
+                <column><name>frecency</name><content>420</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>43</content></column>
+                <column><name>url</name><content>https://example43.com/</content></column>
+                <column><name>title</name><content>Title 43</content></column>
+                <column><name>visit_count</name><content>43</content></column>
+                <column><name>last_visit_date</name><content>1700000043</content></column>
+                <column><name>frecency</name><content>430</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>44</content></column>
+                <column><name>url</name><content>https://example44.com/</content></column>
+                <column><name>title</name><content>Title 44</content></column>
+                <column><name>visit_count</name><content>44</content></column>
+                <column><name>last_visit_date</name><content>1700000044</content></column>
+                <column><name>frecency</name><content>440</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>45</content></column>
+                <column><name>url</name><content>https://example45.com/</content></column>
+                <column><name>title</name><content>Title 45</content></column>
+                <column><name>visit_count</name><content>45</content></column>
+                <column><name>last_visit_date</name><content>1700000045</content></column>
+                <column><name>frecency</name><content>450</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>46</content></column>
+                <column><name>url</name><content>https://example46.com/</content></column>
+                <column><name>title</name><content>Title 46</content></column>
+                <column><name>visit_count</name><content>46</content></column>
+                <column><name>last_visit_date</name><content>1700000046</content></column>
+                <column><name>frecency</name><content>460</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>47</content></column>
+                <column><name>url</name><content>https://example47.com/</content></column>
+                <column><name>title</name><content>Title 47</content></column>
+                <column><name>visit_count</name><content>47</content></column>
+                <column><name>last_visit_date</name><content>1700000047</content></column>
+                <column><name>frecency</name><content>470</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>48</content></column>
+                <column><name>url</name><content>https://example48.com/</content></column>
+                <column><name>title</name><content>Title 48</content></column>
+                <column><name>visit_count</name><content>48</content></column>
+                <column><name>last_visit_date</name><content>1700000048</content></column>
+                <column><name>frecency</name><content>480</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>49</content></column>
+                <column><name>url</name><content>https://example49.com/</content></column>
+                <column><name>title</name><content>Title 49</content></column>
+                <column><name>visit_count</name><content>49</content></column>
+                <column><name>last_visit_date</name><content>1700000049</content></column>
+                <column><name>frecency</name><content>490</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>50</content></column>
+                <column><name>url</name><content>https://example50.com/</content></column>
+                <column><name>title</name><content>Title 50</content></column>
+                <column><name>visit_count</name><content>50</content></column>
+                <column><name>last_visit_date</name><content>1700000050</content></column>
+                <column><name>frecency</name><content>500</content></column>
+            </row>
+            <!-- wal_frame: rows 90-95 from page-4 leaf (Frame 6) -->
+            <row deleted="1">
+                <column><name>id</name><content>90</content></column>
+                <column><name>url</name><content>https://example90.com/</content></column>
+                <column><name>title</name><content>Title 90</content></column>
+                <column><name>visit_count</name><content>90</content></column>
+                <column><name>last_visit_date</name><content>1700000090</content></column>
+                <column><name>frecency</name><content>900</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>91</content></column>
+                <column><name>url</name><content>https://example91.com/</content></column>
+                <column><name>title</name><content>Title 91</content></column>
+                <column><name>visit_count</name><content>91</content></column>
+                <column><name>last_visit_date</name><content>1700000091</content></column>
+                <column><name>frecency</name><content>910</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>92</content></column>
+                <column><name>url</name><content>https://example92.com/</content></column>
+                <column><name>title</name><content>Title 92</content></column>
+                <column><name>visit_count</name><content>92</content></column>
+                <column><name>last_visit_date</name><content>1700000092</content></column>
+                <column><name>frecency</name><content>920</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>93</content></column>
+                <column><name>url</name><content>https://example93.com/</content></column>
+                <column><name>title</name><content>Title 93</content></column>
+                <column><name>visit_count</name><content>93</content></column>
+                <column><name>last_visit_date</name><content>1700000093</content></column>
+                <column><name>frecency</name><content>930</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>94</content></column>
+                <column><name>url</name><content>https://example94.com/</content></column>
+                <column><name>title</name><content>Title 94</content></column>
+                <column><name>visit_count</name><content>94</content></column>
+                <column><name>last_visit_date</name><content>1700000094</content></column>
+                <column><name>frecency</name><content>940</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>95</content></column>
+                <column><name>url</name><content>https://example95.com/</content></column>
+                <column><name>title</name><content>Title 95</content></column>
+                <column><name>visit_count</name><content>95</content></column>
+                <column><name>last_visit_date</name><content>1700000095</content></column>
+                <column><name>frecency</name><content>950</content></column>
+            </row>
+        </rows>
+    </element>
+</database>
