@@ -63,7 +63,7 @@ public abstract class SqlitePage
                 PageType.BTreeInteriorIndex => new IndexBTreeInteriorPage(pageNumber, pageSize, data),
                 PageType.BTreeLeafTable     => new TableBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
                 PageType.BTreeLeafIndex     => new IndexBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
-                _                           => new UnknownPage(pageNumber, pageSize, data),
+                _                           => new UnknownPage(pageNumber, pageSize, data, typeByte),
             };
         }
         catch (Exception ex)
@@ -88,7 +88,7 @@ public abstract class SqlitePage
                 PageType.BTreeInteriorIndex => new IndexBTreeInteriorPage(pageNumber, pageSize, data),
                 PageType.BTreeLeafTable     => new TableBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
                 PageType.BTreeLeafIndex     => new IndexBTreeLeafPage(pageNumber, pageSize, data, encoding, reservedBytes),
-                _                           => new UnknownPage(pageNumber, pageSize, data),
+                _                           => new UnknownPage(pageNumber, pageSize, data, typeByte),
             };
         }
         catch (Exception ex)

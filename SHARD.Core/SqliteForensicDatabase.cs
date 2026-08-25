@@ -276,7 +276,13 @@ public sealed class SqliteForensicDatabase : IDisposable
             return ReadSqliteMasterFromInteriorPage(interiorPage);
         }
 
-        throw new NotImplementedException();
+        string detail = page is UnknownPage unknown
+            ? unknown.ParseError is not null
+                ? $"declared type byte {(int)unknown.DeclaredTypeByte} ({unknown.ParseError.Message})"
+                : $"declared type byte {(int)unknown.DeclaredTypeByte}"
+            : $"page type {page.PageType}";
+        throw new InvalidDataException(
+            $"Page 1 is not a table B-tree page ({detail}) — the database header may be intact but the schema page itself appears corrupted, or this is not a valid SQLite database.");
     }
 
     private IEnumerable<SqliteMasterRow> ReadSqliteMasterFromLeafPage(TableBTreeLeafPage page, uint pageNum)
