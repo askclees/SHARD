@@ -324,7 +324,13 @@ public static class FreeblockRecordParser
     {
         if (entries.Count != rs.NumColumns) return false;
         for (int i = 0; i < entries.Count; i++)
+        {
             if (!rs.AllowedKindsPerColumn[i].Contains(entries[i].Kind)) return false;
+            var range = rs.AllowedContentLengthRangePerColumn[i];
+            if (range is not null && entries[i].Kind is SerialTypeKind.Integer or SerialTypeKind.Float or SerialTypeKind.Text or SerialTypeKind.Blob
+                && (entries[i].ContentLength < range.Value.Min || entries[i].ContentLength > range.Value.Max))
+                return false;
+        }
         return true;
     }
 

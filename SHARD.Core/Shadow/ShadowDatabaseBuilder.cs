@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
 using SHARD.Core.WAL;
 
@@ -28,6 +29,8 @@ public static class ShadowDatabaseBuilder
     public const string RecoveryMethodManual             = "manual";
     public const string RecoveryMethodWalFrame           = "wal_frame";
     public const string RecoveryMethodWalPreviousVersion = "wal_previous_version";
+    /// <summary>Attributed to a live table purely by content-matching an unattributed page's bytes against its <see cref="RecordStructure"/> — see <see cref="OrphanPageCarver"/>.</summary>
+    public const string RecoveryMethodOrphanCarving       = "orphan_carving";
 
     /// <summary>Prefix for tables SHARD itself creates in the shadow database (as opposed to mirrored evidence tables), so consumers can filter them out of table listings.</summary>
     public const string InternalTablePrefix  = "_shard_";
@@ -518,6 +521,61 @@ public static class ShadowDatabaseBuilder
     public static void TagDeletedTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
     {
         TagTablePages(connection, $"{tableName} (deleted)", pageNumbers);
+    }
+
+    /// <summary>
+    /// Tags the given page numbers in <c>_shard_pages</c> with <c>"{tableName} (carved)"</c>.
+    /// Distinct from <see cref="TagDeletedTablePages"/>'s "(deleted)" suffix: this label means the
+    /// page's table attribution was inferred purely by matching record-shaped byte content against a
+    /// live table's <see cref="RecordStructure"/> (see <see cref="OrphanPageCarver"/>) — not confirmed
+    /// by any b-tree pointer, deleted-cell-pointer, or sqlite_master evidence.
+    /// </summary>
+    public static void TagCarvedTablePages(SqliteConnection connection, string tableName, IEnumerable<uint> pageNumbers)
+    {
+        TagTablePages(connection, $"{tableName} (carved)", pageNumbers);
+    }
+
+    /// <summary>
+    /// Persists the results of an <see cref="OrphanPageCarver.Carve"/> run into
+    /// <c>_shard_recovered_{tableName}</c>, tagged <see cref="RecoveryMethodOrphanCarving"/>, and
+    /// labels each carved page in <c>_shard_pages</c> via <see cref="TagCarvedTablePages"/> (joining
+    /// table names if a single page's carved cells matched more than one table). Never called
+    /// automatically from <see cref="Create"/> — this is an explicit, on-demand step.
+    /// </summary>
+    public static void PersistCarvedOrphanRecords(SqliteConnection connection, IReadOnlyList<CarvedOrphanRecord> results)
+    {
+        if (results.Count == 0) return;
+
+        using (var transaction = connection.BeginTransaction())
+        {
+            var insertSqlByTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var schema in results.Select(r => r.Schema).DistinctBy(s => s.TableName, StringComparer.OrdinalIgnoreCase))
+            {
+                EnsureRecoveredTableExists(connection, schema);
+                var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+                var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+                columnNames.Add(QuoteIdentifier(PageNumberColumn));     placeholders.Add("@p_page");
+                columnNames.Add(QuoteIdentifier(CellOffsetColumn));     placeholders.Add("@p_offset");
+                columnNames.Add(QuoteIdentifier(OverflowPageColumn));   placeholders.Add("@p_overflow");
+                columnNames.Add(QuoteIdentifier(RecoveryMethodColumn)); placeholders.Add("@p_method");
+                string recoveredTable = RecoveredTablePrefix + schema.TableName;
+                insertSqlByTable[schema.TableName] =
+                    $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+            }
+
+            foreach (var result in results)
+                InsertRecoveredCellInTransaction(
+                    connection, transaction, insertSqlByTable[result.Schema.TableName],
+                    result.Schema, result.Cell, result.PageNumber, RecoveryMethodOrphanCarving);
+
+            transaction.Commit();
+        }
+
+        foreach (var pageGroup in results.GroupBy(r => r.PageNumber))
+        {
+            string label = string.Join(", ", pageGroup.Select(r => r.Schema.TableName).Distinct(StringComparer.OrdinalIgnoreCase));
+            TagCarvedTablePages(connection, label, new[] { pageGroup.Key });
+        }
     }
 
     /// <summary>

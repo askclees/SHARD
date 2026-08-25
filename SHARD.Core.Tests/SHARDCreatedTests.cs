@@ -5,6 +5,7 @@ using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 using Xunit.Abstractions;
 using SHARD.Core.Enums;
+using SHARD.Core.Recovery;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
 
@@ -34,6 +35,25 @@ public class SHARDCreatedTests(ITestOutputHelper output)
             var tables = TryParseXml(xmlPath);
             if (tables is null) continue;
             yield return new object[] { Path.GetFileName(dbPath), dbPath, walPath, xmlPath };
+        }
+    }
+
+    /// <summary>
+    /// Orphan-page carving fixtures: plain (non-WAL) databases containing a page that's been
+    /// unlinked from its table's tree but still holds its original bytes. Unlike
+    /// <see cref="AllWalDatabases"/>, only a <c>.db</c> + matching <c>.xml</c> pair is required.
+    /// </summary>
+    public static IEnumerable<object[]> AllCarvingDatabases()
+    {
+        var carvingDir = Path.Combine(TestDataRoot, "Carving");
+        if (!Directory.Exists(carvingDir)) yield break;
+        foreach (var dbPath in Directory.GetFiles(carvingDir, "*.db").OrderBy(f => f))
+        {
+            string xmlPath = Path.ChangeExtension(dbPath, ".xml");
+            if (!File.Exists(xmlPath)) continue;
+            var tables = TryParseXml(xmlPath);
+            if (tables is null) continue;
+            yield return new object[] { Path.GetFileName(dbPath), dbPath, xmlPath };
         }
     }
 
@@ -161,6 +181,152 @@ public class SHARDCreatedTests(ITestOutputHelper output)
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Verifies <see cref="OrphanPageCarver.Carve"/> against the Carving fixtures: for each
+    /// expectation entry (one per table+mode combination), builds fresh candidates in that mode
+    /// and asserts the carved count/values for that table match — including the loose-mode
+    /// ambiguity-rejection case (expected count 0) and the tight-mode disambiguation case.
+    /// </summary>
+    [Theory, MemberData(nameof(AllCarvingDatabases))]
+    public void CarvingRecords_MatchExpected(string file, string dbPath, string xmlPath)
+    {
+        var tables = TryParseXml(xmlPath) ?? [];
+        using var db = SqliteForensicDatabase.Open(dbPath);
+
+        foreach (var expected in tables)
+        {
+            if (expected.IsDeleted) continue;
+
+            var mode = string.Equals(expected.Mode, "tight", StringComparison.OrdinalIgnoreCase)
+                ? CarveMode.Tight : CarveMode.Loose;
+            var candidates = OrphanPageCarver.BuildCandidates(db, mode);
+            var carved = OrphanPageCarver.Carve(db, candidates, out _);
+
+            var matches = carved
+                .Where(c => string.Equals(c.Schema.TableName, expected.Name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Assert.True(matches.Count == expected.RowsDeleted,
+                $"{file} table '{expected.Name}' mode={expected.Mode}: expected {expected.RowsDeleted} " +
+                $"orphan-carved records, found {matches.Count}");
+
+            if (expected.RowsDeleted == 0) continue;
+
+            var schema = matches[0].Schema;
+            string? pkCol = schema.Columns.FirstOrDefault(c => c.IsRowIdAlias)?.Name
+                         ?? schema.Columns.FirstOrDefault(c => c.IsPrimaryKey)?.Name;
+            if (pkCol is null) continue;
+
+            var actualRows = matches.Select(m => CellToFieldStrings(m.Schema, m.Cell)).ToList();
+
+            foreach (var expectedRow in expected.DeletedRows)
+            {
+                if (!expectedRow.Fields.TryGetValue(pkCol, out string? expectedPk)) continue;
+
+                var actualRow = actualRows.FirstOrDefault(r =>
+                    r.TryGetValue(pkCol, out string? actualPk) && actualPk == expectedPk);
+
+                if (actualRow is null)
+                {
+                    Assert.Fail(
+                        $"{file} table '{expected.Name}' mode={expected.Mode}: expected orphan-carved row " +
+                        $"with {pkCol}={expectedPk} but it was not found");
+                    return;
+                }
+
+                foreach (var (colName, expectedValue) in expectedRow.Fields)
+                {
+                    if (!actualRow.TryGetValue(colName, out string? actualValue)) continue;
+                    Assert.True(actualValue == expectedValue,
+                        $"{file} table '{expected.Name}' mode={expected.Mode} row {pkCol}={expectedPk}: " +
+                        $"column '{colName}' expected '{expectedValue}', got '{actualValue}'");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Generates a markdown orphan-carving section and appends it to the corpus report
+    /// (<c>$CORPUS_REPORT_FILE</c>) and GitHub Actions step summary when running in CI.
+    /// Always passes — results are informational.
+    /// </summary>
+    [Fact]
+    public void GenerateCarvingReport()
+    {
+        var carvingDir = Path.Combine(TestDataRoot, "Carving");
+        if (!Directory.Exists(carvingDir))
+        {
+            output.WriteLine("SHARD-created carving test data not found — skipping report.");
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.AppendLine("# SHARD-Created Test Data — Orphan-Page Carving Report");
+        sb.AppendLine();
+
+        bool anyData = false;
+
+        foreach (var args in AllCarvingDatabases())
+        {
+            string file   = (string)args[0];
+            string dbPath = (string)args[1];
+            string xmlPath = (string)args[2];
+
+            anyData = true;
+
+            var tables = TryParseXml(xmlPath) ?? [];
+            using var db = SqliteForensicDatabase.Open(dbPath);
+
+            sb.AppendLine($"## {Path.GetFileNameWithoutExtension(file)}");
+            sb.AppendLine();
+            sb.AppendLine("| Table | Mode | Expected | Found | Status |");
+            sb.AppendLine("|---|---|---|---|---|");
+
+            foreach (var expected in tables)
+            {
+                if (expected.IsDeleted) continue;
+
+                var mode = string.Equals(expected.Mode, "tight", StringComparison.OrdinalIgnoreCase)
+                    ? CarveMode.Tight : CarveMode.Loose;
+
+                int found = -1;
+                try
+                {
+                    var candidates = OrphanPageCarver.BuildCandidates(db, mode);
+                    var carved = OrphanPageCarver.Carve(db, candidates, out _);
+                    found = carved.Count(c => string.Equals(c.Schema.TableName, expected.Name, StringComparison.OrdinalIgnoreCase));
+                }
+                catch { }
+
+                string foundStr = found >= 0 ? found.ToString() : "error";
+                string status = found == expected.RowsDeleted ? "✅" : "⚠️";
+
+                sb.AppendLine($"| {expected.Name} | {expected.Mode} | {expected.RowsDeleted} | {foundStr} | {status} |");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("---");
+            sb.AppendLine();
+        }
+
+        if (!anyData)
+            sb.AppendLine("No SHARD-created carving test databases found.");
+
+        string report = sb.ToString();
+        output.WriteLine(report);
+
+        string? summaryPath = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
+        if (summaryPath is not null)
+            File.AppendAllText(summaryPath, report);
+
+        string? reportFilePath = Environment.GetEnvironmentVariable("CORPUS_REPORT_FILE");
+        if (reportFilePath is not null)
+            File.AppendAllText(reportFilePath, report);
     }
 
     /// <summary>
@@ -331,6 +497,19 @@ public class SHARDCreatedTests(ITestOutputHelper output)
         return results;
     }
 
+    /// <summary>Renders a carved cell's fields as strings keyed by column name, substituting the cell's rowid for a rowid-alias column (its own header slot is always NULL on disk).</summary>
+    private static Dictionary<string, string> CellToFieldStrings(SHARD.Core.Schema.TableSchema schema, SHARD.Core.Records.BTreeLeafCell cell)
+    {
+        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 0; i < schema.Columns.Count; i++)
+        {
+            var col = schema.Columns[i];
+            object? value = col.IsRowIdAlias ? cell.RowId.Value : cell.FieldValues.ElementAtOrDefault(i)?.Value;
+            dict[col.Name] = value is null ? "NULL" : Convert.ToString(value, CultureInfo.InvariantCulture) ?? "NULL";
+        }
+        return dict;
+    }
+
     // ── XML parser (same format as CorpusTests) ───────────────────────────────
 
     private static List<TableExpectation>? TryParseXml(string xmlPath)
@@ -352,6 +531,7 @@ public class SHARDCreatedTests(ITestOutputHelper output)
                 bool isDeleted  = string.Equals(meta?.Element("deleted")?.Value, "True", StringComparison.OrdinalIgnoreCase);
                 int rowsAlive   = int.TryParse(meta?.Element("rowsAlive")?.Value,   out int a) ? a : 0;
                 int rowsDeleted = int.TryParse(meta?.Element("rowsDeleted")?.Value, out int d) ? d : 0;
+                string mode     = meta?.Element("mode")?.Value ?? "loose";
 
                 var deletedRows = new List<Row>();
                 foreach (var rowEl in el.Descendants("row"))
@@ -368,7 +548,7 @@ public class SHARDCreatedTests(ITestOutputHelper output)
                     deletedRows.Add(new Row(fields));
                 }
 
-                result.Add(new TableExpectation(name, isDeleted, rowsAlive, rowsDeleted, deletedRows));
+                result.Add(new TableExpectation(name, isDeleted, rowsAlive, rowsDeleted, deletedRows, mode));
             }
 
             return result;
@@ -386,7 +566,8 @@ public class SHARDCreatedTests(ITestOutputHelper output)
         bool IsDeleted,
         int RowsAlive,
         int RowsDeleted,
-        IReadOnlyList<Row> DeletedRows);
+        IReadOnlyList<Row> DeletedRows,
+        string Mode = "loose");
 
     private record Row(IReadOnlyDictionary<string, string> Fields);
 }

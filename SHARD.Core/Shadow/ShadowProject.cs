@@ -4,6 +4,7 @@ using SHARD.Core.Comparison;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
+using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
 using SHARD.Core.WAL;
 
@@ -146,6 +147,30 @@ public sealed class ShadowProject : IDisposable
         using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
         ShadowDatabaseBuilder.InsertRecoveredRecord(connection, schema, cell, pageNumber, cellOffset);
+    }
+
+    /// <summary>
+    /// Explicit, user-triggered scan of pages with no known owning table: tries every candidate
+    /// table's <see cref="RecordStructure"/> against each such page's raw bytes via
+    /// <see cref="OrphanPageCarver"/>, and persists whatever uniquely matches. Never runs
+    /// automatically — callers decide when to invoke this, and build <paramref name="candidates"/>
+    /// themselves (typically via <see cref="OrphanPageCarver.BuildCandidates"/>, optionally with
+    /// user-reviewed/adjusted structures — see <see cref="RecordStructure.NarrowColumn"/>).
+    /// Returns the number of records carved and, via <paramref name="ambiguousSkipped"/>, how many
+    /// candidate byte ranges were rejected for matching more than one table.
+    /// </summary>
+    public int CarveUnknownPages(
+        SqliteForensicDatabase database,
+        IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> candidates,
+        out int ambiguousSkipped)
+    {
+        var carved = OrphanPageCarver.Carve(database, candidates, out ambiguousSkipped);
+
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        ShadowDatabaseBuilder.PersistCarvedOrphanRecords(connection, carved);
+
+        return carved.Count;
     }
 
     /// <summary>

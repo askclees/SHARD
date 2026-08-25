@@ -1,0 +1,1096 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SHARD orphan-page carving test expectations for carving_ambiguous_tables.db.
+
+  table_a and table_b share byte-identical column shape. A bulk DELETE of ids
+  150-450 from table_a only frees two of its leaf pages outright (page 6, a
+  freelist trunk, and page 7, a freelist leaf; see
+  create_carving_ambiguous_tables.py), which keep their original cells
+  intact but unreachable. table_b is never touched. Page 6's content
+  includes a handful of ids (443-446) appearing twice - a genuine
+  overlapping stale snapshot within that single page from SQLite's own
+  rebalancing, not a carving artifact - each instance carries its own byte
+  offset.
+
+  Two <element> entries below exercise the two carving modes against the
+  same orphaned pages, with candidates = table_a plus table_b in both cases:
+
+    mode=loose: every candidate structure is built from schema/affinity alone
+      (RecordStructure.FromSchema), so table_a and table_b are indistinguishable:
+      expect 0 rows recovered (rowsDeleted=0), all skipped as ambiguous.
+
+    mode=tight: each candidate is narrowed to its own table's observed
+      content-length range (RecordStructure.Tighten). table_a's num column is
+      always the 1-byte integer 5; table_b's is always the 4-byte integer
+      99999999, so disjoint ranges disambiguate them and all 203 rows are
+      recovered and correctly attributed to table_a.
+
+  rowsAlive is the live, currently-reachable count (raw ReadTableRows) for
+  each table - unaffected by what the stale orphaned pages also hold.
+-->
+<database>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>table_a</name>
+            <mode>loose</mode>
+            <deleted>False</deleted>
+            <rowsAlive>199</rowsAlive>
+            <rowsDeleted>0</rowsDeleted>
+        </meta>
+        <rows>
+        </rows>
+    </element>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>table_a</name>
+            <mode>tight</mode>
+            <deleted>False</deleted>
+            <rowsAlive>199</rowsAlive>
+            <rowsDeleted>203</rowsDeleted>
+        </meta>
+        <rows>
+            <row deleted="1">
+                <column><name>id</name><content>301</content></column>
+                <column><name>val</name><content>row-301-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>302</content></column>
+                <column><name>val</name><content>row-302-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>303</content></column>
+                <column><name>val</name><content>row-303-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>304</content></column>
+                <column><name>val</name><content>row-304-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>305</content></column>
+                <column><name>val</name><content>row-305-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>306</content></column>
+                <column><name>val</name><content>row-306-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>307</content></column>
+                <column><name>val</name><content>row-307-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>308</content></column>
+                <column><name>val</name><content>row-308-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>309</content></column>
+                <column><name>val</name><content>row-309-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>310</content></column>
+                <column><name>val</name><content>row-310-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>311</content></column>
+                <column><name>val</name><content>row-311-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>312</content></column>
+                <column><name>val</name><content>row-312-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>313</content></column>
+                <column><name>val</name><content>row-313-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>314</content></column>
+                <column><name>val</name><content>row-314-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>315</content></column>
+                <column><name>val</name><content>row-315-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>316</content></column>
+                <column><name>val</name><content>row-316-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>317</content></column>
+                <column><name>val</name><content>row-317-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>318</content></column>
+                <column><name>val</name><content>row-318-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>319</content></column>
+                <column><name>val</name><content>row-319-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>320</content></column>
+                <column><name>val</name><content>row-320-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>321</content></column>
+                <column><name>val</name><content>row-321-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>322</content></column>
+                <column><name>val</name><content>row-322-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>323</content></column>
+                <column><name>val</name><content>row-323-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>324</content></column>
+                <column><name>val</name><content>row-324-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>325</content></column>
+                <column><name>val</name><content>row-325-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>326</content></column>
+                <column><name>val</name><content>row-326-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>327</content></column>
+                <column><name>val</name><content>row-327-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>328</content></column>
+                <column><name>val</name><content>row-328-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>329</content></column>
+                <column><name>val</name><content>row-329-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>330</content></column>
+                <column><name>val</name><content>row-330-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>331</content></column>
+                <column><name>val</name><content>row-331-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>332</content></column>
+                <column><name>val</name><content>row-332-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>333</content></column>
+                <column><name>val</name><content>row-333-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>334</content></column>
+                <column><name>val</name><content>row-334-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>335</content></column>
+                <column><name>val</name><content>row-335-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>336</content></column>
+                <column><name>val</name><content>row-336-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>337</content></column>
+                <column><name>val</name><content>row-337-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>338</content></column>
+                <column><name>val</name><content>row-338-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>339</content></column>
+                <column><name>val</name><content>row-339-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>340</content></column>
+                <column><name>val</name><content>row-340-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>341</content></column>
+                <column><name>val</name><content>row-341-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>342</content></column>
+                <column><name>val</name><content>row-342-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>343</content></column>
+                <column><name>val</name><content>row-343-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>344</content></column>
+                <column><name>val</name><content>row-344-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>345</content></column>
+                <column><name>val</name><content>row-345-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>346</content></column>
+                <column><name>val</name><content>row-346-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>347</content></column>
+                <column><name>val</name><content>row-347-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>348</content></column>
+                <column><name>val</name><content>row-348-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>349</content></column>
+                <column><name>val</name><content>row-349-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>350</content></column>
+                <column><name>val</name><content>row-350-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>351</content></column>
+                <column><name>val</name><content>row-351-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>353</content></column>
+                <column><name>val</name><content>row-353-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>354</content></column>
+                <column><name>val</name><content>row-354-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>355</content></column>
+                <column><name>val</name><content>row-355-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>356</content></column>
+                <column><name>val</name><content>row-356-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>357</content></column>
+                <column><name>val</name><content>row-357-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>358</content></column>
+                <column><name>val</name><content>row-358-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>359</content></column>
+                <column><name>val</name><content>row-359-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>360</content></column>
+                <column><name>val</name><content>row-360-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>361</content></column>
+                <column><name>val</name><content>row-361-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>362</content></column>
+                <column><name>val</name><content>row-362-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>363</content></column>
+                <column><name>val</name><content>row-363-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>364</content></column>
+                <column><name>val</name><content>row-364-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>365</content></column>
+                <column><name>val</name><content>row-365-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>366</content></column>
+                <column><name>val</name><content>row-366-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>367</content></column>
+                <column><name>val</name><content>row-367-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>368</content></column>
+                <column><name>val</name><content>row-368-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>369</content></column>
+                <column><name>val</name><content>row-369-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>370</content></column>
+                <column><name>val</name><content>row-370-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>371</content></column>
+                <column><name>val</name><content>row-371-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>372</content></column>
+                <column><name>val</name><content>row-372-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>373</content></column>
+                <column><name>val</name><content>row-373-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>374</content></column>
+                <column><name>val</name><content>row-374-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>375</content></column>
+                <column><name>val</name><content>row-375-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>376</content></column>
+                <column><name>val</name><content>row-376-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>377</content></column>
+                <column><name>val</name><content>row-377-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>378</content></column>
+                <column><name>val</name><content>row-378-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>379</content></column>
+                <column><name>val</name><content>row-379-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>380</content></column>
+                <column><name>val</name><content>row-380-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>381</content></column>
+                <column><name>val</name><content>row-381-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>382</content></column>
+                <column><name>val</name><content>row-382-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>383</content></column>
+                <column><name>val</name><content>row-383-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>384</content></column>
+                <column><name>val</name><content>row-384-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>385</content></column>
+                <column><name>val</name><content>row-385-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>386</content></column>
+                <column><name>val</name><content>row-386-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>387</content></column>
+                <column><name>val</name><content>row-387-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>388</content></column>
+                <column><name>val</name><content>row-388-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>389</content></column>
+                <column><name>val</name><content>row-389-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>390</content></column>
+                <column><name>val</name><content>row-390-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>391</content></column>
+                <column><name>val</name><content>row-391-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>392</content></column>
+                <column><name>val</name><content>row-392-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>393</content></column>
+                <column><name>val</name><content>row-393-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>394</content></column>
+                <column><name>val</name><content>row-394-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>395</content></column>
+                <column><name>val</name><content>row-395-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>396</content></column>
+                <column><name>val</name><content>row-396-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>397</content></column>
+                <column><name>val</name><content>row-397-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>398</content></column>
+                <column><name>val</name><content>row-398-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>399</content></column>
+                <column><name>val</name><content>row-399-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>400</content></column>
+                <column><name>val</name><content>row-400-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>401</content></column>
+                <column><name>val</name><content>row-401-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>402</content></column>
+                <column><name>val</name><content>row-402-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>403</content></column>
+                <column><name>val</name><content>row-403-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>404</content></column>
+                <column><name>val</name><content>row-404-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>405</content></column>
+                <column><name>val</name><content>row-405-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>406</content></column>
+                <column><name>val</name><content>row-406-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>407</content></column>
+                <column><name>val</name><content>row-407-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>408</content></column>
+                <column><name>val</name><content>row-408-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>409</content></column>
+                <column><name>val</name><content>row-409-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>410</content></column>
+                <column><name>val</name><content>row-410-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>411</content></column>
+                <column><name>val</name><content>row-411-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>412</content></column>
+                <column><name>val</name><content>row-412-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>413</content></column>
+                <column><name>val</name><content>row-413-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>414</content></column>
+                <column><name>val</name><content>row-414-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>415</content></column>
+                <column><name>val</name><content>row-415-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>416</content></column>
+                <column><name>val</name><content>row-416-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>417</content></column>
+                <column><name>val</name><content>row-417-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>418</content></column>
+                <column><name>val</name><content>row-418-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>419</content></column>
+                <column><name>val</name><content>row-419-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>420</content></column>
+                <column><name>val</name><content>row-420-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>421</content></column>
+                <column><name>val</name><content>row-421-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>422</content></column>
+                <column><name>val</name><content>row-422-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>423</content></column>
+                <column><name>val</name><content>row-423-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>424</content></column>
+                <column><name>val</name><content>row-424-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>425</content></column>
+                <column><name>val</name><content>row-425-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>426</content></column>
+                <column><name>val</name><content>row-426-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>427</content></column>
+                <column><name>val</name><content>row-427-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>428</content></column>
+                <column><name>val</name><content>row-428-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>429</content></column>
+                <column><name>val</name><content>row-429-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>430</content></column>
+                <column><name>val</name><content>row-430-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>431</content></column>
+                <column><name>val</name><content>row-431-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>432</content></column>
+                <column><name>val</name><content>row-432-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>433</content></column>
+                <column><name>val</name><content>row-433-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>434</content></column>
+                <column><name>val</name><content>row-434-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>435</content></column>
+                <column><name>val</name><content>row-435-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>436</content></column>
+                <column><name>val</name><content>row-436-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>437</content></column>
+                <column><name>val</name><content>row-437-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>438</content></column>
+                <column><name>val</name><content>row-438-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>439</content></column>
+                <column><name>val</name><content>row-439-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>440</content></column>
+                <column><name>val</name><content>row-440-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>441</content></column>
+                <column><name>val</name><content>row-441-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>442</content></column>
+                <column><name>val</name><content>row-442-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>443</content></column>
+                <column><name>val</name><content>row-443-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>443</content></column>
+                <column><name>val</name><content>row-443-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>444</content></column>
+                <column><name>val</name><content>row-444-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>444</content></column>
+                <column><name>val</name><content>row-444-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>445</content></column>
+                <column><name>val</name><content>row-445-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>445</content></column>
+                <column><name>val</name><content>row-445-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>446</content></column>
+                <column><name>val</name><content>row-446-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>446</content></column>
+                <column><name>val</name><content>row-446-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>447</content></column>
+                <column><name>val</name><content>row-447-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>448</content></column>
+                <column><name>val</name><content>row-448-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>449</content></column>
+                <column><name>val</name><content>row-449-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>450</content></column>
+                <column><name>val</name><content>row-450-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>451</content></column>
+                <column><name>val</name><content>row-451-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>452</content></column>
+                <column><name>val</name><content>row-452-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>453</content></column>
+                <column><name>val</name><content>row-453-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>454</content></column>
+                <column><name>val</name><content>row-454-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>455</content></column>
+                <column><name>val</name><content>row-455-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>456</content></column>
+                <column><name>val</name><content>row-456-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>457</content></column>
+                <column><name>val</name><content>row-457-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>458</content></column>
+                <column><name>val</name><content>row-458-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>459</content></column>
+                <column><name>val</name><content>row-459-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>460</content></column>
+                <column><name>val</name><content>row-460-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>461</content></column>
+                <column><name>val</name><content>row-461-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>462</content></column>
+                <column><name>val</name><content>row-462-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>463</content></column>
+                <column><name>val</name><content>row-463-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>464</content></column>
+                <column><name>val</name><content>row-464-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>465</content></column>
+                <column><name>val</name><content>row-465-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>466</content></column>
+                <column><name>val</name><content>row-466-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>467</content></column>
+                <column><name>val</name><content>row-467-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>468</content></column>
+                <column><name>val</name><content>row-468-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>469</content></column>
+                <column><name>val</name><content>row-469-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>470</content></column>
+                <column><name>val</name><content>row-470-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>471</content></column>
+                <column><name>val</name><content>row-471-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>472</content></column>
+                <column><name>val</name><content>row-472-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>473</content></column>
+                <column><name>val</name><content>row-473-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>474</content></column>
+                <column><name>val</name><content>row-474-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>475</content></column>
+                <column><name>val</name><content>row-475-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>476</content></column>
+                <column><name>val</name><content>row-476-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>477</content></column>
+                <column><name>val</name><content>row-477-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>478</content></column>
+                <column><name>val</name><content>row-478-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>479</content></column>
+                <column><name>val</name><content>row-479-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>480</content></column>
+                <column><name>val</name><content>row-480-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>481</content></column>
+                <column><name>val</name><content>row-481-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>482</content></column>
+                <column><name>val</name><content>row-482-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>483</content></column>
+                <column><name>val</name><content>row-483-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>484</content></column>
+                <column><name>val</name><content>row-484-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>485</content></column>
+                <column><name>val</name><content>row-485-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>486</content></column>
+                <column><name>val</name><content>row-486-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>487</content></column>
+                <column><name>val</name><content>row-487-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>488</content></column>
+                <column><name>val</name><content>row-488-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>489</content></column>
+                <column><name>val</name><content>row-489-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>490</content></column>
+                <column><name>val</name><content>row-490-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>491</content></column>
+                <column><name>val</name><content>row-491-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>492</content></column>
+                <column><name>val</name><content>row-492-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>493</content></column>
+                <column><name>val</name><content>row-493-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>494</content></column>
+                <column><name>val</name><content>row-494-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>495</content></column>
+                <column><name>val</name><content>row-495-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>496</content></column>
+                <column><name>val</name><content>row-496-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>497</content></column>
+                <column><name>val</name><content>row-497-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>498</content></column>
+                <column><name>val</name><content>row-498-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>499</content></column>
+                <column><name>val</name><content>row-499-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+            <row deleted="1">
+                <column><name>id</name><content>500</content></column>
+                <column><name>val</name><content>row-500-padding-xx</content></column>
+                <column><name>num</name><content>5</content></column>
+            </row>
+
+        </rows>
+    </element>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>table_b</name>
+            <mode>loose</mode>
+            <deleted>False</deleted>
+            <rowsAlive>500</rowsAlive>
+            <rowsDeleted>0</rowsDeleted>
+        </meta>
+        <rows>
+        </rows>
+    </element>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>table_b</name>
+            <mode>tight</mode>
+            <deleted>False</deleted>
+            <rowsAlive>500</rowsAlive>
+            <rowsDeleted>0</rowsDeleted>
+        </meta>
+        <rows>
+        </rows>
+    </element>
+</database>
