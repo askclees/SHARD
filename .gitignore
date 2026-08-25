@@ -36,3 +36,9 @@ publish/
 
 # Claude Code
 .claude/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+python/shard_native/native/

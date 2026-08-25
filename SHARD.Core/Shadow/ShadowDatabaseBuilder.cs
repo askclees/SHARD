@@ -341,42 +341,34 @@ public static class ShadowDatabaseBuilder
 
     private static void TagFreelistPages(SqliteConnection connection, SqliteForensicDatabase database)
     {
-        try
-        {
-            using var transaction = connection.BeginTransaction();
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = $"""
-                UPDATE {QuoteIdentifier(PagesTableName)} SET page_type = @type WHERE page_number = @page
-                """;
-            var pageParam = command.CreateParameter();
-            pageParam.ParameterName = "@page";
-            command.Parameters.Add(pageParam);
-            var typeParam = command.CreateParameter();
-            typeParam.ParameterName = "@type";
-            command.Parameters.Add(typeParam);
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            UPDATE {QuoteIdentifier(PagesTableName)} SET page_type = @type WHERE page_number = @page
+            """;
+        var pageParam = command.CreateParameter();
+        pageParam.ParameterName = "@page";
+        command.Parameters.Add(pageParam);
+        var typeParam = command.CreateParameter();
+        typeParam.ParameterName = "@type";
+        command.Parameters.Add(typeParam);
 
-            foreach (var trunk in database.ReadFreelistChain())
+        foreach (var trunk in database.ReadFreelistChain())
+        {
+            pageParam.Value = trunk.PageNumber;
+            typeParam.Value = nameof(PageType.FreelistTrunk);
+            command.ExecuteNonQuery();
+
+            foreach (uint leafPageNumber in trunk.LeafPageNumbers)
             {
-                pageParam.Value = trunk.PageNumber;
-                typeParam.Value = nameof(PageType.FreelistTrunk);
+                pageParam.Value = leafPageNumber;
+                typeParam.Value = nameof(PageType.FreelistLeaf);
                 command.ExecuteNonQuery();
-
-                foreach (uint leafPageNumber in trunk.LeafPageNumbers)
-                {
-                    pageParam.Value = leafPageNumber;
-                    typeParam.Value = nameof(PageType.FreelistLeaf);
-                    command.ExecuteNonQuery();
-                }
             }
+        }
 
-            transaction.Commit();
-        }
-        catch (NotImplementedException)
-        {
-            // Freelist chain walking isn't implemented yet; pages remain classified by
-            // their type-byte baseline (Unknown) until ReadFreelistChain is filled in.
-        }
+        transaction.Commit();
     }
 
     private static void InsertRows(SqliteConnection connection, TableSchema schema, IEnumerable<TableRow> rows)

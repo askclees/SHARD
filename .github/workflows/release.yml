@@ -43,6 +43,24 @@ jobs:
           -p:IncludeNativeLibrariesForSelfExtract=true
           -o publish/${{ matrix.rid }}
 
+      # Native AOT: a self-contained shared library (shard_native.so/.dll/.dylib) exporting a
+      # flat C ABI (see SHARD.Native/NativeExports.cs) — the interop path for Python (ctypes)
+      # or any other language with C FFI. Requires the platform's native toolchain (clang/MSVC),
+      # which these hosted runners provide but a plain dev sandbox may not.
+      - name: Publish native library
+        run: >
+          dotnet publish SHARD.Native/SHARD.Native.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          -o publish-native/${{ matrix.rid }}
+
+      - name: Upload native library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-native-${{ github.ref_name }}-${{ matrix.rid }}
+          path: publish-native/${{ matrix.rid }}/shard_native.*
+          if-no-files-found: error
+
       - name: Set artifact name
         id: name
         shell: bash

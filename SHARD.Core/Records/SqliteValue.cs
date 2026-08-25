@@ -88,24 +88,6 @@ public sealed class SqliteValue
         return true;
     }
 
-    // ── Static factories ─────────────────────────────────────────────────────
-    //public static readonly SqliteValue Null = new() { StorageClass = SqliteStorageClass.Null };
-
-    public static SqliteValue FromInteger(long value) =>
-        throw new NotImplementedException();
-
-    public static SqliteValue FromReal(double value) =>
-        throw new NotImplementedException();
-
-    public static SqliteValue FromText(string value) =>
-        throw new NotImplementedException();
-
-    public static SqliteValue FromBlob(byte[] value) =>
-        throw new NotImplementedException();
-
-    /// <summary>Decode a value from payload bytes given its <see cref="HeaderEntry"/>.</summary>
-    public static SqliteValue Decode(HeaderEntry headerEntry, ReadOnlySpan<byte> payload) =>
-        throw new NotImplementedException();
 }
 
 public enum SqliteStorageClass

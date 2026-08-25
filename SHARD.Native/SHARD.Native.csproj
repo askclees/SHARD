@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OutputType>Library</OutputType>
+
+    <!--
+      Native AOT: publishes this project as a self-contained native shared library
+      (.so/.dll/.dylib) exporting a flat C ABI via [UnmanagedCallersOnly], callable from
+      Python (ctypes) or any other language with C FFI. Requires a native C toolchain
+      (clang on Linux/macOS, MSVC on Windows) to actually `dotnet publish` — a normal
+      `dotnet build` still compiles and type-checks this project without one, it just
+      won't produce a loadable native library until published on a machine that has it.
+    -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Fixed, predictable export file name across RIDs (shard_native.so / .dll / .dylib). -->
+    <AssemblyName>shard_native</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SHARD.Core\SHARD.Core.csproj" />
+  </ItemGroup>
+
+</Project>
