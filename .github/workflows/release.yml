@@ -102,19 +102,19 @@ jobs:
       - name: Generate corpus report
         continue-on-error: true
         env:
-          CORPUS_REPORT_FILE: corpus-recovery-report.md
+          CORPUS_REPORT_FILE: ${{ github.workspace }}/corpus-recovery-report.md
         run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~GenerateCorpusReport"
 
       - name: Generate SHARD-created test report
         continue-on-error: true
         env:
-          CORPUS_REPORT_FILE: corpus-recovery-report.md
+          CORPUS_REPORT_FILE: ${{ github.workspace }}/corpus-recovery-report.md
         run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~GenerateSHARDCreatedReport"
 
       - name: Generate orphan-carving report
         continue-on-error: true
         env:
-          CORPUS_REPORT_FILE: corpus-recovery-report.md
+          CORPUS_REPORT_FILE: ${{ github.workspace }}/corpus-recovery-report.md
         run: dotnet test --no-build --configuration Release --verbosity normal --filter "FullyQualifiedName~GenerateCarvingReport"
 
       - name: Rename corpus report
