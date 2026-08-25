@@ -55,7 +55,42 @@ import sqlite3
 conn = sqlite3.connect("recovered.db")
 ```
 
-See `smoke_test.py` for a runnable end-to-end example against one of the repo's test fixtures.
+See `smoke_test.py` for a runnable end-to-end example against one of the repo's test fixtures,
+and `examples/` for more complete, runnable scripts.
+
+## API reference
+
+Every failure (bad path, unknown table, corrupted file, ...) raises `shard_native.ShardError`
+with a human-readable message — there's no separate exception type per failure mode.
+
+### `ShardDatabase(path)`
+
+Opens a session against one evidence file. Use as a context manager (`with ShardDatabase(...) as
+db:`) or call `.close()` explicitly — the underlying handle is just bookkeeping (each call
+re-opens/re-parses the file), so nothing expensive is held open between calls.
+
+| Member | Returns | Notes |
+|---|---|---|
+| `.header` | `dict` | `pageSize`, `textEncoding`, `sqliteVersion`, `databaseSizeInPages`, `totalFreelistPages`, ... |
+| `.schema` | `list[dict]` | Every `sqlite_master` entry: `type` ("table"/"index"/"view"/"trigger"), `name`, `tableName`, `rootPage`, `sql`, `pageNumber`, `cellOffset`. |
+| `.pages` | `list[dict]` | Every page: `pageNumber`, `type`, `tableName` (if known), `deletedCellCount`. |
+| `.rows(table_name)` | `list[dict]` | Live rows: `rowId`, `pageNumber`, `cellOffset`, `fields` (dict keyed by the table's own column names — **not** camelCased, unlike the other keys here). |
+| `.deleted_rows(table_name)` | `list[dict]` | Same shape as `.rows()`, for recoverable deleted/freeblock rows still within the table's own B-tree. |
+| `.carve(mode="loose", tables=None)` | `list[dict]` | Read-only scan of pages with no known owner. `mode` is `"loose"` (declared column types only) or `"tight"` (narrowed to each table's own observed data — fewer false positives). Each result adds `tableName` to the row shape above. Optionally restrict candidates via `tables=["users", "notes"]`. |
+| `.recover_to_file(output_path, process_wal=True, carve_mode=None, carve_table_filter=None)` | `dict` | Builds a complete recovered SQLite database at `output_path` (openable with the stdlib `sqlite3` module — no shard_native needed to read it back). Returns `outputPath`, `warnings`, `tables` (list of `{tableName, liveRowCount, recoveredRowCount}`), `walRecordsInserted`, `carvedRecords`, `carveAmbiguousSkipped`. Pass `carve_mode="loose"` or `"tight"` to also carve orphan pages into the output; omit it (the default) to skip carving. |
+
+A `BLOB` field's value comes back as Python `bytes`.
+
+## Examples
+
+Runnable, single-purpose scripts in `examples/` (each takes `--help`):
+
+| Script | What it does |
+|---|---|
+| `inspect_database.py evidence.db` | Prints the header, schema, and live/deleted row counts per table — a quick first look at a file. |
+| `export_deleted_rows.py evidence.db [--table users]` | Exports recovered deleted rows to CSV, one file per table (BLOBs hex-encoded). |
+| `full_recovery.py evidence.db recovered.db [--carve-mode tight]` | Runs a complete recovery pass, prints a summary, and verifies the output via the stdlib `sqlite3` module. |
+| `carve_report.py evidence.db [--output carved.json]` | Compares loose vs. tight orphan-page carving side by side, optionally writing the tight-mode results to JSON. |
 
 ## Testing
 
