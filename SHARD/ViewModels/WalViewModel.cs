@@ -111,6 +111,11 @@ public sealed class WalViewModel : ViewModelBase
     /// </summary>
     private WalPageComparisonViewModel? BuildComparison(WalFrame frame, int beforeIndex)
     {
+        // TODO: Compare() only exists on TableBTreeLeafPage today, so index leaf/interior
+        // pages, table interior pages, overflow pages, and freelist pages all fall back to
+        // "No comparison available for this page type" here (both in this single-frame view
+        // and the whole-transaction view). Extending Compare() to those page types would let
+        // the Changes tab cover them too.
         if (frame.Page is not TableBTreeLeafPage walPage)
             return null;
 
