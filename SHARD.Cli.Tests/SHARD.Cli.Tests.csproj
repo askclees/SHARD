@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Referenced (not just for compilation) so its output — shard-cli.dll and its
+         runtimeconfig.json — is copied into this project's own output directory, letting
+         tests launch the real, built CLI as a subprocess via `dotnet shard-cli.dll <args>`. -->
+    <ProjectReference Include="..\SHARD.Cli\SHARD.Cli.csproj" />
+    <ProjectReference Include="..\SHARD.Core\SHARD.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\TestData\Corpus\0D\0D-01.db">
+      <Link>TestData\Corpus\0D\0D-01.db</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
