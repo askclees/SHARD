@@ -48,6 +48,16 @@ Changes are grouped into **Added records**, **Removed records**, and **Updated r
 
 If the page type does not support comparison (e.g. overflow or interior pages), a placeholder message is shown.
 
+#### Show whole transaction
+
+By default the Changes tab shows only the selected frame's own page. Checking **Show whole
+transaction** instead shows every page touched between the previous COMMIT frame (exclusive)
+and the selected frame's own transaction's COMMIT frame (inclusive) — one expandable section
+per page, each showing the same Added/Removed/Updated breakdown. This gives a single view of
+everything one transaction changed, rather than clicking through its frames one page at a time.
+Each page's baseline is the state immediately before the transaction began, even if that page
+happens to have been written more than once within the same transaction.
+
 ## Hex view (right panel)
 
 Displays the raw bytes of the frame's page, with the same highlights, offset toggle, and data inspector as the Pages tab hex view.

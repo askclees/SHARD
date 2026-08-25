@@ -79,6 +79,27 @@ public class WalParsingTests
         }
     }
 
+    /// <summary>
+    /// Writes a synthetic WAL file with exact control over each frame's page number and
+    /// database-size (commit-boundary) header field — page content is irrelevant to the
+    /// transaction-grouping logic under test, so every frame's page data is left zeroed.
+    /// </summary>
+    private static string WriteSyntheticWalFile(params (uint PageNumber, uint DbSizeInPages)[] frames)
+    {
+        const uint pageSize = 4096;
+        string path = Path.Combine(Path.GetTempPath(), $"shard_wal_synth_{Guid.NewGuid():N}.wal");
+
+        var bytes = new List<byte>(MakeWalHeader(pageSize: pageSize));
+        foreach (var (pageNumber, dbSizeInPages) in frames)
+        {
+            bytes.AddRange(MakeFrameHeader(pageNumber: pageNumber, dbSizeInPages: dbSizeInPages));
+            bytes.AddRange(new byte[pageSize]);
+        }
+
+        File.WriteAllBytes(path, bytes.ToArray());
+        return path;
+    }
+
     // ── WalHeader unit tests ─────────────────────────────────────────────────
 
     [Fact]
@@ -288,5 +309,120 @@ public class WalParsingTests
             Assert.Throws<InvalidDataException>(() => new WalFile(walPath, TextEncoding.Utf8, 0));
         }
         finally { if (File.Exists(walPath)) File.Delete(walPath); }
+    }
+
+    // ── Transaction grouping ──────────────────────────────────────────────────
+    //
+    // Synthetic layout used by the tests below (index: page, commit?):
+    //   0: page 2          1: page 5          2: page 2  COMMIT   <- transaction 1 (3 frames)
+    //   3: page 9          4: page 9  COMMIT                      <- transaction 2 (2 frames)
+    //   5: page 3 (no terminating commit — truncated/uncommitted) <- transaction 3 (1 frame)
+
+    private static string WriteThreeTransactionWal() => WriteSyntheticWalFile(
+        (PageNumber: 2u, DbSizeInPages: 0u),
+        (PageNumber: 5u, DbSizeInPages: 0u),
+        (PageNumber: 2u, DbSizeInPages: 10u),
+        (PageNumber: 9u, DbSizeInPages: 0u),
+        (PageNumber: 9u, DbSizeInPages: 20u),
+        (PageNumber: 3u, DbSizeInPages: 0u));
+
+    [Fact]
+    public void GetTransactionStartIndex_ReturnsZero_ForFramesInFirstTransaction()
+    {
+        string walPath = WriteThreeTransactionWal();
+        try
+        {
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+            Assert.Equal(0, wal.GetTransactionStartIndex(wal.Frames[0]));
+            Assert.Equal(0, wal.GetTransactionStartIndex(wal.Frames[1]));
+            Assert.Equal(0, wal.GetTransactionStartIndex(wal.Frames[2])); // the commit frame itself
+        }
+        finally { File.Delete(walPath); }
+    }
+
+    [Fact]
+    public void GetTransactionStartIndex_ReturnsIndexAfterPreviousCommit_ForLaterTransactions()
+    {
+        string walPath = WriteThreeTransactionWal();
+        try
+        {
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+            Assert.Equal(3, wal.GetTransactionStartIndex(wal.Frames[3]));
+            Assert.Equal(3, wal.GetTransactionStartIndex(wal.Frames[4]));
+            Assert.Equal(5, wal.GetTransactionStartIndex(wal.Frames[5]));
+        }
+        finally { File.Delete(walPath); }
+    }
+
+    [Fact]
+    public void GetTransactionFrames_ReturnsAllFramesUpToAndIncludingTheCommitFrame()
+    {
+        string walPath = WriteThreeTransactionWal();
+        try
+        {
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            var fromFirstFrame = wal.GetTransactionFrames(wal.Frames[0]);
+            Assert.Equal(3, fromFirstFrame.Count);
+            Assert.Same(wal.Frames[0], fromFirstFrame[0]);
+            Assert.Same(wal.Frames[2], fromFirstFrame[2]);
+
+            // Selecting any frame within the transaction returns the same full set.
+            var fromMiddleFrame = wal.GetTransactionFrames(wal.Frames[1]);
+            Assert.Equal(fromFirstFrame, fromMiddleFrame);
+
+            var secondTransaction = wal.GetTransactionFrames(wal.Frames[3]);
+            Assert.Equal(2, secondTransaction.Count);
+            Assert.Same(wal.Frames[3], secondTransaction[0]);
+            Assert.Same(wal.Frames[4], secondTransaction[1]);
+        }
+        finally { File.Delete(walPath); }
+    }
+
+    [Fact]
+    public void GetTransactionFrames_StopsAtEndOfFile_WhenTruncatedWithoutACommitFrame()
+    {
+        string walPath = WriteThreeTransactionWal();
+        try
+        {
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            var thirdTransaction = wal.GetTransactionFrames(wal.Frames[5]);
+            Assert.Single(thirdTransaction);
+            Assert.Same(wal.Frames[5], thirdTransaction[0]);
+        }
+        finally { File.Delete(walPath); }
+    }
+
+    [Fact]
+    public void GetLastFrameForPage_FindsTheMostRecentWriteBeforeTheGivenIndex()
+    {
+        string walPath = WriteThreeTransactionWal();
+        try
+        {
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            // Page 2 is written at indices 0 and 2. Searching before index 2 finds index 0;
+            // searching before index 3 (i.e. including index 2) finds index 2.
+            Assert.Same(wal.Frames[0], wal.GetLastFrameForPage(2, beforeIndex: 2));
+            Assert.Same(wal.Frames[2], wal.GetLastFrameForPage(2, beforeIndex: 3));
+            Assert.Null(wal.GetLastFrameForPage(2, beforeIndex: 0));
+        }
+        finally { File.Delete(walPath); }
+    }
+
+    [Fact]
+    public void GetPreviousFrame_FindsAnEarlierOccurrenceOfTheSamePage_EvenWithinTheSameTransaction()
+    {
+        string walPath = WriteThreeTransactionWal();
+        try
+        {
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            // Frame 2 is page 2's second write, inside the same transaction as frame 0.
+            Assert.Same(wal.Frames[0], wal.GetPreviousFrame(wal.Frames[2]));
+            Assert.Null(wal.GetPreviousFrame(wal.Frames[0]));
+        }
+        finally { File.Delete(walPath); }
     }
 }

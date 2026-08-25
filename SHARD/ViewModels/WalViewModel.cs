@@ -26,7 +26,8 @@ public sealed class WalViewModel : ViewModelBase
         {
             this.RaiseAndSetIfChanged(ref _selectedFrame, value);
             SelectedFrameDetail     = value is not null ? new PageViewModel(value.Frame.Page) : null;
-            SelectedFrameComparison = value is not null ? BuildComparison(value.Frame) : null;
+            SelectedFrameComparison = value is not null ? BuildComparison(value.Frame, _walFile.Frames.IndexOf(value.Frame)) : null;
+            RefreshTransactionView();
         }
     }
 
@@ -45,9 +46,37 @@ public sealed class WalViewModel : ViewModelBase
         {
             this.RaiseAndSetIfChanged(ref _selectedFrameComparison, value);
             this.RaisePropertyChanged(nameof(HasComparison));
+            this.RaisePropertyChanged(nameof(ShowSingleFrameView));
+            this.RaisePropertyChanged(nameof(ShowNoComparisonPlaceholder));
         }
     }
     public bool HasComparison => SelectedFrameComparison is not null;
+
+    /// <summary>Toggle for the Changes tab: aggregate every page touched by the selected
+    /// frame's whole transaction, instead of just the selected frame's own page.</summary>
+    private bool _showWholeTransaction;
+    public bool ShowWholeTransaction
+    {
+        get => _showWholeTransaction;
+        set
+        {
+            this.RaiseAndSetIfChanged(ref _showWholeTransaction, value);
+            this.RaisePropertyChanged(nameof(ShowSingleFrameView));
+            this.RaisePropertyChanged(nameof(ShowNoComparisonPlaceholder));
+            RefreshTransactionView();
+        }
+    }
+
+    /// <summary>True while a frame is selected and the per-frame (not whole-transaction) view should render.</summary>
+    public bool ShowSingleFrameView => HasComparison && !ShowWholeTransaction;
+
+    /// <summary>True when neither the single-frame nor the whole-transaction view has anything
+    /// to show — the selected frame's own page type isn't comparable, and we're not in
+    /// whole-transaction mode (which can still have something to show even then).</summary>
+    public bool ShowNoComparisonPlaceholder => !HasComparison && !ShowWholeTransaction;
+
+    public ObservableCollection<WalTransactionPageEntryViewModel> TransactionPages { get; } = [];
+    public bool HasAnyTransactionChanges { get; private set; }
 
     public WalViewModel(string walPath, WalFile walFile, SqliteForensicDatabase database)
     {
@@ -71,18 +100,27 @@ public sealed class WalViewModel : ViewModelBase
             Frames.Add(new WalFrameEntryViewModel(walFile.Frames[i], i + 1, pageTableMap));
     }
 
-    private WalPageComparisonViewModel? BuildComparison(WalFrame frame)
+    /// <summary>
+    /// Compares <paramref name="frame"/>'s page against the last WAL write of that same page
+    /// strictly before <paramref name="beforeIndex"/> — or, if there is none, the corresponding
+    /// page in the main database. Used both for the single-frame view (beforeIndex = the
+    /// frame's own index, i.e. "immediately before this frame") and the whole-transaction view
+    /// (beforeIndex = the transaction's start index, i.e. "before this transaction began" — so a
+    /// page written twice within the same transaction still diffs against its pre-transaction
+    /// state, not just its own previous write).
+    /// </summary>
+    private WalPageComparisonViewModel? BuildComparison(WalFrame frame, int beforeIndex)
     {
         if (frame.Page is not TableBTreeLeafPage walPage)
             return null;
 
-        var previousFrame = _walFile.GetPreviousFrame(frame);
-        if (previousFrame?.Page is TableBTreeLeafPage previousWalPage)
+        var baselineFrame = _walFile.GetLastFrameForPage(frame.Header.PageNumber, beforeIndex);
+        if (baselineFrame?.Page is TableBTreeLeafPage baselineWalPage)
         {
-            int prevIndex = _walFile.Frames.IndexOf(previousFrame) + 1;
+            int baselineFrameNumber = _walFile.Frames.IndexOf(baselineFrame) + 1;
             return new WalPageComparisonViewModel(
-                previousWalPage.Compare(walPage),
-                $"Changes vs. frame {prevIndex}");
+                baselineWalPage.Compare(walPage),
+                $"Changes vs. frame {baselineFrameNumber}");
         }
 
         if (frame.Header.PageNumber > _database.PageCount)
@@ -95,5 +133,35 @@ public sealed class WalViewModel : ViewModelBase
         return new WalPageComparisonViewModel(
             dbLeafPage.Compare(walPage),
             "Changes vs. database page");
+    }
+
+    private void RefreshTransactionView()
+    {
+        TransactionPages.Clear();
+        HasAnyTransactionChanges = false;
+
+        if (ShowWholeTransaction && SelectedFrame is not null)
+        {
+            var frame = SelectedFrame.Frame;
+            int transactionStart = _walFile.GetTransactionStartIndex(frame);
+            var transactionFrames = _walFile.GetTransactionFrames(frame);
+            var pageTableMap = _database.BuildPageTableMap();
+
+            // A page can (rarely) be written more than once within the same transaction —
+            // only its last write within the transaction reflects its state at commit time.
+            var lastFramePerPage = new Dictionary<uint, WalFrame>();
+            foreach (var f in transactionFrames)
+                lastFramePerPage[f.Header.PageNumber] = f;
+
+            foreach (var f in lastFramePerPage.Values.OrderBy(f => f.Header.PageNumber))
+            {
+                pageTableMap.TryGetValue(f.Header.PageNumber, out var tableName);
+                var comparison = BuildComparison(f, transactionStart);
+                TransactionPages.Add(new WalTransactionPageEntryViewModel(f.Header.PageNumber, tableName, comparison));
+                if (comparison?.HasAnyChanges == true) HasAnyTransactionChanges = true;
+            }
+        }
+
+        this.RaisePropertyChanged(nameof(HasAnyTransactionChanges));
     }
 }
