@@ -33,7 +33,7 @@ jobs:
     - name: Corpus Recovery Report
       continue-on-error: true
       env:
-        CORPUS_REPORT_FILE: corpus-recovery-report.md
+        CORPUS_REPORT_FILE: ${{ github.workspace }}/corpus-recovery-report.md
       run: dotnet test --no-build --verbosity normal --filter "FullyQualifiedName~GenerateCorpusReport"
 
     - name: Upload corpus report artifact
