@@ -54,16 +54,30 @@ if (positional.Count == 0) { PrintHelp(); return 0; }
 
 string command = positional[0];
 
-return command switch
+try
 {
-    "rows"    => RunRows(positional, outputPath, format),
-    "deleted" => RunDeleted(positional, outputPath, format),
-    "schema"  => RunSchema(positional, outputPath, format),
-    "pages"   => RunPages(positional, outputPath, format),
-    "header"  => RunHeader(positional, outputPath, format),
-    "carve"   => RunCarve(positional, outputPath, format),
-    _         => Die($"Unknown command '{command}'. Run 'shard-cli --help' for usage."),
-};
+    return command switch
+    {
+        "rows"    => RunRows(positional, outputPath, format),
+        "deleted" => RunDeleted(positional, outputPath, format),
+        "schema"  => RunSchema(positional, outputPath, format),
+        "pages"   => RunPages(positional, outputPath, format),
+        "header"  => RunHeader(positional, outputPath, format),
+        "carve"   => RunCarve(positional, outputPath, format),
+        _         => Die($"Unknown command '{command}'. Run 'shard-cli --help' for usage."),
+    };
+}
+catch (InvalidDataException ex)
+{
+    // OpenDb already catches failures from SqliteForensicDatabase.Open() itself; this catches
+    // the same class of corrupted-evidence error surfacing later, e.g. from ReadSqliteMaster()
+    // when page 1's header is intact but its content isn't a valid table B-tree page.
+    return Die($"Not a valid SQLite file: {ex.Message}");
+}
+catch (Exception ex)
+{
+    return Die($"Unexpected error: {ex.Message}");
+}
 
 // ── rows ─────────────────────────────────────────────────────────────────────
 
@@ -119,18 +133,18 @@ int RunDeleted(List<string> pos, string? outPath, string fmt)
     var schema  = db.GetTableSchema(tableName);
     var columns = BuildColumnNames(schema);
 
-    var deleted = db.GetTreePageNumbers(master!.RootPage!.Value)
-        .Select(p => db.ReadPage(p))
-        .OfType<TableBTreeLeafPage>()
-        .SelectMany(p => p.DeletedCells)
-        .ToList();
+    // Delegates to the facade rather than re-walking pages here: it already carves freeblock
+    // and orphaned deleted cells (via CarveDeletedCells/CarveFreeblockCells), not just the
+    // freeblock-chain DeletedCells this used to read alone, which was silently under-counting
+    // recoverable rows relative to the UI and the facade.
+    var deleted = SqliteRecoveryFacade.GetDeletedRows(dbPath, tableName);
 
     var doc = new
     {
         table   = tableName,
         columns,
         count   = deleted.Count,
-        rows    = deleted.Select(c => RowToDict(c.FieldValues, c.RowId.Value, (uint)0, c.PageOffset, columns, schema)),
+        rows    = deleted.Select(r => ToDict(r.Fields, r.RowId, r.PageNumber, r.CellOffset)),
     };
 
     Write(outPath, fmt, doc, d =>
@@ -342,18 +356,34 @@ void Write<T>(string? outPath, string fmt, T doc, Func<T, string> textRenderer)
 List<string> BuildColumnNames(TableSchema? schema) =>
     schema is null ? [] : schema.Columns.Select(c => c.Name).ToList();
 
+/// <summary>Adapts a facade RowInfo/CarvedRowInfo's already-correct Fields dictionary to this CLI's output shape.</summary>
+Dictionary<string, object?> ToDict(IReadOnlyDictionary<string, object?> fields, long rowId, uint pageNumber, int cellOffset)
+{
+    var dict = new Dictionary<string, object?>(fields)
+    {
+        ["_rowid"]  = rowId,
+        ["_page"]   = pageNumber,
+        ["_offset"] = cellOffset,
+    };
+    return dict;
+}
+
 Dictionary<string, object?> RowToDict(
     IList<SHARD.Core.Records.SqliteValue?> fields,
     long rowId, uint pageNumber, int cellOffset,
     List<string> columns, TableSchema? schema)
 {
+    // fields has one entry per declared column, in order — including a placeholder NULL entry
+    // for a rowid-alias column (SQLite reserves its header slot even though the alias's real
+    // value lives in the cell's rowid, not the record payload). Index directly by column
+    // position; do NOT maintain a separate skip-on-rowid-alias counter, or every field after
+    // the alias silently reports the wrong column's value.
     var dict = new Dictionary<string, object?>();
-    int fieldIdx = 0;
     for (int i = 0; i < (schema?.Columns.Count ?? fields.Count); i++)
     {
-        string colName       = i < columns.Count ? columns[i] : $"col{i}";
-        bool   isRowIdAlias  = schema?.Columns[i].IsRowIdAlias ?? false;
-        dict[colName] = isRowIdAlias ? rowId : fields.ElementAtOrDefault(fieldIdx++)?.Value;
+        string colName      = i < columns.Count ? columns[i] : $"col{i}";
+        bool   isRowIdAlias = schema?.Columns[i].IsRowIdAlias ?? false;
+        dict[colName] = isRowIdAlias ? rowId : (i < fields.Count ? fields[i]?.Value : null);
     }
     for (int i = schema?.Columns.Count ?? 0; i < fields.Count; i++)
         dict[$"col{i}"] = fields[i]?.Value;
