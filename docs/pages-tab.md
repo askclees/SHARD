@@ -78,6 +78,7 @@ Displays the raw bytes of the selected page.
 
 - **Highlights** — coloured regions mark parsed fields (page header, cell pointers, payload sizes, row IDs, record headers, field values). The toggle button turns highlights on or off.
 - **Dec Offsets** — switches offset labels from hexadecimal to decimal.
+- **Offset / Go** — type a byte offset (decimal, or `0x`-prefixed hex) and press Enter or click **Go** to jump straight there, cursor included — useful when the scrollbar alone is too imprecise, or you already know the offset from elsewhere (a cell/field offset shown in another panel, or `shard-cli`/Python output).
 - **Cursor** — the currently selected byte is shown with an amber background. The offset updates the Data Inspector panel.
 - **Hover label** — moving the mouse over a highlighted region shows the field name in the toolbar.
 
