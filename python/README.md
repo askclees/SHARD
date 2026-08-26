@@ -50,6 +50,10 @@ with ShardDatabase("evidence.db") as db:
     result = db.recover_to_file("recovered.db", carve_mode="loose")
     print(result)
 
+    # Extract a table's own rows — live only by default, or with deleted rows folded in:
+    live_only = db.table_rows("users")
+    live_and_deleted = db.table_rows("users", include_deleted=True)
+
     # Or run SQL directly against a recovered copy — deleted rows live in
     # _shard_recovered_<table>, alongside the original table's live rows:
     rows = db.query("""
@@ -87,6 +91,7 @@ re-opens/re-parses the file), so nothing expensive is held open between calls.
 | `.carve(mode="loose", tables=None)` | `list[dict]` | Read-only scan of pages with no known owner. `mode` is `"loose"` (declared column types only) or `"tight"` (narrowed to each table's own observed data — fewer false positives). Each result adds `tableName` to the row shape above. Optionally restrict candidates via `tables=["users", "notes"]`. |
 | `.recover_to_file(output_path, process_wal=True, carve_mode=None, carve_table_filter=None)` | `dict` | Builds a complete recovered SQLite database at `output_path` (openable with the stdlib `sqlite3` module — no shard_native needed to read it back). Returns `outputPath`, `warnings`, `tables` (list of `{tableName, liveRowCount, recoveredRowCount}`), `walRecordsInserted`, `carvedRecords`, `carveAmbiguousSkipped`. Pass `carve_mode="loose"` or `"tight"` to also carve orphan pages into the output; omit it (the default) to skip carving. |
 | `.query(sql, params=(), *, process_wal=True, carve_mode=None, carve_table_filter=None)` | `list[dict]` | Runs a SQL statement against a fully recovered copy of this database via the stdlib `sqlite3` module. Live rows stay under their original table name; recovered/deleted rows land in `_shard_recovered_<table>` alongside them, so a query can `UNION`/`JOIN` live and recovered data directly (see the metadata columns below). The recovered copy is built once, in a temp file, on first call (or again if called with different `process_wal`/`carve_mode`/`carve_table_filter` than last time) and reused across calls with matching options; cleaned up automatically on `close()`. `params` is passed straight through to `sqlite3`'s parameter binding (`?` placeholders). Non-`SELECT` statements return `[]`. |
+| `.table_rows(table_name, *, include_deleted=False, process_wal=True, carve_mode=None, carve_table_filter=None)` | `list[dict]` | A `query()`-based shortcut: `table_name`'s rows, live only by default, or with recoverable deleted/freeblock rows folded in via `include_deleted=True`. Columns are exactly `table_name`'s own (read via `PRAGMA table_info`) — not `_shard_recovered_<table_name>`'s extra `_recovery_method` column, unlike a hand-written `SELECT *` `UNION`. Uses the same cached-recovered-copy behavior as `query()`. |
 
 A `BLOB` field's value comes back as Python `bytes`.
 
@@ -103,6 +108,7 @@ Runnable, single-purpose scripts in `examples/` (each takes `--help`):
 | `full_recovery.py evidence.db recovered.db [--carve-mode tight]` | Runs a complete recovery pass, prints a summary, and verifies the output via the stdlib `sqlite3` module. |
 | `carve_report.py evidence.db [--output carved.json]` | Compares loose vs. tight orphan-page carving side by side, optionally writing the tight-mode results to JSON. |
 | `query_deleted_records.py evidence.db users "SELECT * FROM {table} WHERE id > 100"` | Runs an arbitrary SQL query against a table's live rows, its recovered deleted rows, and both combined — `{table}`/`{recovered_table}` placeholders let one query template target either or both. |
+| `extract_table.py evidence.db users [--include-deleted]` | Dumps a table's own rows — live only by default, or with recoverable deleted rows folded in via `--include-deleted`. |
 
 ## Testing
 

@@ -41,6 +41,13 @@ def _read_and_free(ptr: int | None) -> dict[str, Any]:
         _lib.shard_free_string(ptr)
 
 
+def _quote_identifier(name: str) -> str:
+    """SQLite double-quoted identifier escaping — matches ShadowDatabaseBuilder.QuoteIdentifier
+    on the .NET side, so table/column names with embedded quotes (real corpus fixtures have
+    these) round-trip correctly instead of producing broken SQL."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _call(fn, *args) -> Any:
     envelope = _read_and_free(fn(*args))
     if not envelope.get("ok"):
@@ -187,6 +194,44 @@ class ShardDatabase:
             return [dict(row) for row in cursor.fetchall()]
         finally:
             connection.close()
+
+    def table_rows(
+        self,
+        table_name: str,
+        *,
+        include_deleted: bool = False,
+        process_wal: bool = True,
+        carve_mode: str | None = None,
+        carve_table_filter: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Returns `table_name`'s rows via a SQL query against a recovered copy — live rows only
+        by default; pass include_deleted=True to also include in-tree recoverable deleted/
+        freeblock rows from `_shard_recovered_<table_name>` (plus carved orphan-page records
+        too, if carve_mode is also passed). Columns are read from `table_name` itself via
+        `PRAGMA table_info` (its own declared columns, plus SHARD's own `_page_number`/
+        `_cell_offset`/`_overflow_page` provenance columns) — `_shard_recovered_<table_name>`
+        additionally has a `_recovery_method` column that isn't part of that set and so isn't
+        included here, unlike writing the equivalent query() UNION by hand with `SELECT *`.
+        Uses the same cached-recovered-copy behavior as query() (see there for details).
+        """
+        recover_kwargs = dict(process_wal=process_wal, carve_mode=carve_mode, carve_table_filter=carve_table_filter)
+        quoted_table = _quote_identifier(table_name)
+
+        columns = [
+            row["name"] for row in
+            self.query(f"PRAGMA table_info({quoted_table})", **recover_kwargs)
+        ]
+        if not columns:
+            raise ShardError(f"Table '{table_name}' not found (or has no columns).")
+        column_list = ", ".join(_quote_identifier(c) for c in columns)
+
+        sql = f"SELECT {column_list} FROM {quoted_table}"
+        if include_deleted:
+            recovered_table = _quote_identifier(f"_shard_recovered_{table_name}")
+            sql += f" UNION ALL SELECT {column_list} FROM {recovered_table}"
+
+        return self.query(sql, **recover_kwargs)
 
     def _cleanup_recovered_file(self) -> None:
         if self._recovered_path is None:
