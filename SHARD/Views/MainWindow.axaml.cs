@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -482,6 +483,73 @@ public partial class MainWindow : Window
     {
         if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
         this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    // ── Go to offset ─────────────────────────────────────────────────────────
+    //
+    // Manual counterpart to the click-driven scrolls above: the scrollbar alone is imprecise for
+    // landing on a specific offset, especially one already known from elsewhere in the UI (a cell
+    // offset, a shard-cli/Python report, etc). Accepts decimal or 0x-prefixed hex; out-of-range
+    // input is clamped rather than rejected outright.
+
+    private static void GoToHexOffset(HexView? hexView, TextBox? offsetBox)
+    {
+        if (hexView is null || offsetBox is null) return;
+
+        string text = offsetBox.Text?.Trim() ?? "";
+        if (text.Length == 0) return;
+
+        bool isHex = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+        string digits = isHex ? text[2..] : text;
+        var style = isHex ? NumberStyles.HexNumber : NumberStyles.Integer;
+        if (!int.TryParse(digits, style, CultureInfo.InvariantCulture, out int offset)) return;
+
+        int length = hexView.Data?.Length ?? 0;
+        if (length == 0) return;
+        offset = Math.Clamp(offset, 0, length - 1);
+
+        hexView.SetCursorOffset(offset);
+        hexView.ScrollToByteOffset(offset);
+    }
+
+    private void OnHdrGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("HdrHexView"), this.FindControl<TextBox>("HdrGoToOffsetBox"));
+
+    private void OnHdrGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnHdrGoToOffsetClick(sender, e);
+    }
+
+    private void OnPageGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("PageHexView"), this.FindControl<TextBox>("PageGoToOffsetBox"));
+
+    private void OnPageGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnPageGoToOffsetClick(sender, e);
+    }
+
+    private void OnSchemaGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("SchemaHexView"), this.FindControl<TextBox>("SchemaGoToOffsetBox"));
+
+    private void OnSchemaGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnSchemaGoToOffsetClick(sender, e);
+    }
+
+    private void OnSearchGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("SearchHexView"), this.FindControl<TextBox>("SearchGoToOffsetBox"));
+
+    private void OnSearchGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnSearchGoToOffsetClick(sender, e);
+    }
+
+    private void OnWalGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("WalHexView"), this.FindControl<TextBox>("WalGoToOffsetBox"));
+
+    private void OnWalGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnWalGoToOffsetClick(sender, e);
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
