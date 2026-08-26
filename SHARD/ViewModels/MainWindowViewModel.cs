@@ -447,6 +447,46 @@ public sealed class MainWindowViewModel : ViewModelBase
     public CarveUnknownPagesViewModel? CarveTab =>
         _carveTab ??= Database is not null ? new CarveUnknownPagesViewModel(Database) : null;
 
+    /// <summary>Exports the Carve Unknown Pages tab's current include/exclude and Focused-range
+    /// tuning to <paramref name="filePath"/> as JSON (see <see cref="CarvingProfile"/>).</summary>
+    public void ExportCarvingParameters(string filePath)
+    {
+        if (CarveTab is not { } carveTab) { StatusText = "No database open."; return; }
+        try
+        {
+            string? sourceName = CurrentFilePath is { } p ? Path.GetFileName(p) : null;
+            File.WriteAllText(filePath, carveTab.BuildExportProfile(sourceName).ToJson());
+            StatusText = $"Exported carving parameters to {filePath}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to export carving parameters: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Loads a previously-exported carving profile from <paramref name="filePath"/> and applies it
+    /// to the Carve Unknown Pages tab. Returns the reconciliation summary (tables applied/new/
+    /// missing, columns ignored) for the caller to display, or null if it couldn't be loaded at
+    /// all (already reported via <see cref="StatusText"/> in that case).
+    /// </summary>
+    public CarveUnknownPagesViewModel.LoadProfileSummary? LoadCarvingParameters(string filePath)
+    {
+        if (CarveTab is not { } carveTab) { StatusText = "No database open."; return null; }
+        try
+        {
+            var summary = carveTab.LoadProfile(File.ReadAllText(filePath));
+            StatusText = $"Loaded carving parameters — {summary.TablesApplied.Count} table(s) applied" +
+                (summary.NewTablesNotInProfile.Count > 0 ? $", {summary.NewTablesNotInProfile.Count} new table(s) found" : "");
+            return summary;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to load carving parameters: {ex.Message}";
+            return null;
+        }
+    }
+
     // ── Record recovery ────────────────────────────────────────────────────
     private int _selectedByteOffset = -1;
     public int SelectedByteOffset

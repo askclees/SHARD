@@ -209,4 +209,77 @@ public sealed class CarveUnknownPagesViewModel : ReactiveObject
 
         return result;
     }
+
+    /// <summary>
+    /// Snapshots every known table's include/exclude state and (if any) tuned Focused column
+    /// ranges into an exportable <see cref="CarvingProfile"/> — including currently-excluded
+    /// tables, so a later load can tell "existed but excluded" apart from "never seen." Excluded
+    /// tables' Focused ranges are still captured even though the UI currently hides them (the
+    /// underlying <see cref="CarvingTableGroup"/> keeps its rows regardless of
+    /// <see cref="TableInclusion.IsIncluded"/>), so re-including a table later restores its tuning.
+    /// </summary>
+    public CarvingProfile BuildExportProfile(string? sourceDatabaseFileName)
+    {
+        var columnsByTable = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
+        var profile = new CarvingProfile { SourceDatabaseFileName = sourceDatabaseFileName };
+
+        foreach (var (tableName, inclusion) in _inclusionByTable)
+        {
+            var entry = new CarvingProfileTableEntry { TableName = tableName, Included = inclusion.IsIncluded };
+            if (columnsByTable.TryGetValue(tableName, out var group))
+                foreach (var col in group.Columns)
+                    entry.Columns.Add(new CarvingProfileColumnEntry
+                    {
+                        ColumnName = col.ColumnName,
+                        MinLength  = (int)col.MinLength,
+                        MaxLength  = (int)col.MaxLength,
+                    });
+            profile.Tables.Add(entry);
+        }
+
+        return profile;
+    }
+
+    /// <summary>Result of applying a loaded <see cref="CarvingProfile"/> onto this instance's live state.</summary>
+    public sealed record LoadProfileSummary(
+        IReadOnlyList<string> TablesApplied,
+        IReadOnlyList<string> TablesMissingFromDatabase,
+        IReadOnlyList<string> NewTablesNotInProfile,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> ColumnsIgnoredPerTable);
+
+    /// <summary>
+    /// Parses <paramref name="json"/> as a <see cref="CarvingProfile"/>, reconciles it against the
+    /// current candidates via <see cref="CarvingProfileMatcher"/>, and applies each match's
+    /// include/exclude state and column ranges directly onto the existing (shared)
+    /// <see cref="TableInclusion"/>/<see cref="CarvingColumnRow"/> instances — so bound UI updates
+    /// immediately, with no rebuild. Throws <see cref="InvalidDataException"/> if the JSON is
+    /// malformed or from an unsupported future format version (see <see cref="CarvingProfile.FromJson"/>).
+    /// </summary>
+    public LoadProfileSummary LoadProfile(string json)
+    {
+        var profile = CarvingProfile.FromJson(json);
+        var result  = CarvingProfileMatcher.Match(profile, _standardCandidates);
+        var groupsByTable = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var match in result.Matches)
+        {
+            if (_inclusionByTable.TryGetValue(match.TableName, out var inclusion))
+                inclusion.IsIncluded = match.Included;
+
+            if (groupsByTable.TryGetValue(match.TableName, out var group))
+                foreach (var row in group.Columns)
+                    if (match.ColumnRanges.TryGetValue(row.ColumnName, out var range))
+                    {
+                        row.MinLength = range.Min;
+                        row.MaxLength = range.Max;
+                    }
+        }
+        RecomputeCanRunFocused();
+
+        return new LoadProfileSummary(
+            result.Matches.Select(m => m.TableName).ToList(),
+            result.TablesMissingFromDatabase,
+            result.NewTablesNotInProfile,
+            result.Matches.ToDictionary(m => m.TableName, m => m.ColumnsIgnored, StringComparer.OrdinalIgnoreCase));
+    }
 }
