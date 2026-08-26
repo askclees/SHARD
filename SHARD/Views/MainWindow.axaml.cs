@@ -354,6 +354,53 @@ public partial class MainWindow : Window
         vm.CarveUnknownPages(carveTab.RunFocusedCandidates());
     }
 
+    private static readonly FilePickerFileType CarvingProfileFilter = new("Carving Profile")
+    {
+        Patterns = ["*.json"],
+    };
+
+    private async void OnExportCarvingParametersClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel { CarveTab: { } } vm) return;
+
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title             = "Export Carving Parameters",
+            SuggestedFileName = "carving-parameters.json",
+            FileTypeChoices   = [CarvingProfileFilter],
+        });
+        if (file is null) return;
+
+        vm.ExportCarvingParameters(file.Path.LocalPath);
+    }
+
+    private async void OnLoadCarvingParametersClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel { CarveTab: { } } vm) return;
+
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title          = "Load Carving Parameters",
+            AllowMultiple  = false,
+            FileTypeFilter = [CarvingProfileFilter, FilePickerFileTypes.All],
+        });
+        if (files is not [var file]) return;
+
+        var summary = vm.LoadCarvingParameters(file.Path.LocalPath);
+        if (summary is null) return; // failure already reported via StatusText
+
+        var resultVm = new CarvingProfileLoadResultViewModel
+        {
+            AppliedTables  = summary.TablesApplied,
+            NewTables      = summary.NewTablesNotInProfile,
+            MissingTables  = summary.TablesMissingFromDatabase,
+            ColumnWarnings = summary.ColumnsIgnoredPerTable
+                .SelectMany(kv => kv.Value.Select(col => $"{kv.Key}.{col}"))
+                .ToList(),
+        };
+        await new CarvingProfileLoadResultWindow(resultVm).ShowDialog(this);
+    }
+
     // ── Drag-and-drop ────────────────────────────────────────────────────────
 
     private static void OnDragOver(object? sender, DragEventArgs e)

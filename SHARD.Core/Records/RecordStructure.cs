@@ -167,6 +167,15 @@ public class RecordStructure
         {
             if (observedKinds[i].Count == 0) continue; // nothing observed — leave loose
 
+            // Nullability is a schema fact, not something that needs to be observed to be
+            // trusted: a small (or unlucky) sample can easily go without a single NULL in a
+            // column the schema still declares nullable, and a genuinely deleted row could well
+            // have been NULL there. Keep NULL allowed regardless of the sample — at zero cost,
+            // since NULL is always 0 bytes and can't loosen byte-length matching the way keeping
+            // a wide Integer/Text/Blob range would.
+            if (!payloadColumns[i].IsNotNull)
+                observedKinds[i].Add(SerialTypeKind.Null);
+
             rs.AllowedKindsPerColumn[i] = observedKinds[i].ToArray();
 
             if (observedLengths[i].Count > 0)

@@ -1,0 +1,82 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SHARD.ViewModels"
+        x:Class="SHARD.Views.CarvingProfileLoadResultWindow"
+        x:DataType="vm:CarvingProfileLoadResultViewModel"
+        Title="Carving Parameters Loaded"
+        Width="480" Height="420"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        ShowInTaskbar="False">
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+
+        <TextBlock Grid.Row="0"
+                   Text="Carving parameters loaded"
+                   FontWeight="SemiBold"
+                   FontSize="13"
+                   Margin="0,0,0,12" />
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="14">
+
+                <StackPanel Spacing="4" IsVisible="{Binding HasNewTables}">
+                    <TextBlock Text="{Binding NewTablesHeader}"
+                               FontWeight="SemiBold" FontSize="12"
+                               Foreground="#D9A441" />
+                    <TextBlock Text="These tables weren't in the loaded profile at all — review whether they should be included."
+                               FontSize="11" Opacity="0.7" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding NewTables}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="x:String">
+                                <TextBlock Text="{Binding}" FontSize="12" Margin="8,1" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel Spacing="4" IsVisible="{Binding HasAppliedTables}">
+                    <TextBlock Text="{Binding AppliedHeader}" FontWeight="SemiBold" FontSize="12" />
+                    <ItemsControl ItemsSource="{Binding AppliedTables}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="x:String">
+                                <TextBlock Text="{Binding}" FontSize="12" Margin="8,1" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel Spacing="4" IsVisible="{Binding HasMissingTables}">
+                    <TextBlock Text="{Binding MissingTablesHeader}" FontWeight="SemiBold" FontSize="12" Opacity="0.7" />
+                    <ItemsControl ItemsSource="{Binding MissingTables}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="x:String">
+                                <TextBlock Text="{Binding}" FontSize="12" Opacity="0.7" Margin="8,1" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel Spacing="4" IsVisible="{Binding HasColumnWarnings}">
+                    <TextBlock Text="{Binding ColumnWarningsHeader}" FontWeight="SemiBold" FontSize="12" Opacity="0.7" />
+                    <ItemsControl ItemsSource="{Binding ColumnWarnings}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="x:String">
+                                <TextBlock Text="{Binding}" FontSize="12" Opacity="0.7" Margin="8,1" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,12,0,0">
+            <Button Content="Close" Click="OnCloseClicked" Padding="14,6" />
+        </StackPanel>
+
+    </Grid>
+</Window>
