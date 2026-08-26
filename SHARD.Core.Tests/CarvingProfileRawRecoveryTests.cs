@@ -38,7 +38,7 @@ public class CarvingProfileRawRecoveryTests
             {
                 pageSize = db.Header.PageSize;
                 var candidates = OrphanPageCarver.BuildCandidates(db, CarveMode.Tight);
-                profile = BuildProfile(candidates);
+                profile = BuildProfile(candidates, db.Header.TextEncoding);
             }
 
             // Round-trip through the real serialization path, exactly as a saved-to-disk profile would be.
@@ -46,7 +46,8 @@ public class CarvingProfileRawRecoveryTests
 
             DestroyFirstPage(tempPath, pageSize);
 
-            // Confirm the destruction is real: the normal container-based recovery path is gone entirely.
+            // Confirm the destruction is real: the normal container-based recovery path is gone entirely —
+            // including the header, which is the only place TextEncoding otherwise lives.
             Assert.Throws<InvalidDataException>(() => SqliteForensicDatabase.Open(tempPath));
 
             var reconstructed = CarvingProfileCandidateBuilder.BuildCandidates(profile);
@@ -60,7 +61,7 @@ public class CarvingProfileRawRecoveryTests
 
             byte[] fileBytes = File.ReadAllBytes(tempPath);
             var matches = DeletedRecordParser.CarveRawBytesAnySchema(
-                fileBytes, TextEncoding.Utf8, candidateTuples, out int ambiguousSkipped);
+                fileBytes, profile.ResolveTextEncoding(), candidateTuples, out int ambiguousSkipped);
 
             var actualByTable = matches
                 .GroupBy(m => m.TableName, StringComparer.OrdinalIgnoreCase)
@@ -143,9 +144,10 @@ public class CarvingProfileRawRecoveryTests
         return result;
     }
 
-    private static CarvingProfile BuildProfile(IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> candidates)
+    private static CarvingProfile BuildProfile(
+        IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> candidates, TextEncoding textEncoding)
     {
-        var profile = new CarvingProfile();
+        var profile = new CarvingProfile { TextEncoding = textEncoding.ToString() };
         foreach (var (schema, structure) in candidates)
         {
             var entry = new CarvingProfileTableEntry

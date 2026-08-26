@@ -54,6 +54,16 @@ public sealed class CarvingProfile
     /// <summary>Display-only metadata for the load-summary UI — never used to gate or validate loading.</summary>
     public string? SourceDatabaseFileName { get; set; }
 
+    /// <summary>
+    /// The source database's <see cref="Enums.TextEncoding"/> name (e.g. "Utf8") at export time.
+    /// Needed to decode TEXT columns when carving raw bytes from a source with no readable header
+    /// of its own left to read it from — the whole point of exporting a profile in the first place.
+    /// Null for a profile exported before this field existed. Use <see cref="ResolveTextEncoding"/>
+    /// rather than parsing this directly, so an old or corrupted value falls back sensibly instead
+    /// of failing outright.
+    /// </summary>
+    public string? TextEncoding { get; set; }
+
     public List<CarvingProfileTableEntry> Tables { get; set; } = new();
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
@@ -81,4 +91,14 @@ public sealed class CarvingProfile
 
         return profile;
     }
+
+    /// <summary>
+    /// Parses <see cref="TextEncoding"/> into an actual <see cref="Enums.TextEncoding"/>, falling
+    /// back to <see cref="Enums.TextEncoding.Utf8"/> — the overwhelmingly common case — if it's
+    /// null (a profile exported before this field existed) or unrecognized, rather than throwing.
+    /// </summary>
+    public Enums.TextEncoding ResolveTextEncoding() =>
+        TextEncoding is not null && Enum.TryParse<Enums.TextEncoding>(TextEncoding, out var encoding)
+            ? encoding
+            : Enums.TextEncoding.Utf8;
 }

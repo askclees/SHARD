@@ -113,4 +113,32 @@ public class CarvingProfileTests
         var profile = CarvingProfile.FromJson(json);
         Assert.Empty(profile.Tables);
     }
+
+    [Fact]
+    public void RoundTrip_PreservesTextEncoding()
+    {
+        var profile = new CarvingProfile { TextEncoding = "Utf16Le" };
+
+        var roundTripped = CarvingProfile.FromJson(profile.ToJson());
+
+        Assert.Equal("Utf16Le", roundTripped.TextEncoding);
+        Assert.Equal(SHARD.Core.Enums.TextEncoding.Utf16Le, roundTripped.ResolveTextEncoding());
+    }
+
+    [Fact]
+    public void ResolveTextEncoding_FallsBackToUtf8_WhenNeverSet()
+    {
+        // A profile exported before this field existed has TextEncoding == null.
+        var profile = new CarvingProfile();
+
+        Assert.Equal(SHARD.Core.Enums.TextEncoding.Utf8, profile.ResolveTextEncoding());
+    }
+
+    [Fact]
+    public void ResolveTextEncoding_FallsBackToUtf8_WhenUnrecognized()
+    {
+        var profile = new CarvingProfile { TextEncoding = "SomeFutureEncodingThisVersionDoesNotKnowAbout" };
+
+        Assert.Equal(SHARD.Core.Enums.TextEncoding.Utf8, profile.ResolveTextEncoding());
+    }
 }

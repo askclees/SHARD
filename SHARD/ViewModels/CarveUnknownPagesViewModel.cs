@@ -108,6 +108,7 @@ public sealed class CarveUnknownPagesViewModel : ReactiveObject
     private readonly IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> _standardCandidates;
     private readonly IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> _focusedCandidates;
     private readonly Dictionary<string, TableInclusion> _inclusionByTable = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TextEncoding _textEncoding;
 
     public ObservableCollection<StandardTableInfo> StandardTables { get; } = [];
     public ObservableCollection<CarvingTableGroup> FocusedGroups { get; } = [];
@@ -121,6 +122,7 @@ public sealed class CarveUnknownPagesViewModel : ReactiveObject
 
     public CarveUnknownPagesViewModel(SqliteForensicDatabase database)
     {
+        _textEncoding = database.Header.TextEncoding;
         _standardCandidates = OrphanPageCarver.BuildCandidates(database, CarveMode.Loose);
         _focusedCandidates  = OrphanPageCarver.BuildCandidates(database, CarveMode.Tight);
 
@@ -222,7 +224,11 @@ public sealed class CarveUnknownPagesViewModel : ReactiveObject
     {
         var columnsByTable  = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
         var candidateByTable = _focusedCandidates.ToDictionary(c => c.Schema.TableName, StringComparer.OrdinalIgnoreCase);
-        var profile = new CarvingProfile { SourceDatabaseFileName = sourceDatabaseFileName };
+        var profile = new CarvingProfile
+        {
+            SourceDatabaseFileName = sourceDatabaseFileName,
+            TextEncoding = _textEncoding.ToString(),
+        };
 
         foreach (var (tableName, inclusion) in _inclusionByTable)
         {
