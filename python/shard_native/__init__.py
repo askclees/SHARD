@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
+import sqlite3
+import tempfile
 from typing import Any
 
 from ._bindings import bind
@@ -55,8 +58,11 @@ class ShardDatabase:
 
     def __init__(self, path: str):
         self._handle: int | None = _call(_lib.shard_open, path.encode("utf-8"))["handle"]
+        self._recovered_path: str | None = None
+        self._recovered_options: tuple[Any, ...] | None = None
 
     def close(self) -> None:
+        self._cleanup_recovered_file()
         if self._handle is not None:
             _lib.shard_close(ctypes.c_int64(self._handle))
             self._handle = None
@@ -131,6 +137,66 @@ class ShardDatabase:
             output_path.encode("utf-8"),
             json.dumps(options).encode("utf-8"),
         )
+
+    def query(
+        self,
+        sql: str,
+        params: Any = (),
+        *,
+        process_wal: bool = True,
+        carve_mode: str | None = None,
+        carve_table_filter: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Runs a read/write SQL statement against a fully recovered copy of this database via the
+        stdlib sqlite3 module — live rows stay in their original table names; in-tree
+        deleted/freeblock-recovered rows land alongside them in `_shard_recovered_<table>`
+        tables, so a query can join or UNION live and recovered data directly (e.g.
+        ``SELECT * FROM users UNION ALL SELECT * FROM _shard_recovered_users``).
+
+        The recovered copy is built once, in a temp file, the first time query() is called (or
+        again if called with different process_wal/carve_mode/carve_table_filter than last
+        time), and reused across calls with matching options — cleaned up automatically when
+        this ShardDatabase is closed. For anything beyond one-off queries against a stable
+        recovery, calling recover_to_file() yourself once and opening the result directly is
+        more explicit about when recovery actually happens.
+        """
+        options_key = (
+            process_wal, carve_mode,
+            tuple(carve_table_filter) if carve_table_filter else None,
+        )
+        if self._recovered_path is None or self._recovered_options != options_key:
+            self._cleanup_recovered_file()
+            fd, path = tempfile.mkstemp(suffix=".db", prefix="shard_query_")
+            os.close(fd)
+            os.remove(path)  # recover_to_file creates it fresh; it must not already exist
+            self.recover_to_file(
+                path, process_wal=process_wal,
+                carve_mode=carve_mode, carve_table_filter=carve_table_filter,
+            )
+            self._recovered_path = path
+            self._recovered_options = options_key
+
+        connection = sqlite3.connect(self._recovered_path)
+        try:
+            connection.row_factory = sqlite3.Row
+            cursor = connection.execute(sql, params)
+            if cursor.description is None:
+                connection.commit()
+                return []
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            connection.close()
+
+    def _cleanup_recovered_file(self) -> None:
+        if self._recovered_path is None:
+            return
+        for suffix in ("", "-wal", "-shm"):
+            path = self._recovered_path + suffix
+            if os.path.exists(path):
+                os.remove(path)
+        self._recovered_path = None
+        self._recovered_options = None
 
 
 __all__ = ["ShardDatabase", "ShardError"]
