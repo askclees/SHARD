@@ -1,6 +1,7 @@
 using System.Text.Json;
 using SHARD.Core.Enums;
 using SHARD.Core.Records;
+using SHARD.Core.Schema;
 
 namespace SHARD.Core.Recovery;
 
@@ -26,6 +27,16 @@ public sealed class CarvingProfileTableEntry
     public string TableName { get; set; } = "";
     public bool Included { get; set; } = true;
     public List<CarvingProfileColumnEntry> Columns { get; set; } = new();
+
+    /// <summary>
+    /// The table's original CREATE TABLE statement, if it was available at export time (it always
+    /// is today, since export only happens from an already-open database). Lets a full
+    /// <see cref="TableSchema"/> — column order, declared types, rowid-alias detection — be
+    /// reconstructed later via <see cref="CreateTableParser.ExtractTableSchema"/> without needing
+    /// that database open again, e.g. to carve a raw source (a memory image) that has no
+    /// sqlite_master of its own to read a schema from.
+    /// </summary>
+    public string? CreateTableSql { get; set; }
 }
 
 /// <summary>

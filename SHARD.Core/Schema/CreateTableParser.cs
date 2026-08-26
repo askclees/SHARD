@@ -18,6 +18,7 @@ public static class CreateTableParser
 
     public static TableSchema? ExtractTableSchema(string sql)
     {
+        string originalSql = sql;
         sql = StripLineComments(sql);
         int openParen = FindTableBodyStart(sql);
         if (openParen < 0) return null;
@@ -25,7 +26,7 @@ public static class CreateTableParser
         int closeParen = FindMatchingParen(sql, openParen);
         if (closeParen < 0) return null;
 
-        var schema = new TableSchema { TableName = ExtractTableName(sql, openParen) };
+        var schema = new TableSchema { TableName = ExtractTableName(sql, openParen), Sql = originalSql };
         string body = sql.Substring(openParen + 1, closeParen - openParen - 1);
         var tablePrimaryKeyColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 

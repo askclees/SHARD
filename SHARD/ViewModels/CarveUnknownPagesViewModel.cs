@@ -220,26 +220,34 @@ public sealed class CarveUnknownPagesViewModel : ReactiveObject
     /// </summary>
     public CarvingProfile BuildExportProfile(string? sourceDatabaseFileName)
     {
-        var columnsByTable   = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
-        var structureByTable = _focusedCandidates.ToDictionary(c => c.Schema.TableName, c => c.Structure, StringComparer.OrdinalIgnoreCase);
+        var columnsByTable  = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
+        var candidateByTable = _focusedCandidates.ToDictionary(c => c.Schema.TableName, StringComparer.OrdinalIgnoreCase);
         var profile = new CarvingProfile { SourceDatabaseFileName = sourceDatabaseFileName };
 
         foreach (var (tableName, inclusion) in _inclusionByTable)
         {
             var entry = new CarvingProfileTableEntry { TableName = tableName, Included = inclusion.IsIncluded };
-            if (columnsByTable.TryGetValue(tableName, out var group) && structureByTable.TryGetValue(tableName, out var structure))
-                foreach (var col in group.Columns)
-                    entry.Columns.Add(new CarvingProfileColumnEntry
-                    {
-                        ColumnName   = col.ColumnName,
-                        MinLength    = (int)col.MinLength,
-                        MaxLength    = (int)col.MaxLength,
-                        // Captures any narrowing Tighten found beyond the column's affinity-based
-                        // default (e.g. a column observed to be always exactly 0 or 1 gets narrowed
-                        // to just [Int0, Int1]) — this doesn't have its own UI control, so exporting
-                        // it here is the only way it survives a save/load round trip.
-                        AllowedKinds = structure.AllowedKindsPerColumn[col.ColumnIndex].Select(k => k.ToString()).ToList(),
-                    });
+            if (candidateByTable.TryGetValue(tableName, out var candidate))
+            {
+                // Lets the table's schema be fully reconstructed later (column order, declared
+                // types, rowid-alias detection) via CreateTableParser without needing this
+                // database open again — see CarvingProfileTableEntry.CreateTableSql.
+                entry.CreateTableSql = candidate.Schema.Sql;
+
+                if (columnsByTable.TryGetValue(tableName, out var group))
+                    foreach (var col in group.Columns)
+                        entry.Columns.Add(new CarvingProfileColumnEntry
+                        {
+                            ColumnName   = col.ColumnName,
+                            MinLength    = (int)col.MinLength,
+                            MaxLength    = (int)col.MaxLength,
+                            // Captures any narrowing Tighten found beyond the column's affinity-based
+                            // default (e.g. a column observed to be always exactly 0 or 1 gets narrowed
+                            // to just [Int0, Int1]) — this doesn't have its own UI control, so exporting
+                            // it here is the only way it survives a save/load round trip.
+                            AllowedKinds = candidate.Structure.AllowedKindsPerColumn[col.ColumnIndex].Select(k => k.ToString()).ToList(),
+                        });
+            }
             profile.Tables.Add(entry);
         }
 
