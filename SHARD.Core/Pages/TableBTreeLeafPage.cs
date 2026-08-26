@@ -223,10 +223,12 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
         return null;
     }
 
-    // TODO: this is the only SqlitePage subclass with comparison support — the WAL Changes tab
-    // (SHARD/ViewModels/WalViewModel.cs) falls back to "no comparison available" for every other
-    // page type (index leaf/interior, table interior, overflow, freelist). Worth a similar
-    // Compare() on those types, with an analogous *Comparison record, if that coverage is wanted.
+    // TODO: table leaf and table interior (see TableBTreeInteriorPage.Compare) pages are the
+    // only SqlitePage subclasses with comparison support — the WAL Changes tab
+    // (SHARD/ViewModels/WalViewModel.cs) still falls back to "no comparison available" for
+    // index leaf/interior, overflow, and freelist pages. Worth a similar Compare() on those
+    // types, with an analogous *Comparison record, if that coverage is wanted — see
+    // https://github.com/askclees/SHARD/issues/23.
     public TableBTreeLeafPageComparison Compare(TableBTreeLeafPage comparePage)
     {
         TableBTreeLeafPageComparison retVal = new();
