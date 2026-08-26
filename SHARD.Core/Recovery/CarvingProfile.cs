@@ -1,13 +1,20 @@
 using System.Text.Json;
+using SHARD.Core.Enums;
+using SHARD.Core.Records;
 
 namespace SHARD.Core.Recovery;
 
-/// <summary>One narrowable column's saved [Min, Max] byte-length range within a table entry.</summary>
+/// <summary>
+/// One narrowable column's saved [Min, Max] byte-length range and allowed serial-type kinds
+/// (<see cref="SerialTypeKind"/> names, e.g. ["Integer"] or ["Int0","Int1"] for a column
+/// <see cref="RecordStructure.Tighten"/> found to be always exactly 0 or 1) within a table entry.
+/// </summary>
 public sealed class CarvingProfileColumnEntry
 {
     public string ColumnName { get; set; } = "";
     public int MinLength { get; set; }
     public int MaxLength { get; set; }
+    public List<string> AllowedKinds { get; set; } = new();
 }
 
 /// <summary>

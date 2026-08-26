@@ -220,19 +220,25 @@ public sealed class CarveUnknownPagesViewModel : ReactiveObject
     /// </summary>
     public CarvingProfile BuildExportProfile(string? sourceDatabaseFileName)
     {
-        var columnsByTable = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
+        var columnsByTable   = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
+        var structureByTable = _focusedCandidates.ToDictionary(c => c.Schema.TableName, c => c.Structure, StringComparer.OrdinalIgnoreCase);
         var profile = new CarvingProfile { SourceDatabaseFileName = sourceDatabaseFileName };
 
         foreach (var (tableName, inclusion) in _inclusionByTable)
         {
             var entry = new CarvingProfileTableEntry { TableName = tableName, Included = inclusion.IsIncluded };
-            if (columnsByTable.TryGetValue(tableName, out var group))
+            if (columnsByTable.TryGetValue(tableName, out var group) && structureByTable.TryGetValue(tableName, out var structure))
                 foreach (var col in group.Columns)
                     entry.Columns.Add(new CarvingProfileColumnEntry
                     {
-                        ColumnName = col.ColumnName,
-                        MinLength  = (int)col.MinLength,
-                        MaxLength  = (int)col.MaxLength,
+                        ColumnName   = col.ColumnName,
+                        MinLength    = (int)col.MinLength,
+                        MaxLength    = (int)col.MaxLength,
+                        // Captures any narrowing Tighten found beyond the column's affinity-based
+                        // default (e.g. a column observed to be always exactly 0 or 1 gets narrowed
+                        // to just [Int0, Int1]) — this doesn't have its own UI control, so exporting
+                        // it here is the only way it survives a save/load round trip.
+                        AllowedKinds = structure.AllowedKindsPerColumn[col.ColumnIndex].Select(k => k.ToString()).ToList(),
                     });
             profile.Tables.Add(entry);
         }
@@ -259,19 +265,29 @@ public sealed class CarveUnknownPagesViewModel : ReactiveObject
     {
         var profile = CarvingProfile.FromJson(json);
         var result  = CarvingProfileMatcher.Match(profile, _standardCandidates);
-        var groupsByTable = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
+        var groupsByTable    = FocusedGroups.ToDictionary(g => g.TableName, StringComparer.OrdinalIgnoreCase);
+        var structureByTable = _focusedCandidates.ToDictionary(c => c.Schema.TableName, c => c.Structure, StringComparer.OrdinalIgnoreCase);
 
         foreach (var match in result.Matches)
         {
             if (_inclusionByTable.TryGetValue(match.TableName, out var inclusion))
                 inclusion.IsIncluded = match.Included;
 
+            structureByTable.TryGetValue(match.TableName, out var structure);
+
             if (groupsByTable.TryGetValue(match.TableName, out var group))
                 foreach (var row in group.Columns)
-                    if (match.ColumnRanges.TryGetValue(row.ColumnName, out var range))
+                    if (match.Columns.TryGetValue(row.ColumnName, out var colMatch))
                     {
-                        row.MinLength = range.Min;
-                        row.MaxLength = range.Max;
+                        row.MinLength = colMatch.Range.Min;
+                        row.MaxLength = colMatch.Range.Max;
+                        // Kinds have no UI control of their own (unlike Min/Max, which
+                        // RunFocusedCandidates re-applies from these rows on every run) — apply
+                        // them onto the structure directly now, or a narrowing like "always
+                        // Int0/Int1" from the loaded profile would otherwise just be silently lost.
+                        structure?.NarrowColumn(row.ColumnIndex,
+                            allowedKinds: colMatch.AllowedKinds.Count > 0 ? colMatch.AllowedKinds.ToArray() : null,
+                            allowedContentLengthRange: (colMatch.Range.Min, colMatch.Range.Max));
                     }
         }
         RecomputeCanRunFocused();

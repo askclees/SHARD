@@ -13,7 +13,7 @@ Both sections share the same per-table include/exclude checkbox — deselecting 
 
 Tuning Focused's ranges and table selection by hand can take a while, and that tuning is normally lost as soon as you close the database. If you expect to see a similar database again — a newer version of the same browser's history file, a different case using the same application, etc. — you can save that tuning and reuse it.
 
-- **Export Parameters…** saves every candidate table's include/exclude state and Focused column ranges to a JSON file. This includes tables you've *excluded*, not just the ones you kept — see below for why that matters.
+- **Export Parameters…** saves every candidate table's include/exclude state and Focused column ranges to a JSON file. This includes tables you've *excluded*, not just the ones you kept — see below for why that matters. It also captures any narrowing beyond byte-length that Focused derived from the observed data — e.g. a column found to always be exactly 0 or 1, or a column's NULL-ability — even though those aren't shown as separate controls in the UI.
 - **Load Parameters…** loads a previously-exported file and applies it to the currently-open database's candidate tables, then shows a summary of what happened.
 
 ### New tables vs. excluded tables

@@ -1,3 +1,4 @@
+using SHARD.Core.Enums;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
 
@@ -12,11 +13,15 @@ public static class CarvingProfileMatcher
 {
     public readonly record struct ColumnRange(int Min, int Max);
 
+    /// <summary>One column's reconciled saved state — a byte-length range plus whatever serial-type
+    /// kinds the profile had for it (empty if the profile didn't narrow kinds beyond the default).</summary>
+    public sealed record ColumnMatch(ColumnRange Range, IReadOnlyList<SerialTypeKind> AllowedKinds);
+
     /// <summary>One current candidate table's reconciled state after matching against a profile.</summary>
     public sealed record TableMatch(
         string TableName,
         bool Included,
-        IReadOnlyDictionary<string, ColumnRange> ColumnRanges,
+        IReadOnlyDictionary<string, ColumnMatch> Columns,
         IReadOnlyList<string> ColumnsIgnored);
 
     public sealed record Result(
@@ -31,10 +36,11 @@ public static class CarvingProfileMatcher
     /// than being defaulted to included or excluded. Columns are matched by name
     /// (case-insensitive); a profile column absent from the current schema is reported in that
     /// table's <see cref="TableMatch.ColumnsIgnored"/>. A current schema column absent from the
-    /// profile simply has no entry in <see cref="TableMatch.ColumnRanges"/> — the caller is
-    /// expected to leave such a column at whatever default it already computed, not to invent a
-    /// new default here. Any profile table name never matched against a current candidate is
-    /// reported in <see cref="Result.TablesMissingFromDatabase"/>.
+    /// profile simply has no entry in <see cref="TableMatch.Columns"/> — the caller is expected to
+    /// leave such a column at whatever default it already computed, not to invent a new default
+    /// here. An unrecognized kind name (e.g. from a corrupted file) is silently skipped rather
+    /// than failing the whole match. Any profile table name never matched against a current
+    /// candidate is reported in <see cref="Result.TablesMissingFromDatabase"/>.
     /// </summary>
     public static Result Match(
         CarvingProfile profile,
@@ -60,17 +66,25 @@ public static class CarvingProfileMatcher
                 schema.Columns.Where(c => !c.IsRowIdAlias).Select(c => c.Name),
                 StringComparer.OrdinalIgnoreCase);
 
-            var columnRanges = new Dictionary<string, ColumnRange>(StringComparer.OrdinalIgnoreCase);
+            var columns = new Dictionary<string, ColumnMatch>(StringComparer.OrdinalIgnoreCase);
             var columnsIgnored = new List<string>();
             foreach (var col in profileEntry.Columns)
             {
-                if (currentColumnNames.Contains(col.ColumnName))
-                    columnRanges[col.ColumnName] = new ColumnRange(col.MinLength, col.MaxLength);
-                else
+                if (!currentColumnNames.Contains(col.ColumnName))
+                {
                     columnsIgnored.Add(col.ColumnName);
+                    continue;
+                }
+
+                var kinds = new List<SerialTypeKind>();
+                foreach (var kindName in col.AllowedKinds)
+                    if (Enum.TryParse<SerialTypeKind>(kindName, out var kind))
+                        kinds.Add(kind);
+
+                columns[col.ColumnName] = new ColumnMatch(new ColumnRange(col.MinLength, col.MaxLength), kinds);
             }
 
-            matches.Add(new TableMatch(schema.TableName, profileEntry.Included, columnRanges, columnsIgnored));
+            matches.Add(new TableMatch(schema.TableName, profileEntry.Included, columns, columnsIgnored));
         }
 
         var missingTables = profile.Tables

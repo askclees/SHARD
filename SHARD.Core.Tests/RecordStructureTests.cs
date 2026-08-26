@@ -84,6 +84,44 @@ public class RecordStructureTests
     }
 
     [Fact]
+    public void Tighten_KeepsNullAllowedForNullableColumn_EvenIfSampleNeverObservedOne()
+    {
+        var schema = new TableSchema
+        {
+            TableName = "Notes",
+            Columns =
+            {
+                new ColumnDefinition { Name = "id",   Affinity = TypeAffinity.Integer, IsNotNull = true },
+                new ColumnDefinition { Name = "note", Affinity = TypeAffinity.Text,     IsNotNull = false },
+            },
+        };
+        // Every sampled row happens to have a non-null "note" — the schema still permits NULL,
+        // and a genuinely deleted row could well have been NULL there.
+        var rows = new[]
+        {
+            RowWith(new SqliteValue(1L, 1), new SqliteValue("hello", 5)),
+            RowWith(new SqliteValue(2L, 1), new SqliteValue("world", 5)),
+        };
+
+        var tight = RecordStructure.Tighten(schema, rows);
+
+        Assert.Contains(SerialTypeKind.Null, tight.AllowedKindsPerColumn[1]);
+        Assert.Contains(SerialTypeKind.Text, tight.AllowedKindsPerColumn[1]);
+    }
+
+    [Fact]
+    public void Tighten_DoesNotAddNullForNotNullColumn()
+    {
+        var schema = TwoIntColumnSchema(); // both columns IsNotNull = true
+        var rows = new[] { RowWith(new SqliteValue(10L, 1), new SqliteValue(20L, 1)) };
+
+        var tight = RecordStructure.Tighten(schema, rows);
+
+        Assert.DoesNotContain(SerialTypeKind.Null, tight.AllowedKindsPerColumn[0]);
+        Assert.DoesNotContain(SerialTypeKind.Null, tight.AllowedKindsPerColumn[1]);
+    }
+
+    [Fact]
     public void NarrowColumn_AppliesManualOverrideIndependentOfObservedData()
     {
         var schema = TwoIntColumnSchema();

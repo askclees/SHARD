@@ -49,8 +49,8 @@ public class CarvingProfileMatcherTests
         var match = Assert.Single(result.Matches);
         Assert.Equal("users", match.TableName);
         Assert.True(match.Included);
-        Assert.Equal(new CarvingProfileMatcher.ColumnRange(2, 20), match.ColumnRanges["name"]);
-        Assert.Equal(new CarvingProfileMatcher.ColumnRange(3, 30), match.ColumnRanges["surname"]);
+        Assert.Equal(new CarvingProfileMatcher.ColumnRange(2, 20), match.Columns["name"].Range);
+        Assert.Equal(new CarvingProfileMatcher.ColumnRange(3, 30), match.Columns["surname"].Range);
         Assert.Empty(match.ColumnsIgnored);
         Assert.Empty(result.NewTablesNotInProfile);
         Assert.Empty(result.TablesMissingFromDatabase);
@@ -107,8 +107,8 @@ public class CarvingProfileMatcherTests
         var result = CarvingProfileMatcher.Match(profile, candidates);
 
         var match = Assert.Single(result.Matches);
-        Assert.True(match.ColumnRanges.ContainsKey("name"));
-        Assert.False(match.ColumnRanges.ContainsKey("email"));
+        Assert.True(match.Columns.ContainsKey("name"));
+        Assert.False(match.Columns.ContainsKey("email"));
         Assert.Empty(match.ColumnsIgnored);
     }
 
@@ -121,7 +121,7 @@ public class CarvingProfileMatcherTests
         var result = CarvingProfileMatcher.Match(profile, candidates);
 
         var match = Assert.Single(result.Matches);
-        Assert.True(match.ColumnRanges.ContainsKey("name"));
+        Assert.True(match.Columns.ContainsKey("name"));
         Assert.Equal(["nickname"], match.ColumnsIgnored);
     }
 
@@ -139,6 +139,56 @@ public class CarvingProfileMatcherTests
         var result = CarvingProfileMatcher.Match(profile, candidates);
 
         var match = Assert.Single(result.Matches);
-        Assert.True(match.ColumnRanges.ContainsKey("name"));
+        Assert.True(match.Columns.ContainsKey("name"));
+    }
+
+    [Fact]
+    public void Match_PreservesAllowedKinds_ForAColumnNarrowedToInt0Int1Only()
+    {
+        var candidates = new[] { Candidate(UsersSchema()) };
+        var entry = new CarvingProfileTableEntry { TableName = "users", Included = true };
+        entry.Columns.Add(new CarvingProfileColumnEntry
+        {
+            ColumnName   = "name",
+            MinLength    = 0,
+            MaxLength    = 0,
+            AllowedKinds = ["Int0", "Int1"],
+        });
+        var profile = ProfileWith(entry);
+
+        var result = CarvingProfileMatcher.Match(profile, candidates);
+
+        var match = Assert.Single(result.Matches);
+        Assert.Equal([SerialTypeKind.Int0, SerialTypeKind.Int1], match.Columns["name"].AllowedKinds);
+    }
+
+    [Fact]
+    public void Match_ColumnWithNoSavedKinds_HasEmptyAllowedKindsList()
+    {
+        var candidates = new[] { Candidate(UsersSchema()) };
+        var profile = ProfileWith(UsersProfileEntry(included: true, ("name", 2, 20)));
+
+        var result = CarvingProfileMatcher.Match(profile, candidates);
+
+        var match = Assert.Single(result.Matches);
+        Assert.Empty(match.Columns["name"].AllowedKinds);
+    }
+
+    [Fact]
+    public void Match_UnrecognizedKindName_IsSkippedRatherThanFailing()
+    {
+        var candidates = new[] { Candidate(UsersSchema()) };
+        var entry = new CarvingProfileTableEntry { TableName = "users", Included = true };
+        entry.Columns.Add(new CarvingProfileColumnEntry
+        {
+            ColumnName   = "name",
+            AllowedKinds = ["Int0", "SomeFutureKindThisVersionDoesNotKnowAbout"],
+        });
+        var profile = ProfileWith(entry);
+
+        var result = CarvingProfileMatcher.Match(profile, candidates);
+
+        var match = Assert.Single(result.Matches);
+        Assert.Equal([SerialTypeKind.Int0], match.Columns["name"].AllowedKinds);
     }
 }

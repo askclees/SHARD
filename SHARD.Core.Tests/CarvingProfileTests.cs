@@ -19,8 +19,9 @@ public class CarvingProfileTests
                     Included  = true,
                     Columns =
                     {
-                        new CarvingProfileColumnEntry { ColumnName = "url", MinLength = 5, MaxLength = 512 },
+                        new CarvingProfileColumnEntry { ColumnName = "url", MinLength = 5, MaxLength = 512, AllowedKinds = ["Text"] },
                         new CarvingProfileColumnEntry { ColumnName = "title", MinLength = 0, MaxLength = 256 },
+                        new CarvingProfileColumnEntry { ColumnName = "is_flag", MinLength = 0, MaxLength = 0, AllowedKinds = ["Int0", "Int1"] },
                     },
                 },
             },
@@ -34,10 +35,12 @@ public class CarvingProfileTests
         var table = roundTripped.Tables[0];
         Assert.Equal("moz_places", table.TableName);
         Assert.True(table.Included);
-        Assert.Equal(2, table.Columns.Count);
+        Assert.Equal(3, table.Columns.Count);
         Assert.Equal("url", table.Columns[0].ColumnName);
         Assert.Equal(5, table.Columns[0].MinLength);
         Assert.Equal(512, table.Columns[0].MaxLength);
+        Assert.Equal(["Text"], table.Columns[0].AllowedKinds);
+        Assert.Equal(["Int0", "Int1"], table.Columns[2].AllowedKinds);
     }
 
     [Fact]
