@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
+import sqlite3
+import tempfile
 from typing import Any
 
 from ._bindings import bind
@@ -38,6 +41,13 @@ def _read_and_free(ptr: int | None) -> dict[str, Any]:
         _lib.shard_free_string(ptr)
 
 
+def _quote_identifier(name: str) -> str:
+    """SQLite double-quoted identifier escaping — matches ShadowDatabaseBuilder.QuoteIdentifier
+    on the .NET side, so table/column names with embedded quotes (real corpus fixtures have
+    these) round-trip correctly instead of producing broken SQL."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _call(fn, *args) -> Any:
     envelope = _read_and_free(fn(*args))
     if not envelope.get("ok"):
@@ -55,8 +65,11 @@ class ShardDatabase:
 
     def __init__(self, path: str):
         self._handle: int | None = _call(_lib.shard_open, path.encode("utf-8"))["handle"]
+        self._recovered_path: str | None = None
+        self._recovered_options: tuple[Any, ...] | None = None
 
     def close(self) -> None:
+        self._cleanup_recovered_file()
         if self._handle is not None:
             _lib.shard_close(ctypes.c_int64(self._handle))
             self._handle = None
@@ -131,6 +144,104 @@ class ShardDatabase:
             output_path.encode("utf-8"),
             json.dumps(options).encode("utf-8"),
         )
+
+    def query(
+        self,
+        sql: str,
+        params: Any = (),
+        *,
+        process_wal: bool = True,
+        carve_mode: str | None = None,
+        carve_table_filter: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Runs a read/write SQL statement against a fully recovered copy of this database via the
+        stdlib sqlite3 module — live rows stay in their original table names; in-tree
+        deleted/freeblock-recovered rows land alongside them in `_shard_recovered_<table>`
+        tables, so a query can join or UNION live and recovered data directly (e.g.
+        ``SELECT * FROM users UNION ALL SELECT * FROM _shard_recovered_users``).
+
+        The recovered copy is built once, in a temp file, the first time query() is called (or
+        again if called with different process_wal/carve_mode/carve_table_filter than last
+        time), and reused across calls with matching options — cleaned up automatically when
+        this ShardDatabase is closed. For anything beyond one-off queries against a stable
+        recovery, calling recover_to_file() yourself once and opening the result directly is
+        more explicit about when recovery actually happens.
+        """
+        options_key = (
+            process_wal, carve_mode,
+            tuple(carve_table_filter) if carve_table_filter else None,
+        )
+        if self._recovered_path is None or self._recovered_options != options_key:
+            self._cleanup_recovered_file()
+            fd, path = tempfile.mkstemp(suffix=".db", prefix="shard_query_")
+            os.close(fd)
+            os.remove(path)  # recover_to_file creates it fresh; it must not already exist
+            self.recover_to_file(
+                path, process_wal=process_wal,
+                carve_mode=carve_mode, carve_table_filter=carve_table_filter,
+            )
+            self._recovered_path = path
+            self._recovered_options = options_key
+
+        connection = sqlite3.connect(self._recovered_path)
+        try:
+            connection.row_factory = sqlite3.Row
+            cursor = connection.execute(sql, params)
+            if cursor.description is None:
+                connection.commit()
+                return []
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            connection.close()
+
+    def table_rows(
+        self,
+        table_name: str,
+        *,
+        include_deleted: bool = False,
+        process_wal: bool = True,
+        carve_mode: str | None = None,
+        carve_table_filter: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Returns `table_name`'s rows via a SQL query against a recovered copy — live rows only
+        by default; pass include_deleted=True to also include in-tree recoverable deleted/
+        freeblock rows from `_shard_recovered_<table_name>` (plus carved orphan-page records
+        too, if carve_mode is also passed). Columns are read from `table_name` itself via
+        `PRAGMA table_info` (its own declared columns, plus SHARD's own `_page_number`/
+        `_cell_offset`/`_overflow_page` provenance columns) — `_shard_recovered_<table_name>`
+        additionally has a `_recovery_method` column that isn't part of that set and so isn't
+        included here, unlike writing the equivalent query() UNION by hand with `SELECT *`.
+        Uses the same cached-recovered-copy behavior as query() (see there for details).
+        """
+        recover_kwargs = dict(process_wal=process_wal, carve_mode=carve_mode, carve_table_filter=carve_table_filter)
+        quoted_table = _quote_identifier(table_name)
+
+        columns = [
+            row["name"] for row in
+            self.query(f"PRAGMA table_info({quoted_table})", **recover_kwargs)
+        ]
+        if not columns:
+            raise ShardError(f"Table '{table_name}' not found (or has no columns).")
+        column_list = ", ".join(_quote_identifier(c) for c in columns)
+
+        sql = f"SELECT {column_list} FROM {quoted_table}"
+        if include_deleted:
+            recovered_table = _quote_identifier(f"_shard_recovered_{table_name}")
+            sql += f" UNION ALL SELECT {column_list} FROM {recovered_table}"
+
+        return self.query(sql, **recover_kwargs)
+
+    def _cleanup_recovered_file(self) -> None:
+        if self._recovered_path is None:
+            return
+        for suffix in ("", "-wal", "-shm"):
+            path = self._recovered_path + suffix
+            if os.path.exists(path):
+                os.remove(path)
+        self._recovered_path = None
+        self._recovered_options = None
 
 
 __all__ = ["ShardDatabase", "ShardError"]
