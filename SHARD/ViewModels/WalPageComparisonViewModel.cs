@@ -26,7 +26,7 @@ public sealed class UpdatedRecordSectionViewModel
     };
 }
 
-public sealed class WalPageComparisonViewModel
+public sealed class WalPageComparisonViewModel : IWalPageComparisonViewModel
 {
     public string ComparedAgainst { get; }
     public bool HasAnyChanges { get; }

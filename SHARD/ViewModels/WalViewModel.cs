@@ -38,8 +38,8 @@ public sealed class WalViewModel : ViewModelBase
         private set => this.RaiseAndSetIfChanged(ref _selectedFrameDetail, value);
     }
 
-    private WalPageComparisonViewModel? _selectedFrameComparison;
-    public WalPageComparisonViewModel? SelectedFrameComparison
+    private IWalPageComparisonViewModel? _selectedFrameComparison;
+    public IWalPageComparisonViewModel? SelectedFrameComparison
     {
         get => _selectedFrameComparison;
         private set
@@ -109,35 +109,55 @@ public sealed class WalViewModel : ViewModelBase
     /// page written twice within the same transaction still diffs against its pre-transaction
     /// state, not just its own previous write).
     /// </summary>
-    private WalPageComparisonViewModel? BuildComparison(WalFrame frame, int beforeIndex)
+    private IWalPageComparisonViewModel? BuildComparison(WalFrame frame, int beforeIndex)
     {
-        // TODO: Compare() only exists on TableBTreeLeafPage today, so index leaf/interior
-        // pages, table interior pages, overflow pages, and freelist pages all fall back to
-        // "No comparison available for this page type" here (both in this single-frame view
-        // and the whole-transaction view). Extending Compare() to those page types would let
-        // the Changes tab cover them too.
-        if (frame.Page is not TableBTreeLeafPage walPage)
-            return null;
-
         var baselineFrame = _walFile.GetLastFrameForPage(frame.Header.PageNumber, beforeIndex);
-        if (baselineFrame?.Page is TableBTreeLeafPage baselineWalPage)
+
+        if (frame.Page is TableBTreeLeafPage walLeafPage)
         {
-            int baselineFrameNumber = _walFile.Frames.IndexOf(baselineFrame) + 1;
-            return new WalPageComparisonViewModel(
-                baselineWalPage.Compare(walPage),
-                $"Changes vs. frame {baselineFrameNumber}");
+            if (baselineFrame?.Page is TableBTreeLeafPage baselineLeafPage)
+            {
+                int baselineFrameNumber = _walFile.Frames.IndexOf(baselineFrame) + 1;
+                return new WalPageComparisonViewModel(
+                    baselineLeafPage.Compare(walLeafPage),
+                    $"Changes vs. frame {baselineFrameNumber}");
+            }
+
+            return BuildComparisonAgainstDatabase(frame, dbPage =>
+                dbPage is TableBTreeLeafPage dbLeafPage
+                    ? new WalPageComparisonViewModel(dbLeafPage.Compare(walLeafPage), "Changes vs. database page")
+                    : null);
         }
 
+        if (frame.Page is TableBTreeInteriorPage walInteriorPage)
+        {
+            if (baselineFrame?.Page is TableBTreeInteriorPage baselineInteriorPage)
+            {
+                int baselineFrameNumber = _walFile.Frames.IndexOf(baselineFrame) + 1;
+                return new WalInteriorPageComparisonViewModel(
+                    baselineInteriorPage.Compare(walInteriorPage),
+                    $"Changes vs. frame {baselineFrameNumber}");
+            }
+
+            return BuildComparisonAgainstDatabase(frame, dbPage =>
+                dbPage is TableBTreeInteriorPage dbInteriorPage
+                    ? new WalInteriorPageComparisonViewModel(dbInteriorPage.Compare(walInteriorPage), "Changes vs. database page")
+                    : null);
+        }
+
+        // TODO: index leaf/interior, overflow, and freelist pages still have no Compare()
+        // implementation, so they fall back to "No comparison available for this page type"
+        // here — see https://github.com/askclees/SHARD/issues/23.
+        return null;
+    }
+
+    private IWalPageComparisonViewModel? BuildComparisonAgainstDatabase(
+        WalFrame frame, Func<SqlitePage, IWalPageComparisonViewModel?> compareAgainstDbPage)
+    {
         if (frame.Header.PageNumber > _database.PageCount)
             return null;
 
-        var dbPage = _database.ReadPage(frame.Header.PageNumber);
-        if (dbPage is not TableBTreeLeafPage dbLeafPage)
-            return null;
-
-        return new WalPageComparisonViewModel(
-            dbLeafPage.Compare(walPage),
-            "Changes vs. database page");
+        return compareAgainstDbPage(_database.ReadPage(frame.Header.PageNumber));
     }
 
     private void RefreshTransactionView()

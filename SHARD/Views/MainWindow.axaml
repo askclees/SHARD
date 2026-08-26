@@ -15,9 +15,23 @@
         DragDrop.AllowDrop="True">
 
     <Window.Resources>
-        <!-- Shared by the WAL Changes tab's single-frame view and its whole-transaction view
-             (one instance per page touched by the transaction) — see WalPageComparisonViewModel. -->
-        <DataTemplate x:Key="WalPageComparisonTemplate" x:DataType="vm:WalPageComparisonViewModel">
+        <DataTemplate x:Key="InteriorComparisonInfoRowTemplate" x:DataType="vm:InfoRow">
+            <Grid ColumnDefinitions="150,*" Margin="0,2">
+                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" FontFamily="Courier New" TextWrapping="Wrap" />
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <!-- Type-matched templates (no x:Key — Avalonia selects between them by the bound object's
+         runtime type; this must be DataTemplates, not Resources, for that automatic selection
+         to happen) for the WAL Changes tab's single-frame view and its whole-transaction view
+         (one instance per page touched by the transaction). Adding comparison support for
+         another page type (see issue #23) just means adding another *ComparisonViewModel
+         implementing IWalPageComparisonViewModel and a matching template here — no changes
+         needed at either call site. -->
+    <Window.DataTemplates>
+        <DataTemplate x:DataType="vm:WalPageComparisonViewModel">
             <StackPanel Spacing="4">
                 <TextBlock Text="{Binding ComparedAgainst}"
                            FontSize="11"
@@ -86,7 +100,48 @@
                 </Expander>
             </StackPanel>
         </DataTemplate>
-    </Window.Resources>
+
+        <DataTemplate x:DataType="vm:WalInteriorPageComparisonViewModel">
+            <StackPanel Spacing="4">
+                <TextBlock Text="{Binding ComparedAgainst}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Opacity="0.6" />
+                <TextBlock Text="No changes detected"
+                           IsVisible="{Binding HasAnyChanges,
+                                       Converter={x:Static conv:BoolConverters.Not}}"
+                           FontSize="12"
+                           Opacity="0.45"
+                           Margin="4,4,0,0" />
+                <Expander Header="{Binding AddedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasAdded}">
+                    <ItemsControl ItemsSource="{Binding AddedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <Expander Header="{Binding RemovedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasRemoved}">
+                    <ItemsControl ItemsSource="{Binding RemovedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <Expander Header="{Binding UpdatedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasUpdated}">
+                    <ItemsControl ItemsSource="{Binding UpdatedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <TextBlock Text="{Binding RightPointerChangeText, StringFormat='Rightmost pointer: {0}'}"
+                           IsVisible="{Binding HasRightPointerChange}"
+                           FontSize="12"
+                           FontFamily="Courier New"
+                           Margin="4,6,0,0" />
+            </StackPanel>
+        </DataTemplate>
+    </Window.DataTemplates>
 
     <DockPanel>
 
@@ -1712,8 +1767,7 @@
                                                                       VerticalScrollBarVisibility="Auto"
                                                                       HorizontalScrollBarVisibility="Disabled">
                                                             <ContentControl Margin="14,10"
-                                                                            Content="{Binding WalTab.SelectedFrameComparison}"
-                                                                            ContentTemplate="{StaticResource WalPageComparisonTemplate}" />
+                                                                            Content="{Binding WalTab.SelectedFrameComparison}" />
                                                         </ScrollViewer>
 
                                                         <!-- Whole-transaction view: every page touched between the previous commit and this one. -->
@@ -1741,8 +1795,7 @@
                                                                                                FontSize="12"
                                                                                                Margin="8,4" />
                                                                                     <ContentControl Margin="8,4"
-                                                                                                    Content="{Binding Comparison}"
-                                                                                                    ContentTemplate="{StaticResource WalPageComparisonTemplate}" />
+                                                                                                    Content="{Binding Comparison}" />
                                                                                 </StackPanel>
                                                                             </Expander>
                                                                         </DataTemplate>
