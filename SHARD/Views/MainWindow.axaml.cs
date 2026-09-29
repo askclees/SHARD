@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -35,6 +36,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        Title = $"SHARD — SQLite Forensic Analyser v{version?.Major}.{version?.Minor}.{version?.Build}";
 
         // Wire up named controls
         this.FindControl<MenuItem>("MenuOpen")!.Click          += OnOpenClick;
