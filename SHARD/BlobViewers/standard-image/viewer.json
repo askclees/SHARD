@@ -1,0 +1,6 @@
+{
+  "name": "Standard image (PNG/JPEG/GIF/BMP)",
+  "script": "viewer.py",
+  "check":  { "args": ["check"],  "input_mode": "stdin" },
+  "decode": { "args": ["decode"], "input_mode": "stdin" }
+}

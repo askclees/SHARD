@@ -26,4 +26,13 @@
         <AvaloniaResource Include="Assets\**" />
     </ItemGroup>
 
+    <!-- Bundled blob-viewer plugins (see SHARD.Core.BlobViewers) — plain files on disk, not
+         AvaloniaResource, since they're invoked as an external python3 script by real path,
+         not loaded through Avalonia's resource loader. -->
+    <ItemGroup>
+        <None Include="BlobViewers\**">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+
 </Project>
