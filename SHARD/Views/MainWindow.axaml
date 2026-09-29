@@ -38,6 +38,9 @@
                           Name="MenuLoadWal"
                           IsEnabled="{Binding HasDatabase}" />
                 <Separator />
+                <MenuItem Header="_Settings…"
+                          Name="MenuSettings" />
+                <Separator />
                 <MenuItem Header="E_xit"
                           Name="MenuExit" />
             </MenuItem>

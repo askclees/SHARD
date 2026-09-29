@@ -12,6 +12,7 @@ using SHARD.Core.Enums;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Settings;
 using SHARD.ViewModels;
 
 namespace SHARD.Views;
@@ -41,6 +42,7 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuSaveProject")!.Click   += OnSaveProjectClick;
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
+        this.FindControl<MenuItem>("MenuSettings")!.Click      += (_, _) => new SettingsWindow().ShowDialog(this);
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
 
@@ -288,11 +290,6 @@ public partial class MainWindow : Window
 
     // ── File open ────────────────────────────────────────────────────────────
 
-    /// <summary>Evidence files at or above this size prompt the user to build a project
-    /// on disk up front (see <see cref="OpenDatabaseFileAsync"/>) rather than a temp file,
-    /// which on some systems (e.g. a tmpfs /tmp on Linux) is effectively RAM.</summary>
-    private const long LargeDatabaseThresholdBytes = 1_073_741_824; // 1 GiB
-
     private async void OnOpenClick(object? sender, RoutedEventArgs e)
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
@@ -309,8 +306,9 @@ public partial class MainWindow : Window
     /// <summary>
     /// Opens an evidence file, first prompting for a project folder if it's large enough
     /// that building its shadow database as a temp file is worth avoiding (see
-    /// <see cref="LargeDatabaseThresholdBytes"/>). Declining the prompt (or a small file)
-    /// falls back to the normal temp-backed open.
+    /// <see cref="AppSettings.LargeDatabaseThresholdBytes"/>, configurable via the
+    /// Settings window). Declining the prompt (or a small file) falls back to the normal
+    /// temp-backed open.
     /// </summary>
     private async Task OpenDatabaseFileAsync(string path)
     {
@@ -318,7 +316,7 @@ public partial class MainWindow : Window
         try
         {
             var info = new FileInfo(path);
-            if (info.Exists && info.Length >= LargeDatabaseThresholdBytes)
+            if (info.Exists && info.Length >= AppSettings.Current.LargeDatabaseThresholdBytes)
             {
                 double gib = info.Length / 1024.0 / 1024.0 / 1024.0;
                 var dialog = new CreateProjectWindow(
