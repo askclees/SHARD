@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -12,6 +13,7 @@ using SHARD.Core.Enums;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Settings;
 using SHARD.ViewModels;
 
 namespace SHARD.Views;
@@ -35,12 +37,16 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        Title = $"SHARD — SQLite Forensic Analyser v{version?.Major}.{version?.Minor}.{version?.Build}";
+
         // Wire up named controls
         this.FindControl<MenuItem>("MenuOpen")!.Click          += OnOpenClick;
         this.FindControl<MenuItem>("MenuClose")!.Click         += OnCloseClick;
         this.FindControl<MenuItem>("MenuSaveProject")!.Click   += OnSaveProjectClick;
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
+        this.FindControl<MenuItem>("MenuSettings")!.Click      += (_, _) => new SettingsWindow().ShowDialog(this);
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
 
@@ -298,7 +304,37 @@ public partial class MainWindow : Window
         });
 
         if (files is [var file])
-            Vm.LoadFile(file.Path.LocalPath);
+            await OpenDatabaseFileAsync(file.Path.LocalPath);
+    }
+
+    /// <summary>
+    /// Opens an evidence file, first prompting for a project folder if it's large enough
+    /// that building its shadow database as a temp file is worth avoiding (see
+    /// <see cref="AppSettings.LargeDatabaseThresholdBytes"/>, configurable via the
+    /// Settings window). Declining the prompt (or a small file) falls back to the normal
+    /// temp-backed open.
+    /// </summary>
+    private async Task OpenDatabaseFileAsync(string path)
+    {
+        string? projectFolder = null;
+        try
+        {
+            var info = new FileInfo(path);
+            if (info.Exists && info.Length >= AppSettings.Current.LargeDatabaseThresholdBytes)
+            {
+                double gib = info.Length / 1024.0 / 1024.0 / 1024.0;
+                var dialog = new CreateProjectWindow(
+                    promptMessage: $"This database is {gib:F1} GB. Choose a folder on disk to build the " +
+                                   "project there directly, instead of temporary storage that may use memory.",
+                    skipButtonText: "Skip");
+                var result = await dialog.ShowDialog<CreateProjectResult?>(this);
+                if (result is not null)
+                    projectFolder = result.FolderPath;
+            }
+        }
+        catch { /* size check is best-effort — fall through to a normal open */ }
+
+        Vm.LoadFile(path, projectFolder);
     }
 
     private void OnCloseClick(object? sender, RoutedEventArgs e) =>
@@ -412,11 +448,11 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void OnDrop(object? sender, DragEventArgs e)
+    private async void OnDrop(object? sender, DragEventArgs e)
     {
         var file = e.Data.GetFiles()?.FirstOrDefault();
         if (file is not null)
-            Vm.LoadFile(file.Path.LocalPath);
+            await OpenDatabaseFileAsync(file.Path.LocalPath);
         e.Handled = true;
     }
 

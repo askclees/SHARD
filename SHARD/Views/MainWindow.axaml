@@ -7,13 +7,13 @@
         xmlns:dg="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.DataGrid"
         x:Class="SHARD.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="SHARD — SQLite Forensic Analyser"
         Icon="avares://SHARD/Assets/shard-icon.png"
         Width="1050" Height="720"
         MinWidth="800" MinHeight="500"
         WindowState="Maximized"
         DragDrop.AllowDrop="True">
 
+    <Panel>
     <DockPanel>
 
         <!-- ═══ Menu bar ═══════════════════════════════════════════════════ -->
@@ -36,6 +36,9 @@
                 <MenuItem Header="Load _WAL File…"
                           Name="MenuLoadWal"
                           IsEnabled="{Binding HasDatabase}" />
+                <Separator />
+                <MenuItem Header="_Settings…"
+                          Name="MenuSettings" />
                 <Separator />
                 <MenuItem Header="E_xit"
                           Name="MenuExit" />
@@ -1941,4 +1944,19 @@
         </Grid>
 
     </DockPanel>
+
+        <Border Background="#CC141414"
+                IsVisible="{Binding IsLoading}"
+                IsHitTestVisible="{Binding IsLoading}">
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="14">
+                <ProgressBar IsIndeterminate="True" Width="240" />
+                <TextBlock Text="{Binding LoadingStatusText}"
+                           HorizontalAlignment="Center"
+                           Foreground="White"
+                           FontSize="13" />
+            </StackPanel>
+        </Border>
+    </Panel>
 </Window>

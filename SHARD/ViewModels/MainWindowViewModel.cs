@@ -720,6 +720,24 @@ public sealed class MainWindowViewModel : ViewModelBase
         private set => this.RaiseAndSetIfChanged(ref _statusText, value);
     }
 
+    // ── Loading overlay ──────────────────────────────────────────────────
+    // LoadFile runs synchronously on the UI thread (see its doc comment), so this
+    // reports coarse-grained stage text rather than a true progress percentage —
+    // enough to show the user the app hasn't hung on a large evidence file.
+    private bool _isLoading;
+    public bool IsLoading
+    {
+        get => _isLoading;
+        private set => this.RaiseAndSetIfChanged(ref _isLoading, value);
+    }
+
+    private string _loadingStatusText = "";
+    public string LoadingStatusText
+    {
+        get => _loadingStatusText;
+        private set => this.RaiseAndSetIfChanged(ref _loadingStatusText, value);
+    }
+
     public MainWindowViewModel()
     {
         SearchTab = new SearchViewModel(
@@ -747,13 +765,22 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// Load a SQLite file by path.  Called from the view after the file picker resolves.
     /// Populates <see cref="DatabaseInfoRows"/> and (once the forensic library is
-    /// implemented) <see cref="Pages"/>.
+    /// implemented) <see cref="Pages"/>. Runs synchronously on the UI thread — there's no
+    /// background worker, so <see cref="Report"/> pumps the dispatcher after each stage
+    /// update so the window keeps repainting instead of appearing frozen on a large file.
+    /// <paramref name="projectFolder"/>, when given (e.g. for a large evidence file the user
+    /// chose to build a project for up front), builds the shadow database directly there
+    /// instead of a temp file, so the working data doesn't need to be re-saved later —
+    /// and, on systems where the temp directory is RAM-backed (e.g. tmpfs on Linux), avoids
+    /// implicitly consuming memory for a large database.
     /// </summary>
-    public void LoadFile(string path)
+    public void LoadFile(string path, string? projectFolder = null)
     {
+        IsLoading = true;
         try
         {
             CloseFile();
+            Report("Opening database…");
 
             var info = new FileInfo(path);
 
@@ -820,6 +847,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Offset 96
             DatabaseInfoRows.Add(new InfoRow("SQLite Version (96)",         $"{header.SqliteVersionNumber}  —  {FormatSqliteVersion(header.SqliteVersionNumber)}"));
 
+            Report("Reading schema…");
             foreach (var row in db.ReadSqliteMaster())
                 SchemaRows.Add(row);
 
@@ -832,8 +860,12 @@ public sealed class MainWindowViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
             this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
 
+            Report($"Scanning pages… 0/{db.PageCount:N0}");
             foreach (var page in db.ReadAllPages())
+            {
                 Pages.Add(MakePageListEntry(page));
+                if (Pages.Count % 2000 == 0) Report($"Scanning pages… {Pages.Count:N0}/{db.PageCount:N0}");
+            }
             RefreshAvailableTableNames();
             RebuildFilteredPages();
 
@@ -843,9 +875,13 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Build shadow DB immediately so Query and recovery work without a saved project.
             try
             {
-                var (project, warnings) = ShadowProject.CreateTemporary(_currentFilePath!, Database);
+                Report("Building shadow database…");
+                var (project, warnings) = projectFolder is null
+                    ? ShadowProject.CreateTemporary(_currentFilePath!, Database, msg => Report(msg))
+                    : ShadowProject.Create(_currentFilePath!, Database, projectFolder, msg => Report(msg));
                 Project = project;
 
+                Report("Recovering deleted records…");
                 foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Valid
                                                                      && d.RootPage.HasValue
                                                                      && d.Sql is not null))
@@ -885,6 +921,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                     catch { }
                 }
 
+                Report("Refreshing page list…");
                 QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
                 RefreshPagesFromShadowDatabase();
                 if (warnings.Count > 0)
@@ -901,10 +938,16 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             string walPath = path + "-wal";
             if (File.Exists(walPath))
+            {
+                Report("Loading WAL file…");
                 LoadWalFile(walPath);
+            }
 
             if (AutoCarveUnknownPagesOnOpen)
+            {
+                Report("Carving unknown pages…");
                 CarveUnknownPages(OrphanPageCarver.BuildCandidates(Database, CarveMode.Loose));
+            }
         }
         catch (InvalidDataException ex)
         {
@@ -914,6 +957,22 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             StatusText = $"Error: {ex.Message}";
         }
+        finally
+        {
+            IsLoading = false;
+            LoadingStatusText = "";
+        }
+    }
+
+    /// <summary>
+    /// Updates <see cref="LoadingStatusText"/> and pumps the Avalonia dispatcher so the
+    /// window repaints immediately — <see cref="LoadFile"/> has no background worker, so
+    /// without this the UI would otherwise only redraw once the whole synchronous load finishes.
+    /// </summary>
+    private void Report(string message)
+    {
+        LoadingStatusText = message;
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
     }
 
     /// <summary>Close the current database and reset the UI state.</summary>

@@ -27,6 +27,33 @@ public class ShadowProjectTests
     }
 
     [Fact]
+    public void Create_BuildsShadowDatabaseDirectlyInFolder_NoTempFile()
+    {
+        string projectFolder = Path.Combine(Path.GetTempPath(), $"shard_project_{Guid.NewGuid():N}");
+        try
+        {
+            string evidencePath = FixturePath("single_leaf_no_overflow.db");
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+
+            var progressMessages = new List<string>();
+            var (project, warnings) = ShadowProject.Create(evidencePath, db, projectFolder, progressMessages.Add);
+            using (project)
+            {
+                Assert.False(project.IsUnsaved);
+                Assert.Equal(projectFolder, project.ProjectFolder);
+                Assert.True(File.Exists(project.ShadowDatabasePath));
+                Assert.StartsWith(projectFolder, project.ShadowDatabasePath);
+                Assert.True(File.Exists(Path.Combine(projectFolder, "project.json")));
+                Assert.NotEmpty(progressMessages);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(projectFolder)) Directory.Delete(projectFolder, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SaveTo_WritesManifestAndShadowDatabase()
     {
         string projectFolder = Path.Combine(Path.GetTempPath(), $"shard_project_{Guid.NewGuid():N}");

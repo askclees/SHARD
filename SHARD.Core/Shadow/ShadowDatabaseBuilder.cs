@@ -43,9 +43,12 @@ public static class ShadowDatabaseBuilder
     /// <summary>
     /// Builds the shadow database. Returns a list of warning strings for any user tables that
     /// were silently skipped (e.g. unparseable SQL, empty schema). Empty list means all tables
-    /// were processed.
+    /// were processed. <paramref name="reportProgress"/>, if given, is called with coarse-grained
+    /// stage text (e.g. per-table during the row-insert pass) — useful for showing the user a
+    /// large evidence file's shadow build hasn't hung.
     /// </summary>
-    public static IReadOnlyList<string> Create(string shadowDbPath, SqliteForensicDatabase database)
+    public static IReadOnlyList<string> Create(
+        string shadowDbPath, SqliteForensicDatabase database, Action<string>? reportProgress = null)
     {
         var warnings = new List<string>();
 
@@ -54,10 +57,18 @@ public static class ShadowDatabaseBuilder
 
         CreateOverflowTable(connection);
         CreatePagesTable(connection);
+        reportProgress?.Invoke("Building shadow database — indexing pages…");
         PopulatePagesBaseline(connection, database);
         TagTablePages(connection, "sqlite_master", database.GetTreePageNumbers(1));
 
-        foreach (var row in database.ReadSqliteMaster())
+        var masterRows = database.ReadSqliteMaster().ToList();
+        int totalTables = masterRows.Count(r =>
+            r.ObjectType == SqliteMasterObjectType.Table && r.Sql is not null && r.RootPage is not null &&
+            !r.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase) &&
+            !r.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase));
+        int tableIndex = 0;
+
+        foreach (var row in masterRows)
         {
             if (row.ObjectType != SqliteMasterObjectType.Table) continue;
             if (row.Sql is null || row.RootPage is null)
@@ -71,6 +82,9 @@ public static class ShadowDatabaseBuilder
                 continue;
             }
             if (row.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase)) continue;
+
+            tableIndex++;
+            reportProgress?.Invoke($"Building shadow database — table {tableIndex}/{totalTables}: {row.Name}");
 
             var tableSchema = CreateTableParser.ExtractTableSchema(row.Sql);
             if (tableSchema is null)
@@ -113,7 +127,7 @@ public static class ShadowDatabaseBuilder
             }
         }
 
-        foreach (var row in database.ReadSqliteMaster())
+        foreach (var row in masterRows)
         {
             if (row.ObjectType != SqliteMasterObjectType.Index) continue;
             if (row.RootPage is null) continue;
