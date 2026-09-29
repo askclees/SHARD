@@ -1384,13 +1384,26 @@
                                         </Grid>
                                     </Border>
 
-                                    <!-- Include recovered records toggle -->
+                                    <!-- Record scope: live / recovered / both -->
                                     <Border Grid.Row="1"
                                             Padding="10,4"
                                             BorderThickness="0,0,0,1">
-                                        <CheckBox Content="Include recovered records"
-                                                  IsChecked="{Binding QueryTab.IncludeDeletedRecords}"
-                                                  FontSize="11" />
+                                        <StackPanel Orientation="Horizontal" Spacing="14">
+                                            <RadioButton GroupName="RecordScope"
+                                                         Content="Live only"
+                                                         IsChecked="{Binding QueryTab.IsLiveOnly}"
+                                                         FontSize="11" />
+                                            <RadioButton GroupName="RecordScope"
+                                                         Content="Recovered only"
+                                                         IsChecked="{Binding QueryTab.IsRecoveredOnly}"
+                                                         FontSize="11"
+                                                         ToolTip.Tip="Query the _shard_recovered_* table instead of the live table — includes _page_number/_cell_offset/_recovery_method so double-clicking a row jumps to where it was recovered from." />
+                                            <RadioButton GroupName="RecordScope"
+                                                         Content="Live + Recovered"
+                                                         IsChecked="{Binding QueryTab.IsLiveAndRecovered}"
+                                                         FontSize="11"
+                                                         ToolTip.Tip="Union both, tagged with an _is_recovered column." />
+                                        </StackPanel>
                                     </Border>
 
                                     <!-- Error / summary row -->

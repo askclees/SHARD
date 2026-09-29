@@ -112,6 +112,11 @@ public sealed class QueryViewModel : ViewModelBase
                     string bare = name[ShadowDatabaseBuilder.DeletedTablePrefix.Length..];
                     TableNames.Add(new QueryTableViewModel(name, $"{bare} (deleted)"));
                 }
+                else if (name.StartsWith(ShadowDatabaseBuilder.RecoveredTablePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    string bare = name[ShadowDatabaseBuilder.RecoveredTablePrefix.Length..];
+                    TableNames.Add(new QueryTableViewModel(name, $"{bare} (recovered)"));
+                }
             }
         }
         catch
@@ -122,11 +127,42 @@ public sealed class QueryViewModel : ViewModelBase
 
     // ── Options ───────────────────────────────────────────────────────────────
 
-    private bool _includeDeletedRecords;
-    public bool IncludeDeletedRecords
+    /// <summary>Which of a table's rows a query runs against: only its live shadow table,
+    /// only its <c>_shard_recovered_*</c> table, or both (unioned, tagged with an
+    /// <c>_is_recovered</c> column). See <see cref="BuildRuntimeSql"/>.</summary>
+    public enum RecordScope { Live, Recovered, LiveAndRecovered }
+
+    private RecordScope _recordScope = RecordScope.Live;
+    public RecordScope SelectedRecordScope
     {
-        get => _includeDeletedRecords;
-        set => this.RaiseAndSetIfChanged(ref _includeDeletedRecords, value);
+        get => _recordScope;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _recordScope, value);
+            this.RaisePropertyChanged(nameof(IsLiveOnly));
+            this.RaisePropertyChanged(nameof(IsRecoveredOnly));
+            this.RaisePropertyChanged(nameof(IsLiveAndRecovered));
+        }
+    }
+
+    // Exposed as three mutually-exclusive bools rather than SelectedRecordScope directly so the
+    // view can bind them straight to a RadioButton group without a value converter.
+    public bool IsLiveOnly
+    {
+        get => _recordScope == RecordScope.Live;
+        set { if (value) SelectedRecordScope = RecordScope.Live; }
+    }
+
+    public bool IsRecoveredOnly
+    {
+        get => _recordScope == RecordScope.Recovered;
+        set { if (value) SelectedRecordScope = RecordScope.Recovered; }
+    }
+
+    public bool IsLiveAndRecovered
+    {
+        get => _recordScope == RecordScope.LiveAndRecovered;
+        set { if (value) SelectedRecordScope = RecordScope.LiveAndRecovered; }
     }
 
     /// <summary>Set the query text to a default "SELECT * FROM ..." for the given table and run it.</summary>
@@ -139,33 +175,57 @@ public sealed class QueryViewModel : ViewModelBase
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";
 
     /// <summary>
-    /// If <see cref="IncludeDeletedRecords"/> is on, wraps the user's SQL in a CTE and
-    /// UNIONs the matching recovered table, so the original <see cref="QueryText"/> is
-    /// never modified. Returns the original SQL unchanged if no known table is detected.
+    /// Builds the regex that matches "FROM &lt;table&gt;" for either a quoted or bare
+    /// reference to <paramref name="tableName"/>, as it would appear in user-typed SQL.
+    /// </summary>
+    private static string BuildFromMatchPattern(string tableName) =>
+        @"\bFROM\s+(" + Regex.Escape($"\"{tableName}\"") + "|" + Regex.Escape(tableName) + @"\b)";
+
+    /// <summary>
+    /// Finds the first *live* user table (never an internal <c>_shard_*</c> table — those
+    /// are already scope-specific, so they're not candidates for further substitution)
+    /// referenced after FROM in <see cref="QueryText"/>, quoted or bare.
+    /// </summary>
+    private string? FindMatchedLiveTableName()
+    {
+        foreach (var t in TableNames)
+        {
+            if (t.ActualName.StartsWith(ShadowDatabaseBuilder.InternalTablePrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (Regex.IsMatch(QueryText, BuildFromMatchPattern(t.ActualName), RegexOptions.IgnoreCase))
+                return t.ActualName;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Rewrites the user's SQL to match <see cref="SelectedRecordScope"/>: unchanged for
+    /// <see cref="RecordScope.Live"/>; its FROM table swapped for the matching
+    /// <c>_shard_recovered_*</c> table for <see cref="RecordScope.Recovered"/> (preserving
+    /// any WHERE/ORDER BY/etc. as-is); or wrapped in a CTE and UNIONed with the recovered
+    /// table, tagged with an <c>_is_recovered</c> column, for
+    /// <see cref="RecordScope.LiveAndRecovered"/>. Returns the original SQL unchanged if no
+    /// known live table is detected.
     /// </summary>
     private string BuildRuntimeSql()
     {
-        if (!_includeDeletedRecords) return QueryText;
+        if (_recordScope == RecordScope.Live) return QueryText;
 
-        // Find the first known table referenced after FROM (quoted or bare identifier).
-        string? matched = null;
-        foreach (var t in TableNames)
-        {
-            string pattern = @"\bFROM\s+(" + Regex.Escape($"\"{t.ActualName}\"") + "|" + Regex.Escape(t.ActualName) + @"\b)";
-            if (Regex.IsMatch(QueryText, pattern, RegexOptions.IgnoreCase))
-            {
-                matched = t.ActualName;
-                break;
-            }
-        }
-
+        string? matched = FindMatchedLiveTableName();
         if (matched is null) return QueryText;
 
         string recovered = ShadowDatabaseBuilder.RecoveredTablePrefix + matched;
 
-        // Use the recovered table's actual column list on both sides of the UNION so the
-        // column counts always match, even when the live shadow table has extra columns
-        // that an older project's recovered table doesn't (e.g. _overflow_page).
+        if (_recordScope == RecordScope.Recovered)
+        {
+            return Regex.Replace(
+                QueryText, BuildFromMatchPattern(matched), "FROM " + QuoteIdentifier(recovered),
+                RegexOptions.IgnoreCase);
+        }
+
+        // LiveAndRecovered — use the recovered table's actual column list on both sides of the
+        // UNION so the column counts always match, even when the live shadow table has extra
+        // columns that an older project's recovered table doesn't (e.g. _overflow_page).
         var cols = GetTableColumns(recovered);
         if (cols.Count == 0) return QueryText;
 
@@ -306,7 +366,7 @@ public sealed class QueryViewModel : ViewModelBase
         ErrorMessage = null;
         Summary = "";
         HasRun = false;
-        IncludeDeletedRecords = false;
+        SelectedRecordScope = RecordScope.Live;
         Results.Clear();
         ColumnNames.Clear();
         TableNames.Clear();
