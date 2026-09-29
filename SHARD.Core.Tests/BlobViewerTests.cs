@@ -163,6 +163,53 @@ public class BlobViewerTests
         }
     }
 
+    /// <summary>
+    /// Regression test for a real deadlock: RunPhase used to start its stdout/stderr reads as
+    /// plain awaited Tasks (CopyToAsync/ReadToEndAsync), then block on them with
+    /// GetAwaiter().GetResult(). On a thread with an installed SynchronizationContext — e.g.
+    /// Avalonia's UI dispatcher, which is exactly the thread BlobViewerWindow calls
+    /// CanHandle/Decode from — those Tasks' continuations try to resume on that same captured
+    /// context, which the blocking wait is itself occupying, hanging forever. A plain xunit
+    /// test thread has no SynchronizationContext, so this bug didn't reproduce without
+    /// installing a stand-in one that (like a blocked UI thread) never pumps its queue.
+    /// </summary>
+    [Fact]
+    public void CanHandle_DoesNotDeadlock_UnderABlockedSynchronizationContext()
+    {
+        if (!Python3Available) return;
+
+        string root = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var dir = WriteTestPlugin(root, "ctx-plugin");
+            var plugin = new BlobViewerPlugin(LoadManifest(dir), dir);
+
+            bool? result = null;
+            var thread = new Thread(() =>
+            {
+                SynchronizationContext.SetSynchronizationContext(new NeverPumpsSynchronizationContext());
+                result = plugin.CanHandle([0xCA, 0xFE, 0x01, 0x02]);
+            });
+            thread.IsBackground = true;
+            thread.Start();
+
+            bool joined = thread.Join(TimeSpan.FromSeconds(10));
+
+            Assert.True(joined, "CanHandle deadlocked under a captured SynchronizationContext that never pumps.");
+            Assert.True(result);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>Simulates a blocked UI thread: any continuation posted to it just sits forever, unrun.</summary>
+    private sealed class NeverPumpsSynchronizationContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) { /* never invoked, by design */ }
+    }
+
     [Fact]
     public void Decode_StdinMode_RoundTripsPayloadAndKind()
     {

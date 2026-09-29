@@ -110,9 +110,21 @@ public sealed class BlobViewerPlugin
 
             // Stdout/stderr are drained on background tasks *before* writing stdin, so a
             // script producing output before we finish writing input can't deadlock on a
-            // full pipe buffer in either direction.
-            var stdoutTask = ReadAllBytesAsync(process.StandardOutput.BaseStream);
-            var stderrTask = process.StandardError.ReadToEndAsync();
+            // full pipe buffer in either direction. Task.Run (not a bare async Task) matters
+            // here: this method is called synchronously from callers that may be on a UI
+            // thread with its own SynchronizationContext (e.g. Avalonia's dispatcher) — an
+            // awaited CopyToAsync/ReadToEndAsync would try to resume its continuation on that
+            // same captured context, which the blocking GetAwaiter().GetResult() below is
+            // itself occupying, deadlocking forever. Task.Run's delegate does its blocking
+            // I/O entirely on a thread-pool thread, so completing it never needs to marshal
+            // back onto anything the caller's thread might be blocking.
+            var stdoutTask = Task.Run(() =>
+            {
+                using var buffer = new MemoryStream();
+                process.StandardOutput.BaseStream.CopyTo(buffer);
+                return buffer.ToArray();
+            });
+            var stderrTask = Task.Run(() => process.StandardError.ReadToEnd());
 
             if (stdinBytes is not null)
                 process.StandardInput.BaseStream.Write(stdinBytes, 0, stdinBytes.Length);
@@ -131,12 +143,5 @@ public sealed class BlobViewerPlugin
                 try { File.Delete(tempFile); } catch { /* best-effort cleanup */ }
             }
         }
-    }
-
-    private static async Task<byte[]> ReadAllBytesAsync(Stream stream)
-    {
-        using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer);
-        return buffer.ToArray();
     }
 }

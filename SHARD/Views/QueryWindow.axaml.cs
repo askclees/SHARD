@@ -20,15 +20,8 @@ public partial class QueryWindow : Window
     {
         var grid = this.FindControl<DataGrid>("ResultsGrid");
         if (grid is null) return;
-        grid.Columns.Clear();
-        for (int i = 0; i < vm.ColumnNames.Count; i++)
-        {
-            grid.Columns.Add(new DataGridTextColumn
-            {
-                Header  = vm.ColumnNames[i],
-                Binding = new Binding($"[{i}]"),
-            });
-        }
+
+        QueryResultsGridHelper.RebuildColumns(grid, vm, this);
     }
 
     private void OnQueryBoxKeyDown(object? sender, KeyEventArgs e)

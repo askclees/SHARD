@@ -86,15 +86,7 @@ public partial class MainWindow : Window
         var grid = this.FindControl<DataGrid>("ResultsGrid");
         if (grid is null) return;
 
-        grid.Columns.Clear();
-        for (int i = 0; i < queryTab.ColumnNames.Count; i++)
-        {
-            grid.Columns.Add(new DataGridTextColumn
-            {
-                Header = queryTab.ColumnNames[i],
-                Binding = new Binding($"[{i}]"),
-            });
-        }
+        QueryResultsGridHelper.RebuildColumns(grid, queryTab, this);
     }
 
     private void OnQueryBoxKeyDown(object? sender, KeyEventArgs e)

@@ -19,4 +19,11 @@ public static class BlobViewerRegistryFactory
 
     public static BlobViewerRegistry LoadDefault() =>
         BlobViewerRegistry.Load(BundledPluginsFolder, UserPluginsFolder);
+
+    private static readonly Lazy<BlobViewerRegistry> LazyShared = new(LoadDefault);
+
+    /// <summary>A process-lifetime cached registry for the common case (e.g. opening a blob
+    /// viewer) where re-scanning the plugin folders on every use would just be wasted I/O.
+    /// Call <see cref="LoadDefault"/> directly instead if a just-added plugin needs picking up.</summary>
+    public static BlobViewerRegistry Shared => LazyShared.Value;
 }

@@ -58,6 +58,13 @@ public sealed class QueryViewModel : ViewModelBase
     public ObservableCollection<string> ColumnNames { get; } = [];
     public ObservableCollection<QueryResultRow> Results { get; } = [];
 
+    private readonly HashSet<int> _blobColumnIndexes = [];
+
+    /// <summary>Indexes into <see cref="ColumnNames"/> of columns whose values are BLOBs —
+    /// the view renders these as a "View…" button (see <see cref="QueryResultRow.GetBlob"/>)
+    /// instead of a plain text cell.</summary>
+    public IReadOnlySet<int> BlobColumnIndexes => _blobColumnIndexes;
+
     /// <summary>
     /// Raised after every query run (success or failure), once <see cref="ColumnNames"/>
     /// and <see cref="Results"/> are fully populated. The DataGrid's columns can't be
@@ -211,6 +218,7 @@ public sealed class QueryViewModel : ViewModelBase
     {
         Results.Clear();
         ColumnNames.Clear();
+        _blobColumnIndexes.Clear();
         ErrorMessage = null;
         Summary = "";
 
@@ -236,7 +244,25 @@ public sealed class QueryViewModel : ViewModelBase
             {
                 var row = new QueryResultRow(reader.FieldCount);
                 for (int i = 0; i < reader.FieldCount; i++)
-                    row[i] = reader.IsDBNull(i) ? "NULL" : Convert.ToString(reader.GetValue(i)) ?? "";
+                {
+                    if (reader.IsDBNull(i))
+                    {
+                        row[i] = "NULL";
+                        continue;
+                    }
+
+                    object value = reader.GetValue(i);
+                    if (value is byte[] blob)
+                    {
+                        _blobColumnIndexes.Add(i);
+                        row.SetBlob(i, blob);
+                        row[i] = $"<Blob: {blob.Length:N0} bytes>";
+                    }
+                    else
+                    {
+                        row[i] = Convert.ToString(value) ?? "";
+                    }
+                }
                 Results.Add(row);
             }
 
@@ -309,6 +335,7 @@ public sealed class QueryViewModel : ViewModelBase
         IncludeDeletedRecords = false;
         Results.Clear();
         ColumnNames.Clear();
+        _blobColumnIndexes.Clear();
         TableNames.Clear();
         _shadowDbPath = null;
         this.RaisePropertyChanged(nameof(HasResults));
