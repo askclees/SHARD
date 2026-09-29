@@ -14,6 +14,7 @@
         WindowState="Maximized"
         DragDrop.AllowDrop="True">
 
+    <Panel>
     <DockPanel>
 
         <!-- ═══ Menu bar ═══════════════════════════════════════════════════ -->
@@ -1941,4 +1942,19 @@
         </Grid>
 
     </DockPanel>
+
+        <Border Background="#CC141414"
+                IsVisible="{Binding IsLoading}"
+                IsHitTestVisible="{Binding IsLoading}">
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="14">
+                <ProgressBar IsIndeterminate="True" Width="240" />
+                <TextBlock Text="{Binding LoadingStatusText}"
+                           HorizontalAlignment="Center"
+                           Foreground="White"
+                           FontSize="13" />
+            </StackPanel>
+        </Border>
+    </Panel>
 </Window>

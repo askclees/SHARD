@@ -288,6 +288,11 @@ public partial class MainWindow : Window
 
     // ── File open ────────────────────────────────────────────────────────────
 
+    /// <summary>Evidence files at or above this size prompt the user to build a project
+    /// on disk up front (see <see cref="OpenDatabaseFileAsync"/>) rather than a temp file,
+    /// which on some systems (e.g. a tmpfs /tmp on Linux) is effectively RAM.</summary>
+    private const long LargeDatabaseThresholdBytes = 1_073_741_824; // 1 GiB
+
     private async void OnOpenClick(object? sender, RoutedEventArgs e)
     {
         var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
@@ -298,7 +303,36 @@ public partial class MainWindow : Window
         });
 
         if (files is [var file])
-            Vm.LoadFile(file.Path.LocalPath);
+            await OpenDatabaseFileAsync(file.Path.LocalPath);
+    }
+
+    /// <summary>
+    /// Opens an evidence file, first prompting for a project folder if it's large enough
+    /// that building its shadow database as a temp file is worth avoiding (see
+    /// <see cref="LargeDatabaseThresholdBytes"/>). Declining the prompt (or a small file)
+    /// falls back to the normal temp-backed open.
+    /// </summary>
+    private async Task OpenDatabaseFileAsync(string path)
+    {
+        string? projectFolder = null;
+        try
+        {
+            var info = new FileInfo(path);
+            if (info.Exists && info.Length >= LargeDatabaseThresholdBytes)
+            {
+                double gib = info.Length / 1024.0 / 1024.0 / 1024.0;
+                var dialog = new CreateProjectWindow(
+                    promptMessage: $"This database is {gib:F1} GB. Choose a folder on disk to build the " +
+                                   "project there directly, instead of temporary storage that may use memory.",
+                    skipButtonText: "Skip");
+                var result = await dialog.ShowDialog<CreateProjectResult?>(this);
+                if (result is not null)
+                    projectFolder = result.FolderPath;
+            }
+        }
+        catch { /* size check is best-effort — fall through to a normal open */ }
+
+        Vm.LoadFile(path, projectFolder);
     }
 
     private void OnCloseClick(object? sender, RoutedEventArgs e) =>
@@ -412,11 +446,11 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void OnDrop(object? sender, DragEventArgs e)
+    private async void OnDrop(object? sender, DragEventArgs e)
     {
         var file = e.Data.GetFiles()?.FirstOrDefault();
         if (file is not null)
-            Vm.LoadFile(file.Path.LocalPath);
+            await OpenDatabaseFileAsync(file.Path.LocalPath);
         e.Handled = true;
     }
 

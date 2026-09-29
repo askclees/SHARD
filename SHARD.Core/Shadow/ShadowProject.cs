@@ -41,9 +41,12 @@ public sealed class ShadowProject : IDisposable
     /// <summary>
     /// Create a temporary project backed by a temp file, immediately usable for
     /// queries and record recovery. Call <see cref="SaveTo"/> to persist to disk.
+    /// Note: the temp file lands wherever <see cref="Path.GetTempPath"/> resolves to —
+    /// on some systems (e.g. a tmpfs-mounted /tmp on Linux) that's RAM-backed, so for a
+    /// large evidence file prefer <see cref="Create"/> with a folder on real disk instead.
     /// </summary>
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) CreateTemporary(
-        string evidenceFilePath, SqliteForensicDatabase database)
+        string evidenceFilePath, SqliteForensicDatabase database, Action<string>? reportProgress = null)
     {
         // GetTempFileName creates a zero-byte file; rename with .db so SQLite is happy.
         string tempBase = Path.GetTempFileName();
@@ -56,8 +59,38 @@ public sealed class ShadowProject : IDisposable
             CreatedUtc       = DateTime.UtcNow,
         };
 
-        var warnings = ShadowDatabaseBuilder.Create(tempPath, database);
+        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, reportProgress);
         return (new ShadowProject(null, manifest, tempPath, tempPath), warnings);
+    }
+
+    /// <summary>
+    /// Create a project whose shadow database is built directly in <paramref name="projectFolder"/>
+    /// on disk — never touching temp storage — and is already "saved" (<see cref="IsUnsaved"/> is
+    /// false). Intended for a large evidence file where the caller wants to avoid the temp file that
+    /// <see cref="CreateTemporary"/> would otherwise use (see its remarks).
+    /// </summary>
+    public static (ShadowProject Project, IReadOnlyList<string> Warnings) Create(
+        string evidenceFilePath, SqliteForensicDatabase database, string projectFolder, Action<string>? reportProgress = null)
+    {
+        Directory.CreateDirectory(projectFolder);
+
+        var manifest = new ProjectManifest
+        {
+            EvidenceFilePath = evidenceFilePath,
+            CreatedUtc       = DateTime.UtcNow,
+        };
+
+        string shadowDbPath = Path.Combine(projectFolder, manifest.ShadowDatabaseFileName);
+        if (File.Exists(shadowDbPath))
+            throw new InvalidOperationException($"A shadow database already exists at '{shadowDbPath}'.");
+
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, reportProgress);
+
+        File.WriteAllText(
+            Path.Combine(projectFolder, "project.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+
+        return (new ShadowProject(projectFolder, manifest, shadowDbPath, null), warnings);
     }
 
     /// <summary>

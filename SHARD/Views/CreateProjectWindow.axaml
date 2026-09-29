@@ -2,8 +2,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="SHARD.Views.CreateProjectWindow"
         Title="Create Project"
-        Width="520" Height="200"
-        MinWidth="420" MinHeight="200"
+        Width="520" Height="230"
+        MinWidth="420" MinHeight="230"
         CanResize="False"
         WindowStartupLocation="CenterOwner">
 
@@ -13,9 +13,11 @@
             <TextBlock Text="Project folder"
                        FontWeight="SemiBold"
                        FontSize="13" />
-            <TextBlock Text="A manifest and shadow database will be created in this folder."
+            <TextBlock Name="DescriptionText"
+                       Text="A manifest and shadow database will be created in this folder."
                        Opacity="0.6"
-                       FontSize="12" />
+                       FontSize="12"
+                       TextWrapping="Wrap" />
             <Grid ColumnDefinitions="*,Auto">
                 <TextBox Grid.Column="0"
                          Name="PathBox"
