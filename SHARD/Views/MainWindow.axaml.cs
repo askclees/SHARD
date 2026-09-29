@@ -312,9 +312,10 @@ public partial class MainWindow : Window
     /// that building its shadow database as a temp file is worth avoiding (see
     /// <see cref="AppSettings.LargeDatabaseThresholdBytes"/>, configurable via the
     /// Settings window). Declining the prompt (or a small file) falls back to the normal
-    /// temp-backed open.
+    /// temp-backed open. Internal (not private) so <see cref="App"/> can call it for a file
+    /// passed on the command line (e.g. a Windows "Open with SHARD" file association).
     /// </summary>
-    private async Task OpenDatabaseFileAsync(string path)
+    internal async Task OpenDatabaseFileAsync(string path)
     {
         string? projectFolder = null;
         try
