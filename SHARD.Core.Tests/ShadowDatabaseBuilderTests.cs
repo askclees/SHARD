@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using SHARD.Core.Recovery;
 using SHARD.Core.Shadow;
 
 namespace SHARD.Core.Tests;
@@ -308,6 +309,83 @@ public class ShadowDatabaseBuilderTests
         finally
         {
             if (File.Exists(shadowPath)) File.Delete(shadowPath);
+        }
+    }
+
+    /// <summary>Builds an evidence db where a plain DELETE (insert then delete, no checkpoint
+    /// tricks) is empirically known to populate only <c>_shard_</c>'s "freeblock" recovery
+    /// method — verified by hand before writing this test — so RecoveryFlags.FreeblockCarving
+    /// is the one flag with a reliable, simple fixture. The other two in-tree flags
+    /// (DeletedCells, InTreeCarving) share the exact same code shape (see InsertDeletedRows) so
+    /// this is exercised here as proof the per-flag gating is wired correctly and doesn't leak
+    /// across flags, not because the other two flags are untested in principle.</summary>
+    private static string BuildEvidenceWithFreeblockDeletedRows()
+    {
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"shard_evidence_{Guid.NewGuid():N}.db");
+        using var setup = new SqliteConnection($"Data Source={evidencePath}");
+        setup.Open();
+        using var cmd = setup.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT);
+            INSERT INTO people (name) VALUES ('Alice'), ('Bob'), ('Charlie'), ('Dave'), ('Eve');
+            DELETE FROM people WHERE name IN ('Bob', 'Dave');
+            """;
+        cmd.ExecuteNonQuery();
+        return evidencePath;
+    }
+
+    private static int CountRecoveredRows(string shadowPath, string table)
+    {
+        using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+        shadow.Open();
+        using var cmd = shadow.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM \"{ShadowDatabaseBuilder.RecoveredTablePrefix}{table}\"";
+        return (int)(long)cmd.ExecuteScalar()!;
+    }
+
+    [Theory]
+    [InlineData(true,  true,  true,  2)] // all on (default) — both deleted rows recovered via freeblock
+    [InlineData(false, true,  true,  2)] // DeletedCells off — no effect; this fixture never triggers that category
+    [InlineData(true,  false, true,  2)] // InTreeCarving off — no effect; this fixture never triggers that category
+    [InlineData(true,  true,  false, 0)] // FreeblockCarving off — the only flag that actually gates this fixture's rows
+    public void Create_FreeblockCarvingFlag_GatesIndependently(
+        bool deletedCells, bool inTreeCarving, bool freeblockCarving, int expectedRecoveredCount)
+    {
+        string evidencePath = BuildEvidenceWithFreeblockDeletedRows();
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            var flags = new RecoveryFlags(DeletedCells: deletedCells, InTreeCarving: inTreeCarving, FreeblockCarving: freeblockCarving);
+            ShadowDatabaseBuilder.Create(shadowPath, db, flags);
+
+            Assert.Equal(expectedRecoveredCount, CountRecoveredRows(shadowPath, "people"));
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
+        }
+    }
+
+    [Fact]
+    public void Create_OmittingFlagsArgument_MatchesAllFlagsOnDefault()
+    {
+        // The pre-refactor call shape — Create(path, db) with no flags argument at all — must
+        // keep recovering exactly what it always did, since RecoveryFlags default to true.
+        string evidencePath = BuildEvidenceWithFreeblockDeletedRows();
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            ShadowDatabaseBuilder.Create(shadowPath, db); // no flags argument
+
+            Assert.Equal(2, CountRecoveredRows(shadowPath, "people"));
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
         }
     }
 }

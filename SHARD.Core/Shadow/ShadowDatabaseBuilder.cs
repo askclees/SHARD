@@ -45,11 +45,15 @@ public static class ShadowDatabaseBuilder
     /// were silently skipped (e.g. unparseable SQL, empty schema). Empty list means all tables
     /// were processed. <paramref name="reportProgress"/>, if given, is called with coarse-grained
     /// stage text (e.g. per-table during the row-insert pass) — useful for showing the user a
-    /// large evidence file's shadow build hasn't hung.
+    /// large evidence file's shadow build hasn't hung. <paramref name="flags"/> controls which
+    /// in-tree recovery types run per table (null means <see cref="RecoveryFlags.Default"/> —
+    /// everything on); live rows are always inserted regardless.
     /// </summary>
     public static IReadOnlyList<string> Create(
-        string shadowDbPath, SqliteForensicDatabase database, Action<string>? reportProgress = null)
+        string shadowDbPath, SqliteForensicDatabase database,
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null)
     {
+        flags ??= RecoveryFlags.Default;
         var warnings = new List<string>();
 
         using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
@@ -114,7 +118,7 @@ public static class ShadowDatabaseBuilder
                 }
 
                 InsertRows(connection, tableSchema, database.ReadTableRows(row.RootPage.Value));
-                InsertDeletedRows(connection, tableSchema, row.RootPage.Value, database);
+                InsertDeletedRows(connection, tableSchema, row.RootPage.Value, database, flags);
                 TagTablePages(connection, tableSchema.TableName, database.GetTreePageNumbers(row.RootPage.Value));
             }
             catch (Exception ex)
@@ -447,7 +451,8 @@ public static class ShadowDatabaseBuilder
         transaction.Commit();
     }
 
-    private static void InsertDeletedRows(SqliteConnection connection, TableSchema schema, uint rootPage, SqliteForensicDatabase database)
+    private static void InsertDeletedRows(
+        SqliteConnection connection, TableSchema schema, uint rootPage, SqliteForensicDatabase database, RecoveryFlags flags)
     {
         using var transaction = connection.BeginTransaction();
         string recoveredTable = RecoveredTablePrefix + schema.TableName;
@@ -461,22 +466,30 @@ public static class ShadowDatabaseBuilder
 
         string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
 
-        var recordStructure = RecordStructure.FromSchema(schema);
+        bool needsRecordStructure = flags.InTreeCarving || flags.FreeblockCarving;
+        var recordStructure = needsRecordStructure ? RecordStructure.FromSchema(schema) : null;
 
         foreach (uint pageNum in database.GetTreePageNumbers(rootPage))
         {
             if (database.ReadPage(pageNum) is not TableBTreeLeafPage tlp) continue;
 
-            foreach (var cell in tlp.DeletedCells)
-                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell);
+            if (flags.DeletedCells)
+                foreach (var cell in tlp.DeletedCells)
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell);
 
-            tlp.CarveDeletedCells(recordStructure);
-            foreach (var cell in tlp.CarvedCells)
-                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving);
+            if (flags.InTreeCarving)
+            {
+                tlp.CarveDeletedCells(recordStructure!);
+                foreach (var cell in tlp.CarvedCells)
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving);
+            }
 
-            tlp.CarveFreeblockCells(recordStructure);
-            foreach (var cell in tlp.FreeblockCells)
-                InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock);
+            if (flags.FreeblockCarving)
+            {
+                tlp.CarveFreeblockCells(recordStructure!);
+                foreach (var cell in tlp.FreeblockCells)
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock);
+            }
         }
 
         transaction.Commit();

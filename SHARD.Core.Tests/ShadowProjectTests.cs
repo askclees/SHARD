@@ -36,7 +36,7 @@ public class ShadowProjectTests
             using var db = SqliteForensicDatabase.Open(evidencePath);
 
             var progressMessages = new List<string>();
-            var (project, warnings) = ShadowProject.Create(evidencePath, db, projectFolder, progressMessages.Add);
+            var (project, warnings) = ShadowProject.Create(evidencePath, db, projectFolder, reportProgress: progressMessages.Add);
             using (project)
             {
                 Assert.False(project.IsUnsaved);

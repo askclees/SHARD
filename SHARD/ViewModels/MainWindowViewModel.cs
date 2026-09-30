@@ -877,8 +877,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 Report("Building shadow database…");
                 var (project, warnings) = projectFolder is null
-                    ? ShadowProject.CreateTemporary(_currentFilePath!, Database, msg => Report(msg))
-                    : ShadowProject.Create(_currentFilePath!, Database, projectFolder, msg => Report(msg));
+                    ? ShadowProject.CreateTemporary(_currentFilePath!, Database, reportProgress: msg => Report(msg))
+                    : ShadowProject.Create(_currentFilePath!, Database, projectFolder, reportProgress: msg => Report(msg));
                 Project = project;
 
                 Report("Recovering deleted records…");

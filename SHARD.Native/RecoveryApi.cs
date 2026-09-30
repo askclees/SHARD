@@ -70,7 +70,7 @@ public static class RecoveryApi
                 : JsonSerializer.Deserialize(optionsJson, NativeJsonContext.Default.RecoverOptionsInput) ?? new RecoverOptionsInput();
 
             var options = new RecoveryOptions(
-                ProcessWal: input.ProcessWal,
+                Flags: new RecoveryFlags(ProcessWal: input.ProcessWal),
                 CarveMode: input.CarveMode is null ? null : ParseCarveMode(input.CarveMode),
                 CarveTableFilter: input.CarveTableFilter);
 
