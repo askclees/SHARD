@@ -38,6 +38,11 @@ public sealed class EvidenceSession : IDisposable
     }
 
     /// <summary>Opens the evidence file and detects/loads its sibling WAL file, if present.</summary>
+    // TODO: rollback-journal (-journal) support. Not implemented anywhere in SHARD today — only
+    // the main DB header's write-version byte is decoded as a "Rollback Journal" vs "WAL" label
+    // (DatabaseHeader.cs), never acted on. Add a DetectJournal(evidencePath, database) alongside
+    // DetectWal below, plus a RollbackJournal reader (nothing to build on yet — WalFile is the
+    // closest structural analog) and a Journal property here.
     public static EvidenceSession Open(string evidencePath)
     {
         var database = SqliteForensicDatabase.Open(evidencePath);
