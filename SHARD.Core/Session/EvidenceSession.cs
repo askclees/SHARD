@@ -145,19 +145,23 @@ public sealed class EvidenceSession : IDisposable
     }
 
     /// <summary>
-    /// Syncs live WAL-only records and recovers WAL-deleted records into <paramref name="project"/>.
-    /// A no-op returning (0, 0) if this session has no WAL or <see cref="RecoveryFlags.ProcessWal"/>
-    /// is off. Each half fails independently (matching this operation's previous behavior) — a sync
-    /// failure doesn't prevent the deleted-record recovery half from still running, and vice versa.
+    /// Syncs live WAL-only records and recovers WAL-deleted records from <paramref name="wal"/>
+    /// into <paramref name="project"/>. Takes the WAL explicitly rather than always using this
+    /// session's own auto-detected <see cref="Wal"/> — a caller may be syncing a manually-loaded
+    /// WAL file from an arbitrary path instead (e.g. the GUI's "Load WAL File…" action), which
+    /// doesn't have to be this evidence file's sibling. A no-op returning (0, 0) if
+    /// <see cref="RecoveryFlags.ProcessWal"/> is off. Each half fails independently (matching
+    /// this operation's previous behavior) — a sync failure doesn't prevent the deleted-record
+    /// recovery half from still running, and vice versa.
     /// </summary>
-    public (int Synced, int Recovered) SyncAndRecoverWal(ShadowProject project, RecoveryFlags? flags = null)
+    public (int Synced, int Recovered) SyncAndRecoverWal(ShadowProject project, WalFile wal, RecoveryFlags? flags = null)
     {
         flags ??= RecoveryFlags.Default;
-        if (Wal is null || !flags.ProcessWal) return (0, 0);
+        if (!flags.ProcessWal) return (0, 0);
 
         int synced = 0, recovered = 0;
-        try { synced = project.SyncWalFramesToShadow(Wal, Database); } catch { }
-        try { recovered = project.RecoverWalDeletedRows(Wal, Database); } catch { }
+        try { synced = project.SyncWalFramesToShadow(wal, Database); } catch { }
+        try { recovered = project.RecoverWalDeletedRows(wal, Database); } catch { }
         return (synced, recovered);
     }
 

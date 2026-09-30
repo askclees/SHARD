@@ -10,6 +10,7 @@ using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Core.Session;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
 
@@ -36,6 +37,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    private EvidenceSession? _session;
     private Dictionary<uint, string>? _pageTableMap;
     private readonly Dictionary<string, TableSchema> _manualSchemas  = new();
     private readonly Dictionary<uint, TableSchema>   _freedPageSchemas = new();
@@ -784,7 +786,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var info = new FileInfo(path);
 
-            var db = SqliteForensicDatabase.Open(path);
+            _session = EvidenceSession.Open(path);
+            var db = _session.Database;
             Database = db;
             _currentFilePath = path;
             _pageTableMap = db.BuildPageTableMap();
@@ -882,44 +885,17 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Project = project;
 
                 Report("Recovering deleted records…");
-                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Valid
-                                                                     && d.RootPage.HasValue
-                                                                     && d.Sql is not null))
-                {
-                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
-                    if (schema is null) continue;
-                    try
-                    {
-                        var pageNums = Database.GetTreePageNumbers(deletedVm.RootPage!.Value).ToList();
-                        project.AddDeletedTableRecords(schema, Database.ReadTableRows(deletedVm.RootPage!.Value));
-                        project.TagDeletedTablePages(schema.TableName, pageNums);
-                    }
-                    catch { }
-                }
+                var droppedTables = DeletedSchemaRows
+                    .Where(d => d.RootPage.HasValue && d.Sql is not null)
+                    .Select(d => (Schema: CreateTableParser.ExtractTableSchema(d.Sql!), RootPage: d.RootPage!.Value, d.RootPageStatus))
+                    .Where(t => t.Schema is not null)
+                    .Select(t => (t.Schema!, t.RootPage, t.RootPageStatus))
+                    .ToList();
 
-                // Carve freed pages: the root page is now a freelist page but may still
-                // hold the original table's bytes.
-                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Freed
-                                                                     && d.RootPage.HasValue
-                                                                     && d.Sql is not null))
-                {
-                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
-                    if (schema is null) continue;
-                    try
-                    {
-                        var rs       = RecordStructure.FromSchema(schema);
-                        var pageData = Database.ReadPage(deletedVm.RootPage!.Value).Data;
-                        var carved   = DeletedRecordParser.CarveRawBytes(pageData, Database.Header.TextEncoding, rs);
-                        if (carved.Count > 0)
-                        {
-                            project.AddFreedPageCarvedRecords(schema, carved, deletedVm.RootPage!.Value);
-                            project.TagDeletedTablePages(schema.TableName, [deletedVm.RootPage!.Value]);
-                        }
-                        // Register schema so navigating to the page triggers lazy carving for highlights.
-                        _freedPageSchemas[deletedVm.RootPage!.Value] = schema;
-                    }
-                    catch { }
-                }
+                var recoveredDropped = _session.RecoverDroppedTables(project, droppedTables);
+                foreach (var entry in recoveredDropped.Where(e => e.Status == RootPageStatus.Freed))
+                    // Register schema so navigating to the page triggers lazy carving for highlights.
+                    _freedPageSchemas[entry.RootPage] = entry.Schema;
 
                 Report("Refreshing page list…");
                 QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
@@ -936,11 +912,10 @@ public sealed class MainWindowViewModel : ViewModelBase
                 StatusText += $"  ·  Shadow DB failed: {ex.Message}";
             }
 
-            string walPath = path + "-wal";
-            if (File.Exists(walPath))
+            if (_session.HasWal)
             {
                 Report("Loading WAL file…");
-                LoadWalFile(walPath);
+                LoadWalFile(path + "-wal", _session.Wal);
             }
 
             if (AutoCarveUnknownPagesOnOpen)
@@ -978,7 +953,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Close the current database and reset the UI state.</summary>
     public void CloseFile()
     {
-        Database?.Dispose();
+        _session?.Dispose(); // disposes Database — session owns that lifetime now
+        _session = null;
         _carveTab = null; // clear before Database, so Database's setter-driven CarveTab notification sees it already gone
         Database = null;
         _currentFilePath = null;
@@ -1120,12 +1096,17 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>When true, <see cref="LoadFile"/> automatically runs <see cref="CarveUnknownPages"/> in loose mode right after a file finishes loading.</summary>
     public bool AutoCarveUnknownPagesOnOpen { get; set; }
 
-    public void LoadWalFile(string walPath)
+    /// <summary><paramref name="preloaded"/>, if given, is used instead of re-parsing
+    /// <paramref name="walPath"/> — the auto-detected-sibling load path in <see cref="LoadFile"/>
+    /// already has it via <see cref="EvidenceSession.Wal"/>. The manual "Load WAL File…" action
+    /// always omits it, since that can point at an arbitrary path unrelated to the open evidence
+    /// file's own sibling.</summary>
+    public void LoadWalFile(string walPath, WalFile? preloaded = null)
     {
         if (Database is null) return;
         try
         {
-            var wal = new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
+            var wal = preloaded ?? new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
             WalTab = new WalViewModel(walPath, wal, Database);
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
 
@@ -1142,28 +1123,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private void SyncWalToProject()
     {
-        if (Project is null || WalTab is null || Database is null) return;
-        try
-        {
-            int added = Project.SyncWalFramesToShadow(WalTab.WalFile, Database);
-            if (added > 0)
-                StatusText += $"  ·  {added} WAL record{(added == 1 ? "" : "s")} synced";
-        }
-        catch (Exception ex)
-        {
-            StatusText += $"  ·  WAL sync failed: {ex.Message}";
-        }
-
-        try
-        {
-            int recovered = Project.RecoverWalDeletedRows(WalTab.WalFile, Database);
-            if (recovered > 0)
-                StatusText += $"  ·  {recovered} deleted WAL record{(recovered == 1 ? "" : "s")} recovered";
-        }
-        catch (Exception ex)
-        {
-            StatusText += $"  ·  WAL deleted recovery failed: {ex.Message}";
-        }
+        if (Project is null || WalTab is null || _session is null) return;
+        var (synced, recovered) = _session.SyncAndRecoverWal(Project, WalTab.WalFile);
+        if (synced > 0)
+            StatusText += $"  ·  {synced} WAL record{(synced == 1 ? "" : "s")} synced";
+        if (recovered > 0)
+            StatusText += $"  ·  {recovered} deleted WAL record{(recovered == 1 ? "" : "s")} recovered";
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
