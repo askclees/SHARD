@@ -70,15 +70,35 @@ public class EvidenceSessionTests
     }
 
     [Fact]
-    public void SyncAndRecoverWal_NoWal_ReturnsZeroWithoutThrowing()
+    public void SyncAndRecoverWal_ProcessWalFlagOff_ReturnsZero_EvenWithARealWal()
     {
-        using var project = MakeProject(FixturePath("single_leaf_no_overflow.db"), out _);
-        using var session = EvidenceSession.Open(FixturePath("single_leaf_no_overflow.db"));
+        // The GUI passes whatever WAL is currently loaded (auto-detected or manually opened via
+        // "Load WAL File…") explicitly, rather than this session always using its own — so the
+        // flag gate must hold regardless of which WalFile is handed in.
+        string evidencePath = WalFixturePath("places_wal_multi_page.db");
+        using var project = MakeProject(evidencePath, out var session);
+        using (session)
+        {
+            var (synced, recovered) = session.SyncAndRecoverWal(project, session.Wal!, new RecoveryFlags(ProcessWal: false));
 
-        var (synced, recovered) = session.SyncAndRecoverWal(project);
+            Assert.Equal(0, synced);
+            Assert.Equal(0, recovered);
+        }
+    }
 
-        Assert.Equal(0, synced);
-        Assert.Equal(0, recovered);
+    [Fact]
+    public void SyncAndRecoverWal_RecoversDeletedRows_ForAnyGivenWalFile()
+    {
+        // Matches BuildShadowDatabase_ProcessesWalDeletedRecords_WhenFlagOn's expectation (17
+        // historical WAL-deleted rows), but exercised through the explicit-WalFile progressive
+        // path instead of the one-shot batch path.
+        string evidencePath = WalFixturePath("places_wal_multi_page.db");
+        using var project = MakeProject(evidencePath, out var session);
+        using (session)
+        {
+            var (_, recovered) = session.SyncAndRecoverWal(project, session.Wal!);
+            Assert.Equal(17, recovered);
+        }
     }
 
     [Fact]
