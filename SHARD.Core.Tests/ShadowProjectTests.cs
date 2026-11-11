@@ -15,15 +15,70 @@ public class ShadowProjectTests
         using var db = SqliteForensicDatabase.Open(evidencePath);
 
         var (project, warnings) = ShadowProject.CreateTemporary(evidencePath, db);
+        string tempPath = project.ShadowDatabasePath;
         using (project)
         {
             Assert.True(project.IsUnsaved);
             Assert.Null(project.ProjectFolder);
-            Assert.True(File.Exists(project.ShadowDatabasePath));
+            Assert.True(File.Exists(tempPath));
+            project.ReadPageTypes();   // leaves a pooled connection to the temp file, as the GUI does
         }
 
-        // Temp file should be cleaned up after Dispose.
-        // (File.Exists may still return true briefly on some OSes; we just verify no exception.)
+        // Temp file is deleted on Dispose - on Windows this fails if a pooled connection still has it open
+        Assert.False(File.Exists(tempPath));
+    }
+
+    /// <summary>Paths of files this process still has open, read from /proc (Linux only).</summary>
+    private static List<string> OpenFileHandles() =>
+        new DirectoryInfo("/proc/self/fd").GetFileSystemInfos()
+            .Select(f => { try { return f.LinkTarget ?? ""; } catch { return ""; } })
+            .ToList();
+
+    [Fact]
+    public void Dispose_ReleasesEveryHandleToTheTempDatabase()
+    {
+        // Linux lets an open file be deleted, so File.Exists alone can't catch a leaked handle here;
+        // check the process's open file handles instead. Windows is covered by the test above.
+        if (!OperatingSystem.IsLinux()) return;
+
+        string evidencePath = FixturePath("single_leaf_no_overflow.db");
+        using var db = SqliteForensicDatabase.Open(evidencePath);
+        var (project, _) = ShadowProject.CreateTemporary(evidencePath, db);
+        string tempPath = project.ShadowDatabasePath;
+        project.ReadPageTypes();
+
+        project.Dispose();
+
+        Assert.DoesNotContain(OpenFileHandles(), h => h.StartsWith(tempPath));
+    }
+
+    [Fact]
+    public void SaveTo_ReleasesEveryHandleToTheTempDatabase()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string projectFolder = Path.Combine(Path.GetTempPath(), $"shard_project_{Guid.NewGuid():N}");
+        try
+        {
+            string evidencePath = FixturePath("single_leaf_no_overflow.db");
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            var (project, _) = ShadowProject.CreateTemporary(evidencePath, db);
+            using (project)
+            {
+                string tempPath = project.ShadowDatabasePath;
+                project.ReadPageTypes();
+
+                project.SaveTo(projectFolder);
+
+                Assert.False(File.Exists(tempPath));
+                Assert.DoesNotContain(OpenFileHandles(), h => h.StartsWith(tempPath));
+            }
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(projectFolder)) Directory.Delete(projectFolder, recursive: true);
+        }
     }
 
     [Fact]

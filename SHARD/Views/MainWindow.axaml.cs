@@ -61,6 +61,15 @@ public partial class MainWindow : Window
         AddHandler(DragDrop.DropEvent,     OnDrop);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
 
+        // Clean up the open file's temp shadow database (if any — CloseFile no-ops otherwise)
+        // however the window closes: the X button, Alt+F4, or Exit (which just calls Close()
+        // too, so this covers it as well) — without this, an unsaved project's temp .db is
+        // orphaned on disk, since nothing else in the app ever deletes it on a normal quit.
+        Closing += (_, _) =>
+        {
+            if (DataContext is MainWindowViewModel vm) vm.CloseFile();
+        };
+
         // Scroll hex view to selected schema row after bindings settle
         DataContextChanged += (_, _) =>
         {
