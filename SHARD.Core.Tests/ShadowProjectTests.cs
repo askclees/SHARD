@@ -76,7 +76,6 @@ public class ShadowProjectTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             if (Directory.Exists(projectFolder)) Directory.Delete(projectFolder, recursive: true);
         }
     }

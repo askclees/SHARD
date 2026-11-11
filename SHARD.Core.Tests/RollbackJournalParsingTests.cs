@@ -463,7 +463,6 @@ public class RollbackJournalParsingTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             foreach (string p in new[] { dbPath, dbPath + "-journal", copyPath })
                 if (File.Exists(p)) File.Delete(p);
         }
