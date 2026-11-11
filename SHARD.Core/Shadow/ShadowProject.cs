@@ -114,6 +114,7 @@ public sealed class ShadowProject : IDisposable
 
         if (_tempDbPath is not null)
         {
+            ReleasePooledConnections();
             try { File.Delete(_tempDbPath); } catch { }
             _tempDbPath = null;
         }
@@ -305,6 +306,16 @@ public sealed class ShadowProject : IDisposable
     public void Dispose()
     {
         if (_tempDbPath is not null && File.Exists(_tempDbPath))
+        {
+            ReleasePooledConnections();
             try { File.Delete(_tempDbPath); } catch { }
+        }
     }
+
+    /// <summary>
+    /// Microsoft.Data.Sqlite pools connections, so a disposed connection still holds its file open.
+    /// Windows refuses to delete an open file, which left the temp shadow database behind; closing
+    /// the idle pooled connections first lets the delete succeed. Connections in use are unaffected.
+    /// </summary>
+    private static void ReleasePooledConnections() => SqliteConnection.ClearAllPools();
 }
