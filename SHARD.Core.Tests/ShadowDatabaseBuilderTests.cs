@@ -310,4 +310,50 @@ public class ShadowDatabaseBuilderTests
             if (File.Exists(shadowPath)) File.Delete(shadowPath);
         }
     }
+
+    [Fact]
+    public void Create_FillsSchemaDefault_ForRowsPredatingAlterTableAddColumn()
+    {
+        // Reproduces the WhatsApp msgstore.db "NOT NULL constraint failed" bug: a row written
+        // before a later "ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT ..." migration has no
+        // physical value for that column, and must fall back to the schema's DEFAULT rather than
+        // NULL when mirrored into the shadow database's live table.
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"shard_evidence_{Guid.NewGuid():N}.db");
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var setup = new SqliteConnection($"Data Source={evidencePath}"))
+            {
+                setup.Open();
+                using var cmd = setup.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE message_group (id INTEGER PRIMARY KEY, name TEXT);
+                    INSERT INTO message_group (name) VALUES ('OldGroup');
+                    ALTER TABLE message_group ADD COLUMN group_type INTEGER NOT NULL DEFAULT 0;
+                    INSERT INTO message_group (name, group_type) VALUES ('NewGroup', 2);
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            var warnings = ShadowDatabaseBuilder.Create(shadowPath, db);
+            Assert.Empty(warnings);
+
+            using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+            shadow.Open();
+
+            using var oldRowCommand = shadow.CreateCommand();
+            oldRowCommand.CommandText = "SELECT group_type FROM message_group WHERE name = 'OldGroup'";
+            Assert.Equal(0L, (long)oldRowCommand.ExecuteScalar()!);
+
+            using var newRowCommand = shadow.CreateCommand();
+            newRowCommand.CommandText = "SELECT group_type FROM message_group WHERE name = 'NewGroup'";
+            Assert.Equal(2L, (long)newRowCommand.ExecuteScalar()!);
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
+        }
+    }
 }

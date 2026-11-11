@@ -149,6 +149,7 @@ public static class ShadowDatabaseBuilder
             if (c.IsRowIdAlias) parts.Add("PRIMARY KEY");
             if (c.IsNotNull) parts.Add("NOT NULL");
             if (c.IsUnique) parts.Add("UNIQUE");
+            if (c.DefaultValueSql is not null) parts.Add($"DEFAULT {c.DefaultValueSql}");
             return string.Join(' ', parts);
         }).ToList();
 
@@ -212,11 +213,15 @@ public static class ShadowDatabaseBuilder
         using var command = connection.CreateCommand();
         command.CommandText = sql;
 
+        var defaultCache = new Dictionary<string, object?>();
         for (int i = 0; i < schema.Columns.Count; i++)
         {
-            object value = schema.Columns[i].IsRowIdAlias
+            var column = schema.Columns[i];
+            object value = column.IsRowIdAlias
                 ? cell.RowId.Value
-                : (object?)(i < cell.FieldValues.Count ? cell.FieldValues[i]?.Value : null) ?? DBNull.Value;
+                : i < cell.FieldValues.Count
+                    ? (object?)cell.FieldValues[i]?.Value ?? DBNull.Value
+                    : EvaluateColumnDefault(connection, null, column, defaultCache) ?? DBNull.Value;
             command.Parameters.AddWithValue($"@p{i}", value);
         }
 
@@ -399,6 +404,7 @@ public static class ShadowDatabaseBuilder
             UPDATE {QuoteIdentifier(PagesTableName)} SET page_type = @type, table_name = @table WHERE page_number = @page
             """;
 
+        var defaultCache = new Dictionary<string, object?>();
         foreach (var row in rows)
         {
             using var insertCommand = connection.CreateCommand();
@@ -410,7 +416,9 @@ public static class ShadowDatabaseBuilder
                 var column = schema.Columns[i];
                 object value = column.IsRowIdAlias
                     ? row.RowId
-                    : (object?)(i < row.FieldValues.Count ? row.FieldValues[i]?.Value : null) ?? DBNull.Value;
+                    : i < row.FieldValues.Count
+                        ? (object?)row.FieldValues[i]?.Value ?? DBNull.Value
+                        : EvaluateColumnDefault(connection, transaction, column, defaultCache) ?? DBNull.Value;
                 insertCommand.Parameters.AddWithValue($"@p{i}", value);
             }
 
@@ -503,6 +511,34 @@ public static class ShadowDatabaseBuilder
         command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
         command.Parameters.AddWithValue("@p_method",  recoveryMethod);
         command.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Resolves the value to use for a column whose record physically has no entry for it —
+    /// i.e. a row written before a later <c>ALTER TABLE ... ADD COLUMN</c> migration, per SQLite's
+    /// schema-evolution semantics. Evaluates the column's DEFAULT expression via SQLite itself
+    /// (so literals, keywords like CURRENT_TIMESTAMP, and expressions all resolve correctly),
+    /// caching the result per column name for the lifetime of one table's insert pass. Returns
+    /// null if the column has no DEFAULT, in which case the caller falls back to DBNull.Value —
+    /// matching SQLite's own behavior for a defaultless column.
+    /// </summary>
+    private static object? EvaluateColumnDefault(
+        SqliteConnection connection, SqliteTransaction? transaction, ColumnDefinition column, Dictionary<string, object?> cache)
+    {
+        if (column.DefaultValueSql is not { } defaultSql) return null;
+        if (cache.TryGetValue(column.Name, out var cached)) return cached;
+
+        object? result;
+        using (var command = connection.CreateCommand())
+        {
+            if (transaction is not null) command.Transaction = transaction;
+            command.CommandText = $"SELECT {defaultSql}";
+            try { result = command.ExecuteScalar(); }
+            catch { result = null; }
+        }
+
+        cache[column.Name] = result;
+        return result;
     }
 
     private static string BuildInsertSql(TableSchema schema)
