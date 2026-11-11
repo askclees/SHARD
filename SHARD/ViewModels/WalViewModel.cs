@@ -10,6 +10,7 @@ public sealed class WalViewModel : ViewModelBase
 {
     private readonly WalFile _walFile;
     private readonly SqliteForensicDatabase _database;
+    private readonly IReadOnlyDictionary<uint, string> _pageTableMap;
 
     public WalFile WalFile  => _walFile;
     public string WalPath   { get; }
@@ -37,8 +38,8 @@ public sealed class WalViewModel : ViewModelBase
         private set => this.RaiseAndSetIfChanged(ref _selectedFrameDetail, value);
     }
 
-    private WalPageComparisonViewModel? _selectedFrameComparison;
-    public WalPageComparisonViewModel? SelectedFrameComparison
+    private PageComparisonViewModel? _selectedFrameComparison;
+    public PageComparisonViewModel? SelectedFrameComparison
     {
         get => _selectedFrameComparison;
         private set
@@ -66,12 +67,12 @@ public sealed class WalViewModel : ViewModelBase
         HeaderRows.Add(new InfoRow("Checksum-2",          $"0x{h.VerificationData.Checksum2:X8}"));
         HeaderRows.Add(new InfoRow("Frame Count",         $"{walFile.Frames.Count}"));
 
-        var pageTableMap = database.BuildPageTableMap();
+        _pageTableMap = database.BuildPageTableMap();
         for (int i = 0; i < walFile.Frames.Count; i++)
-            Frames.Add(new WalFrameEntryViewModel(walFile.Frames[i], i + 1, pageTableMap));
+            Frames.Add(new WalFrameEntryViewModel(walFile.Frames[i], i + 1, _pageTableMap));
     }
 
-    private WalPageComparisonViewModel? BuildComparison(WalFrame frame)
+    private PageComparisonViewModel? BuildComparison(WalFrame frame)
     {
         if (frame.Page is not TableBTreeLeafPage walPage)
             return null;
@@ -80,9 +81,10 @@ public sealed class WalViewModel : ViewModelBase
         if (previousFrame?.Page is TableBTreeLeafPage previousWalPage)
         {
             int prevIndex = _walFile.Frames.IndexOf(previousFrame) + 1;
-            return new WalPageComparisonViewModel(
+            return new PageComparisonViewModel(
                 previousWalPage.Compare(walPage),
-                $"Changes vs. frame {prevIndex}");
+                $"Changes vs. frame {prevIndex}",
+                ColumnNamesFor(frame.Header.PageNumber));
         }
 
         if (frame.Header.PageNumber > _database.PageCount)
@@ -92,8 +94,15 @@ public sealed class WalViewModel : ViewModelBase
         if (dbPage is not TableBTreeLeafPage dbLeafPage)
             return null;
 
-        return new WalPageComparisonViewModel(
+        return new PageComparisonViewModel(
             dbLeafPage.Compare(walPage),
-            "Changes vs. database page");
+            "Changes vs. database page",
+            ColumnNamesFor(frame.Header.PageNumber));
     }
+
+    /// <summary>Column names of the table that owns <paramref name="pageNumber"/>, or null if unknown.</summary>
+    private IReadOnlyList<string>? ColumnNamesFor(uint pageNumber) =>
+        _pageTableMap.TryGetValue(pageNumber, out var table)
+            ? _database.GetTableSchema(table)?.Columns.Select(c => c.Name).ToList()
+            : null;
 }

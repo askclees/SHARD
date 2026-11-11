@@ -6,6 +6,7 @@ using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
@@ -421,6 +422,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
     public bool HasWal => WalTab is not null;
+
+    // ── Rollback journal file ────────────────────────────────────────────
+    // A database is in either WAL or rollback-journal mode, so only one of WalTab / JournalTab
+    // is ever set: loading one clears the other.
+    private JournalViewModel? _journalTab;
+    public JournalViewModel? JournalTab
+    {
+        get => _journalTab;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _journalTab, value);
+            this.RaisePropertyChanged(nameof(HasJournal));
+        }
+    }
+    public bool HasJournal => JournalTab is not null;
 
     // ── Shadow project ───────────────────────────────────────────────────
     private ShadowProject? _project;
@@ -936,12 +952,33 @@ public sealed class MainWindowViewModel : ViewModelBase
                 StatusText += $"  ·  Shadow DB failed: {ex.Message}";
             }
 
-            string walPath = path + "-wal";
-            if (File.Exists(walPath))
+            string walPath     = path + "-wal";
+            string journalPath = path + "-journal";
+            bool hasWal     = File.Exists(walPath);
+            bool hasJournal = File.Exists(journalPath);
+            string? ignoredSidecar = null;
+            if (hasWal && hasJournal)
+            {
+                // both can exist after the journal mode was switched; the header's write
+                // version says which mode the database is in now (2 = WAL, 1 = rollback)
+                bool walMode = Database.Header.WriteVersion == 2;
+                ignoredSidecar = walMode ? "journal file ignored (database is in WAL mode)"
+                                         : "WAL file ignored (database is in rollback-journal mode)";
+                hasWal     = walMode;
+                hasJournal = !walMode;
+            }
+            if (hasWal)
             {
                 Report("Loading WAL file…");
                 LoadWalFile(walPath);
             }
+            else if (hasJournal)
+            {
+                Report("Loading journal file…");
+                LoadJournalFile(journalPath);
+            }
+            if (ignoredSidecar is not null)
+                StatusText += $"  ·  {ignoredSidecar}";
 
             if (AutoCarveUnknownPagesOnOpen)
             {
@@ -1002,6 +1039,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SelectedPage = null;
         HasDatabase  = false;
         WalTab       = null;
+        JournalTab   = null;
         _manualSchemas.Clear();
         _freedPageSchemas.Clear();
         _project?.Dispose();
@@ -1127,6 +1165,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             var wal = new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
             WalTab = new WalViewModel(walPath, wal, Database);
+            JournalTab = null;
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
 
             // If a project is already open sync immediately; if not, CreateProject/OpenProject
@@ -1137,6 +1176,34 @@ public sealed class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             StatusText = $"WAL file could not be loaded: {ex.Message}";
+        }
+    }
+
+    public void LoadJournalFile(string journalPath)
+    {
+        if (Database is null) return;
+        try
+        {
+            var journal = new RollbackJournalFile(journalPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
+
+            // a journal with a different page size was written for a different database
+            int journalPageSize = journal.Segments[0].Header.SizeOfJournalPages;
+            if (journalPageSize != Database.Header.PageSize)
+            {
+                StatusText = $"Journal file could not be loaded: its page size ({journalPageSize:N0}) " +
+                             $"does not match the database's ({Database.Header.PageSize:N0})";
+                return;
+            }
+
+            JournalTab = new JournalViewModel(journalPath, journal, Database);
+            WalTab = null;
+            int records = JournalTab.Records.Count;
+            StatusText += $"  ·  Journal: {records} record{(records == 1 ? "" : "s")} in " +
+                          $"{journal.Segments.Count} segment{(journal.Segments.Count == 1 ? "" : "s")}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Journal file could not be loaded: {ex.Message}";
         }
     }
 

@@ -33,6 +33,11 @@ public partial class MainWindow : Window
         Patterns = ["*.db-wal", "*.sqlite-wal", "*.wal"],
     };
 
+    private static readonly FilePickerFileType JournalFilter = new("SQLite Rollback Journal")
+    {
+        Patterns = ["*-journal"],
+    };
+
     public MainWindow()
     {
         InitializeComponent();
@@ -46,6 +51,7 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuSaveProject")!.Click   += OnSaveProjectClick;
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
+        this.FindControl<MenuItem>("MenuLoadJournal")!.Click   += OnLoadJournalClick;
         this.FindControl<MenuItem>("MenuSettings")!.Click      += (_, _) => new SettingsWindow().ShowDialog(this);
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
@@ -80,12 +86,28 @@ public partial class MainWindow : Window
                     if (e.PropertyName == nameof(MainWindowViewModel.SelectedSchemaRow) && vm.SelectedSchemaRow is { } row)
                         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                             this.FindControl<HexView>("SchemaHexView")?.ScrollToByteOffset(row.CellOffset));
+
+                    if (e.PropertyName is nameof(MainWindowViewModel.HasWal) or nameof(MainWindowViewModel.HasJournal))
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() => KeepSelectedTabVisible(vm));
                 };
 
                 vm.QueryTab.ResultsUpdated    += (_, _) => RebuildQueryResultColumns(vm.QueryTab);
                 vm.QueryTab.NavigationRequested += OnQueryNavigation;
             }
         };
+    }
+
+    // The WAL and Journal tabs replace each other (and both hide on close). A hidden TabItem stays
+    // selected and keeps showing its now-empty content, so move to whichever tab took its place.
+    private void KeepSelectedTabVisible(MainWindowViewModel vm)
+    {
+        var tabs = this.FindControl<TabControl>("MainTabControl");
+        if (tabs?.SelectedItem is not TabItem { IsVisible: false }) return;
+
+        TabItem? replacement = vm.HasWal     ? this.FindControl<TabItem>("WalTabItem")
+                             : vm.HasJournal ? this.FindControl<TabItem>("JournalTabItem")
+                             : null;
+        tabs.SelectedIndex = replacement is not null ? tabs.Items.IndexOf(replacement) : 0;
     }
 
     // ── Query ────────────────────────────────────────────────────────────────
@@ -205,6 +227,7 @@ public partial class MainWindow : Window
     private DataInspectorWindow? _pageInspectorWindow;
     private DataInspectorWindow? _searchInspectorWindow;
     private DataInspectorWindow? _walInspectorWindow;
+    private DataInspectorWindow? _journalInspectorWindow;
 
     private void OnPageInspectorPopOut(object? sender, RoutedEventArgs e) =>
         OpenInspectorPopOut(
@@ -234,6 +257,16 @@ public partial class MainWindow : Window
             this.FindControl<GridSplitter>("WalInspectorSplitter")!,
             this.FindControl<DataInspectorControl>("WalDataInspector")!,
             this.FindControl<Grid>("WalContentGrid")!);
+
+    private void OnJournalInspectorPopOut(object? sender, RoutedEventArgs e) =>
+        OpenInspectorPopOut(
+            w => _journalInspectorWindow = w, () => _journalInspectorWindow,
+            "Data Inspector — Journal",
+            this.FindControl<HexView>("JournalHexView")!,
+            this.FindControl<Grid>("JournalHexGrid")!,
+            this.FindControl<GridSplitter>("JournalInspectorSplitter")!,
+            this.FindControl<DataInspectorControl>("JournalDataInspector")!,
+            this.FindControl<Grid>("JournalContentGrid")!);
 
     private void OpenInspectorPopOut(
         Action<DataInspectorWindow?> setField,
@@ -361,6 +394,19 @@ public partial class MainWindow : Window
 
         if (files is [var file])
             Vm.LoadWalFile(file.Path.LocalPath);
+    }
+
+    private async void OnLoadJournalClick(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title          = "Open Rollback Journal File",
+            AllowMultiple  = false,
+            FileTypeFilter = [JournalFilter, FilePickerFileTypes.All],
+        });
+
+        if (files is [var file])
+            Vm.LoadJournalFile(file.Path.LocalPath);
     }
 
     private async void OnSaveProjectClick(object? sender, RoutedEventArgs e)
@@ -503,6 +549,20 @@ public partial class MainWindow : Window
         this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
+    private void OnJournalCellSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
+        var hexView = this.FindControl<HexView>("JournalHexView");
+        hexView?.ScrollToByteOffset(vm.ByteOffset);
+        hexView?.SetCursorOffset(vm.ByteOffset);
+    }
+
+    private void OnJournalFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: FreeBlockSectionViewModel vm }) return;
+        this.FindControl<HexView>("JournalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
     private void OnFreeBlockRecordClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not Button { DataContext: FreeBlockRecordEntry entry }) return;
@@ -519,6 +579,14 @@ public partial class MainWindow : Window
         hexView?.SetCursorOffset(entry.ByteOffset);
     }
 
+    private void OnJournalFreeBlockRecordClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: FreeBlockRecordEntry entry }) return;
+        var hexView = this.FindControl<HexView>("JournalHexView");
+        hexView?.ScrollToByteOffset(entry.ByteOffset);
+        hexView?.SetCursorOffset(entry.ByteOffset);
+    }
+
     private void OnUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
     {
         if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
@@ -529,6 +597,12 @@ public partial class MainWindow : Window
     {
         if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
         this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnJournalUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
+        this.FindControl<HexView>("JournalHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
     // ── Go to offset ─────────────────────────────────────────────────────────
@@ -596,6 +670,14 @@ public partial class MainWindow : Window
     private void OnWalGoToOffsetKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter) OnWalGoToOffsetClick(sender, e);
+    }
+
+    private void OnJournalGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("JournalHexView"), this.FindControl<TextBox>("JournalGoToOffsetBox"));
+
+    private void OnJournalGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnJournalGoToOffsetClick(sender, e);
     }
 
     // ── Search ───────────────────────────────────────────────────────────────
