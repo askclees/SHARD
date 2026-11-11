@@ -53,29 +53,40 @@ public class WalParsingTests
         uint checksum1 = 3, uint checksum2 = 4) =>
         new(salt1, salt2, checksum1, checksum2);
 
-    private static string CreateWalDatabase()
+    /// <summary>
+    /// A WAL-mode database with one committed write still in its -wal file. The connection is held
+    /// open (unpooled) for the fixture's lifetime: closing the last connection checkpoints and
+    /// deletes the -wal, and a pooled connection can be closed by any other test clearing pools.
+    /// </summary>
+    private sealed class WalDatabase : IDisposable
     {
-        string path = Path.Combine(Path.GetTempPath(), $"shard_wal_{Guid.NewGuid():N}.db");
-        using var conn = new SqliteConnection($"Data Source={path}");
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA journal_mode=WAL";
-        cmd.ExecuteScalar();
-        cmd.CommandText = "PRAGMA wal_autocheckpoint=0";
-        cmd.ExecuteNonQuery();
-        cmd.CommandText = "CREATE TABLE t (id INTEGER PRIMARY KEY, value TEXT)";
-        cmd.ExecuteNonQuery();
-        cmd.CommandText = "INSERT INTO t VALUES (1, 'hello')";
-        cmd.ExecuteNonQuery();
-        return path;
-    }
+        private readonly SqliteConnection _connection;
+        public string DbPath  { get; } = Path.Combine(Path.GetTempPath(), $"shard_wal_{Guid.NewGuid():N}.db");
+        public string WalPath => DbPath + "-wal";
 
-    private static void DeleteWalDatabase(string dbPath)
-    {
-        foreach (string suffix in new[] { "", "-wal", "-shm" })
+        public WalDatabase()
         {
-            string p = dbPath + suffix;
-            if (File.Exists(p)) File.Delete(p);
+            _connection = new SqliteConnection($"Data Source={DbPath};Pooling=False");
+            _connection.Open();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "PRAGMA journal_mode=WAL";
+            cmd.ExecuteScalar();
+            cmd.CommandText = "PRAGMA wal_autocheckpoint=0";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "CREATE TABLE t (id INTEGER PRIMARY KEY, value TEXT)";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "INSERT INTO t VALUES (1, 'hello')";
+            cmd.ExecuteNonQuery();
+        }
+
+        public void Dispose()
+        {
+            _connection.Dispose();
+            foreach (string suffix in new[] { "", "-wal", "-shm" })
+            {
+                string p = DbPath + suffix;
+                if (File.Exists(p)) File.Delete(p);
+            }
         }
     }
 
@@ -223,55 +234,40 @@ public class WalParsingTests
     [Fact]
     public void WalFile_ParsesHeaderFromRealWalFile()
     {
-        string dbPath = CreateWalDatabase();
-        string walPath = dbPath + "-wal";
-        try
-        {
-            Assert.True(File.Exists(walPath), "WAL file was not created");
+        using var db = new WalDatabase();
+        Assert.True(File.Exists(db.WalPath), "WAL file was not created");
 
-            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+        var wal = new WalFile(db.WalPath, TextEncoding.Utf8, 0);
 
-            Assert.True(wal.Header.MagicNumber is 0x377f0682u or 0x377f0683u);
-            Assert.Equal(4096u, wal.Header.DatabasePageSize);
-        }
-        finally { DeleteWalDatabase(dbPath); }
+        Assert.True(wal.Header.MagicNumber is 0x377f0682u or 0x377f0683u);
+        Assert.Equal(4096u, wal.Header.DatabasePageSize);
     }
 
     [Fact]
     public void WalFile_ReadsFramesFromRealWalFile()
     {
-        string dbPath = CreateWalDatabase();
-        string walPath = dbPath + "-wal";
-        try
+        using var db = new WalDatabase();
+        Assert.True(File.Exists(db.WalPath), "WAL file was not created");
+
+        var wal = new WalFile(db.WalPath, TextEncoding.Utf8, 0);
+
+        Assert.NotEmpty(wal.Frames);
+        foreach (var frame in wal.Frames)
         {
-            Assert.True(File.Exists(walPath), "WAL file was not created");
-
-            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
-
-            Assert.NotEmpty(wal.Frames);
-            foreach (var frame in wal.Frames)
-            {
-                Assert.True(frame.Header.PageNumber > 0);
-                Assert.Equal((int)wal.Header.DatabasePageSize, frame.PageData.Length);
-            }
+            Assert.True(frame.Header.PageNumber > 0);
+            Assert.Equal((int)wal.Header.DatabasePageSize, frame.PageData.Length);
         }
-        finally { DeleteWalDatabase(dbPath); }
     }
 
     [Fact]
     public void WalFile_AllFramesFromRealWalAreCurrentByDefault()
     {
-        string dbPath = CreateWalDatabase();
-        string walPath = dbPath + "-wal";
-        try
-        {
-            Assert.True(File.Exists(walPath), "WAL file was not created");
+        using var db = new WalDatabase();
+        Assert.True(File.Exists(db.WalPath), "WAL file was not created");
 
-            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+        var wal = new WalFile(db.WalPath, TextEncoding.Utf8, 0);
 
-            Assert.All(wal.Frames, f => Assert.True(f.Header.IsCurrent));
-        }
-        finally { DeleteWalDatabase(dbPath); }
+        Assert.All(wal.Frames, f => Assert.True(f.Header.IsCurrent));
     }
 
     [Fact]

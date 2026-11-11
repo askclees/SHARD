@@ -16,7 +16,7 @@ public class WalFile
 
     public WalFile(string path, TextEncoding encoding, int reservedBytes)
     {
-        using FileStream walFile = File.Open(path, FileMode.Open);
+        using FileStream walFile = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
         byte[] headerData = new byte[32];
         walFile.ReadExactly(headerData, 0, 32);
