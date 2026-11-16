@@ -130,14 +130,18 @@ class ShardDatabase:
         process_wal: bool = True,
         carve_mode: str | None = None,
         carve_table_filter: list[str] | None = None,
+        process_journal: bool = True,
     ) -> dict[str, Any]:
         """
         Builds a fully recovered SQLite database at `output_path` (live rows, in-tree
-        deleted/freeblock-recovered rows, and — per the arguments — WAL-recovered and/or
-        orphan-page-carved rows). Returns a summary dict; `output_path` is a normal SQLite
+        deleted/freeblock-recovered rows, and — per the arguments — WAL- or rollback-journal-
+        recovered and/or orphan-page-carved rows). Returns a summary dict; `output_path` is a normal SQLite
         file afterwards, openable with the stdlib sqlite3 module.
         """
-        options = {"processWal": process_wal, "carveMode": carve_mode, "carveTableFilter": carve_table_filter}
+        options = {
+            "processWal": process_wal, "processJournal": process_journal,
+            "carveMode": carve_mode, "carveTableFilter": carve_table_filter,
+        }
         return _call(
             _lib.shard_recover_to_file,
             ctypes.c_int64(self._require_handle()),
@@ -153,6 +157,7 @@ class ShardDatabase:
         process_wal: bool = True,
         carve_mode: str | None = None,
         carve_table_filter: list[str] | None = None,
+        process_journal: bool = True,
     ) -> list[dict[str, Any]]:
         """
         Runs a read/write SQL statement against a fully recovered copy of this database via the
@@ -162,14 +167,14 @@ class ShardDatabase:
         ``SELECT * FROM users UNION ALL SELECT * FROM _shard_recovered_users``).
 
         The recovered copy is built once, in a temp file, the first time query() is called (or
-        again if called with different process_wal/carve_mode/carve_table_filter than last
+        again if called with different process_wal/process_journal/carve_mode/carve_table_filter than last
         time), and reused across calls with matching options — cleaned up automatically when
         this ShardDatabase is closed. For anything beyond one-off queries against a stable
         recovery, calling recover_to_file() yourself once and opening the result directly is
         more explicit about when recovery actually happens.
         """
         options_key = (
-            process_wal, carve_mode,
+            process_wal, process_journal, carve_mode,
             tuple(carve_table_filter) if carve_table_filter else None,
         )
         if self._recovered_path is None or self._recovered_options != options_key:
@@ -178,7 +183,7 @@ class ShardDatabase:
             os.close(fd)
             os.remove(path)  # recover_to_file creates it fresh; it must not already exist
             self.recover_to_file(
-                path, process_wal=process_wal,
+                path, process_wal=process_wal, process_journal=process_journal,
                 carve_mode=carve_mode, carve_table_filter=carve_table_filter,
             )
             self._recovered_path = path
@@ -203,6 +208,7 @@ class ShardDatabase:
         process_wal: bool = True,
         carve_mode: str | None = None,
         carve_table_filter: list[str] | None = None,
+        process_journal: bool = True,
     ) -> list[dict[str, Any]]:
         """
         Returns `table_name`'s rows via a SQL query against a recovered copy — live rows only
@@ -215,7 +221,10 @@ class ShardDatabase:
         included here, unlike writing the equivalent query() UNION by hand with `SELECT *`.
         Uses the same cached-recovered-copy behavior as query() (see there for details).
         """
-        recover_kwargs = dict(process_wal=process_wal, carve_mode=carve_mode, carve_table_filter=carve_table_filter)
+        recover_kwargs = dict(
+            process_wal=process_wal, process_journal=process_journal,
+            carve_mode=carve_mode, carve_table_filter=carve_table_filter,
+        )
         quoted_table = _quote_identifier(table_name)
 
         columns = [

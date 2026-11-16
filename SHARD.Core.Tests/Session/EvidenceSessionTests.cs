@@ -43,7 +43,7 @@ public class EvidenceSessionTests
         try
         {
             using var session = EvidenceSession.Open(WalFixturePath("places_wal_multi_page.db"));
-            var (_, walInserted) = session.BuildShadowDatabase(shadowPath);
+            var (_, walInserted, _) = session.BuildShadowDatabase(shadowPath);
 
             // Per places_wal_multi_page.xml's documented expectations: 17 historical WAL-deleted rows.
             Assert.Equal(17, walInserted);
@@ -61,7 +61,7 @@ public class EvidenceSessionTests
         try
         {
             using var session = EvidenceSession.Open(WalFixturePath("places_wal_multi_page.db"));
-            var (_, walInserted) = session.BuildShadowDatabase(shadowPath, new RecoveryFlags(ProcessWal: false));
+            var (_, walInserted, _) = session.BuildShadowDatabase(shadowPath, new RecoveryFlags(ProcessWal: false));
 
             Assert.Equal(0, walInserted);
         }

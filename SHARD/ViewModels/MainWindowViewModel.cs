@@ -1065,6 +1065,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             RefreshPagesFromShadowDatabase();
             StatusText = $"Project opened from {projectFolder}";
             SyncWalToProject();
+            SyncJournalToProject();
         }
         catch (Exception ex)
         {
@@ -1180,11 +1181,25 @@ public sealed class MainWindowViewModel : ViewModelBase
             int records = JournalTab.Records.Count;
             StatusText += $"  ·  Journal: {records} record{(records == 1 ? "" : "s")} in " +
                           $"{journal.Segments.Count} segment{(journal.Segments.Count == 1 ? "" : "s")}";
+
+            // Same as the WAL: a project exists by now in both LoadFile and the manual menu
+            // action; OpenProject calls this again once the saved project replaces it.
+            SyncJournalToProject();
         }
         catch (Exception ex)
         {
             StatusText = $"Journal file could not be loaded: {ex.Message}";
         }
+    }
+
+    private void SyncJournalToProject()
+    {
+        if (Project is null || JournalTab is null || _session is null) return;
+        var (recovered, error) = _session.RecoverJournal(Project, JournalTab.JournalFile);
+        if (recovered > 0)
+            StatusText += $"  ·  {recovered} deleted journal record{(recovered == 1 ? "" : "s")} recovered";
+        if (error is not null)
+            StatusText += $"  ·  Journal recovery failed: {error}";
     }
 
     private void SyncWalToProject()

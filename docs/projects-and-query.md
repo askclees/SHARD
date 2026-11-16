@@ -16,11 +16,13 @@ Recovered deleted records are stored in `_shard_recovered_<tablename>` tables in
 3. Select a folder to store the project in.
 4. If a WAL file is detected alongside the evidence file, SHARD will offer to load it. Any records present in the WAL but not in the main database are automatically synced into the shadow database's live tables.
 
-The status bar shows how many WAL records were synced after the project is created.
+5. If a rollback journal (`-journal` file) is detected instead, each journal record is an earlier image of a database page. Records in those images that no longer exist in the database are added to `_shard_recovered_<tablename>` with `_recovery_method` = `journal_page`; older versions of records that still exist but have since changed are added as `journal_previous_version`.
+
+The status bar shows how many WAL records were synced, or how many journal records were recovered, after the project is created.
 
 ## Opening an existing project
 
-**File → Open Project** — select the project folder. SHARD reopens the evidence file and reloads the shadow database. WAL sync runs automatically if a WAL file is already loaded.
+**File → Open Project** — select the project folder. SHARD reopens the evidence file and reloads the shadow database. WAL sync and journal recovery run automatically if a WAL or journal file is loaded; journal records already recovered into the project are not added twice.
 
 ## Query Tab
 
