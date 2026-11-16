@@ -90,7 +90,8 @@ public static class RecoveryApi
             var options = new RecoveryOptions(
                 Flags: new RecoveryFlags(ProcessWal: input.ProcessWal, ProcessJournal: input.ProcessJournal),
                 CarveMode: input.CarveMode is null ? null : ParseCarveMode(input.CarveMode),
-                CarveTableFilter: input.CarveTableFilter);
+                CarveTableFilter: input.CarveTableFilter,
+                InferZeroedJournalHeader: input.InferZeroedJournalHeader);
 
             return SqliteRecoveryFacade.Recover(path, outputPath, options);
         });

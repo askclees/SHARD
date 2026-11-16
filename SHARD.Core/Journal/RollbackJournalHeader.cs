@@ -15,6 +15,16 @@ public class RollbackJournalHeader
     public int SizeOfDiskSector { get; }
     public int SizeOfJournalPages { get; }
 
+    /// <summary>A header whose values were inferred rather than read (see <see cref="ZeroedHeaderJournalReader"/>).</summary>
+    internal RollbackJournalHeader(uint pageCount, uint nonce, int databaseSize, int sectorSize, int pageSize)
+    {
+        PageCount = pageCount;
+        Nonce = nonce;
+        DatabaseSize = databaseSize;
+        SizeOfDiskSector = sectorSize;
+        SizeOfJournalPages = pageSize;
+    }
+
     public RollbackJournalHeader(ReadOnlySpan<byte> data)
     {
         if (data.Length < 28 || !data.StartsWith(ExpectedHeader))

@@ -19,6 +19,13 @@ public sealed class AppSettings
 
     public long LargeDatabaseThresholdBytes => (long)LargeDatabaseThresholdMb * 1024 * 1024;
 
+    /// <summary>
+    /// Experimental, off by default: read a rollback journal whose header SQLite zeroed when its
+    /// transaction committed (journal_mode=PERSIST), inferring the header's values
+    /// (see <c>ZeroedHeaderJournalReader</c>). Off means such a journal is reported as unreadable.
+    /// </summary>
+    public bool InferZeroedJournalHeader { get; set; }
+
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SHARD", "settings.json");
 

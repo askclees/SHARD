@@ -79,14 +79,21 @@ public sealed class JournalViewModel : ViewModelBase
         int validCount = Records.Count(r => r.Record.Status == JournalRecordStatus.Valid);
         var stopRecord = Records.FirstOrDefault(r => r.Record.Status != JournalRecordStatus.Valid);
 
-        HeaderRows.Add(new InfoRow("Segments",              $"{journalFile.Segments.Count}"));
+        if (journalFile.HeaderInferred)
+        {
+            HeaderRows.Add(new InfoRow("Header",            "Zeroed (journal_mode=PERSIST): the values below are inferred, not read"));
+            HeaderRows.Add(new InfoRow("Inferred",          journalFile.Inference ?? ""));
+        }
+        HeaderRows.Add(new InfoRow(journalFile.HeaderInferred ? "Transactions" : "Segments", $"{journalFile.Segments.Count}"));
         HeaderRows.Add(new InfoRow("Page Size",             $"{first.SizeOfJournalPages:N0} bytes"));
         HeaderRows.Add(new InfoRow("Sector Size",           $"{first.SizeOfDiskSector:N0} bytes"));
-        HeaderRows.Add(new InfoRow("Initial Database Size", $"{first.DatabaseSize:N0} pages"));
-        HeaderRows.Add(new InfoRow("First Segment Nonce",   $"0x{first.Nonce:X8}"));
+        HeaderRows.Add(new InfoRow("Initial Database Size", journalFile.HeaderInferred ? "unknown (zeroed)" : $"{first.DatabaseSize:N0} pages"));
+        HeaderRows.Add(new InfoRow(journalFile.HeaderInferred ? "Last Transaction Nonce" : "First Segment Nonce", $"0x{first.Nonce:X8}"));
         HeaderRows.Add(new InfoRow("Records",               $"{Records.Count:N0} ({validCount:N0} valid)"));
         HeaderRows.Add(new InfoRow("Playback Stops At",
-            stopRecord is null
+            journalFile.HeaderInferred
+                ? "— (header zeroed: the transaction committed, so SQLite plays nothing back)"
+                : stopRecord is null
                 ? "— (every record would be played back)"
                 : $"record {stopRecord.RecordIndex} (offset {stopRecord.Record.FileOffset:N0}, {stopRecord.Record.Status})"));
         if (journalFile.StopReason is not null)
@@ -115,6 +122,7 @@ public sealed class JournalViewModel : ViewModelBase
         JournalRecordStatus.AfterPlaybackStopped => "checksum matches, but an earlier record stopped playback",
         JournalRecordStatus.Stale                => "checksum does not match this segment's nonce (left over from an earlier transaction?)",
         JournalRecordStatus.InvalidPageNumber    => "page 0 or the lock-byte page, which SQLite never journals",
+        JournalRecordStatus.ZeroedHeader         => "from a committed transaction whose journal header SQLite zeroed (PERSIST mode); the header's values are inferred, and SQLite would never play it back",
         _                                        => string.Empty,
     };
 
