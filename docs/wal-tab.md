@@ -21,6 +21,7 @@ A collapsible section at the top of the tab shows the parsed WAL file header:
 | Salt-1 / Salt-2 | Salts used for checksum verification |
 | Checksum-1 / Checksum-2 | Cumulative checksums for the WAL header |
 | Frame Count | Total number of frames in the file |
+| Trailing Bytes | Shown only when the file ends partway through a frame (typically a copy taken while the frame was being written). SQLite ignores these bytes, and so does SHARD: every whole frame before them is still read and used for recovery. The status bar and the recovery warnings note how many bytes were ignored. |
 
 ## Frame list (left panel)
 

@@ -292,19 +292,84 @@ public class WalParsingTests
     }
 
     [Fact]
-    public void WalFile_ThrowsOnPartialFrame()
+    public void WalFile_PartialFrameRightAfterHeader_HasNoFramesAndKeepsTrailingBytes()
     {
         string walPath = Path.Combine(Path.GetTempPath(), $"shard_wal_{Guid.NewGuid():N}.wal");
         try
         {
-            // Valid header followed by a partial frame (not enough bytes for a full frame)
             byte[] header = MakeWalHeader(pageSize: 4096);
-            byte[] partial = new byte[10];
+            byte[] partial = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
             File.WriteAllBytes(walPath, [..header, ..partial]);
 
-            Assert.Throws<InvalidDataException>(() => new WalFile(walPath, TextEncoding.Utf8, 0));
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            Assert.Empty(wal.Frames);
+            Assert.True(wal.HasTrailingBytes);
+            Assert.Equal(32, wal.TrailingBytesOffset);
+            Assert.Equal(partial, wal.TrailingBytes);
+            Assert.Contains("offset 32", wal.StopReason);
         }
         finally { if (File.Exists(walPath)) File.Delete(walPath); }
+    }
+
+    [Theory]
+    [InlineData(1)]          // a single stray byte
+    [InlineData(24)]         // a whole frame header but no page data
+    [InlineData(24 + 4095)]  // one byte short of a whole frame
+    public void WalFile_PartialFinalFrame_KeepsEveryWholeFrameBeforeIt(int partialLength)
+    {
+        string walPath = WriteSyntheticWalFile((2, 0), (3, 3), (2, 3));
+        try
+        {
+            long wholeLength = new FileInfo(walPath).Length;
+            byte[] partial = new byte[partialLength];
+            new Random(partialLength).NextBytes(partial);
+            using (var fs = new FileStream(walPath, FileMode.Append)) fs.Write(partial);
+
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            Assert.Equal([2u, 3u, 2u], wal.Frames.Select(f => f.Header.PageNumber));
+            Assert.Equal(wholeLength, wal.TrailingBytesOffset);
+            Assert.Equal(partial, wal.TrailingBytes);
+            Assert.NotNull(wal.StopReason);
+        }
+        finally { if (File.Exists(walPath)) File.Delete(walPath); }
+    }
+
+    [Fact]
+    public void WalFile_EndingOnFrameBoundary_HasNoTrailingBytes()
+    {
+        string walPath = WriteSyntheticWalFile((2, 0), (3, 3));
+        try
+        {
+            var wal = new WalFile(walPath, TextEncoding.Utf8, 0);
+
+            Assert.Equal(2, wal.Frames.Count);
+            Assert.False(wal.HasTrailingBytes);
+            Assert.Null(wal.TrailingBytesOffset);
+            Assert.Null(wal.StopReason);
+        }
+        finally { if (File.Exists(walPath)) File.Delete(walPath); }
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(256u)]       // below the minimum
+    [InlineData(4097u)]      // not a power of two
+    [InlineData(131072u)]    // above the maximum
+    [InlineData(0xFFFFFFFFu)]
+    public void WalHeader_ThrowsOnInvalidPageSize(uint pageSize)
+    {
+        var ex = Assert.Throws<InvalidDataException>(() => new WalHeader(MakeWalHeader(pageSize: pageSize)));
+        Assert.Contains("page size", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(512u)]
+    [InlineData(65536u)]
+    public void WalHeader_AcceptsBoundaryPageSizes(uint pageSize)
+    {
+        Assert.Equal(pageSize, new WalHeader(MakeWalHeader(pageSize: pageSize)).DatabasePageSize);
     }
 
     // ── Transaction grouping ──────────────────────────────────────────────────

@@ -95,6 +95,8 @@ public sealed class WalViewModel : ViewModelBase
         HeaderRows.Add(new InfoRow("Checksum-1",          $"0x{h.VerificationData.Checksum1:X8}"));
         HeaderRows.Add(new InfoRow("Checksum-2",          $"0x{h.VerificationData.Checksum2:X8}"));
         HeaderRows.Add(new InfoRow("Frame Count",         $"{walFile.Frames.Count}"));
+        if (walFile.TrailingBytesOffset is { } trailingOffset)
+            HeaderRows.Add(new InfoRow("Trailing Bytes",  $"{walFile.TrailingBytes.Length:N0} bytes at offset {trailingOffset:N0} (partial frame, ignored)"));
 
         _pageTableMap = database.BuildPageTableMap();
         for (int i = 0; i < walFile.Frames.Count; i++)

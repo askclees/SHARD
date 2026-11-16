@@ -36,6 +36,12 @@ public class WalHeader
         FileFormatVersion = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
         pointer += 4;
         DatabasePageSize = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
+        // A power of two from 512 to 65536, as for the database itself. Checked here so a corrupt
+        // value fails clearly instead of sizing a frame buffer from garbage.
+        if (DatabasePageSize < 512 || DatabasePageSize > 65536 || (DatabasePageSize & (DatabasePageSize - 1)) != 0)
+        {
+            throw new InvalidDataException($"Page size {DatabasePageSize} at offset 8 is not a valid SQLite page size");
+        }
         pointer += 4;
         CheckpointSequenceNumber = BinaryPrimitives.ReadUInt32BigEndian(headerBytes[pointer..(pointer+4)]);
         pointer += 4;
