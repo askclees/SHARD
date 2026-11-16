@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Recovery;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
@@ -9,58 +10,118 @@ using SHARD.Core.WAL;
 namespace SHARD.Core.Session;
 
 /// <summary>
-/// A single evidence file plus its sibling WAL file (if any), opened together. Consolidates what
-/// used to be two independent, ad hoc "does a -wal sibling exist?" checks (in
+/// A single evidence file plus its sibling <c>-wal</c> or <c>-journal</c> file (if any), opened
+/// together. Consolidates what used to be independent, ad hoc "does a sidecar exist?" checks (in
 /// <see cref="Recovery.SqliteRecoveryFacade.Recover"/> and the GUI's own load flow) into one place,
 /// and exposes each recovery type as an independently toggleable step via <see cref="RecoveryFlags"/>
 /// instead of the previous all-or-nothing build.
 ///
-/// Rollback-journal (<c>-journal</c>) support doesn't exist yet — <see cref="Open"/>'s sibling
-/// detection is structured as one small per-format step (<see cref="DetectWal"/>) rather than a
-/// single inlined check, so a <c>DetectJournal</c> counterpart can slot in later without a redesign.
+/// A database is in either WAL or rollback-journal mode, so at most one sidecar is loaded. Both
+/// can exist on disk after the journal mode was switched; the header's write version (2 = WAL,
+/// 1 = rollback journal) decides which one belongs to the database's current mode, and the other
+/// is reported via <see cref="IgnoredSidecarNote"/>.
 /// </summary>
 public sealed class EvidenceSession : IDisposable
 {
     public string EvidencePath { get; }
     public SqliteForensicDatabase Database { get; }
 
-    /// <summary>Null if no sibling <c>-wal</c> file was found (or it failed to parse — the evidence
-    /// database itself is still perfectly usable without it).</summary>
-    public WalFile? Wal { get; }
+    public string WalPath     => EvidencePath + "-wal";
+    public string JournalPath => EvidencePath + "-journal";
 
+    /// <summary>The sibling WAL file, or null if there isn't one, it was ignored in favour of a
+    /// journal, or it failed to parse (see <see cref="WalError"/>) — the evidence database itself
+    /// is still perfectly usable without it.</summary>
+    public WalFile? Wal { get; }
     public bool HasWal => Wal is not null;
 
-    private EvidenceSession(string evidencePath, SqliteForensicDatabase database, WalFile? wal)
+    /// <summary>Why the sibling WAL file exists but couldn't be loaded; null otherwise.</summary>
+    public string? WalError { get; }
+
+    /// <summary>The sibling rollback journal, or null if there isn't one, it was ignored in favour
+    /// of a WAL, or it failed to load (see <see cref="JournalError"/>).</summary>
+    public RollbackJournalFile? Journal { get; }
+    public bool HasJournal => Journal is not null;
+
+    /// <summary>Why the sibling journal file exists but couldn't be loaded; null otherwise.</summary>
+    public string? JournalError { get; }
+
+    /// <summary>Set when both sidecars exist and one was ignored because it doesn't match the
+    /// database's current journal mode.</summary>
+    public string? IgnoredSidecarNote { get; }
+
+    private EvidenceSession(string evidencePath, SqliteForensicDatabase database,
+        WalFile? wal, string? walError, RollbackJournalFile? journal, string? journalError, string? ignoredSidecarNote)
     {
         EvidencePath = evidencePath;
         Database = database;
         Wal = wal;
+        WalError = walError;
+        Journal = journal;
+        JournalError = journalError;
+        IgnoredSidecarNote = ignoredSidecarNote;
     }
 
-    /// <summary>Opens the evidence file and detects/loads its sibling WAL file, if present.</summary>
-    // TODO: rollback-journal (-journal) support. Not implemented anywhere in SHARD today — only
-    // the main DB header's write-version byte is decoded as a "Rollback Journal" vs "WAL" label
-    // (DatabaseHeader.cs), never acted on. Add a DetectJournal(evidencePath, database) alongside
-    // DetectWal below, plus a RollbackJournal reader (nothing to build on yet — WalFile is the
-    // closest structural analog) and a Journal property here.
+    /// <summary>Opens the evidence file and detects/loads its sibling WAL or journal file, if present.</summary>
     public static EvidenceSession Open(string evidencePath)
     {
         var database = SqliteForensicDatabase.Open(evidencePath);
-        var wal = DetectWal(evidencePath, database);
-        return new EvidenceSession(evidencePath, database, wal);
+
+        bool hasWal     = File.Exists(evidencePath + "-wal");
+        bool hasJournal = File.Exists(evidencePath + "-journal");
+        string? ignoredSidecarNote = null;
+        if (hasWal && hasJournal)
+        {
+            bool walMode = database.Header.WriteVersion == 2;
+            ignoredSidecarNote = walMode ? "journal file ignored (database is in WAL mode)"
+                                         : "WAL file ignored (database is in rollback-journal mode)";
+            hasWal     = walMode;
+            hasJournal = !walMode;
+        }
+
+        WalFile? wal = null;
+        string? walError = null;
+        if (hasWal)
+            (wal, walError) = LoadWal(evidencePath + "-wal", database);
+
+        RollbackJournalFile? journal = null;
+        string? journalError = null;
+        if (hasJournal)
+            (journal, journalError) = LoadJournal(evidencePath + "-journal", database);
+
+        return new EvidenceSession(evidencePath, database, wal, walError, journal, journalError, ignoredSidecarNote);
     }
 
-    private static WalFile? DetectWal(string evidencePath, SqliteForensicDatabase database)
+    private static (WalFile? Wal, string? Error) LoadWal(string walPath, SqliteForensicDatabase database)
     {
-        string walPath = evidencePath + "-wal";
-        if (!File.Exists(walPath)) return null;
         try
         {
-            return new WalFile(walPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage);
+            return (new WalFile(walPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage), null);
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            return (null, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Loads a rollback journal for <paramref name="database"/>. Rejects one whose page size differs
+    /// from the database's, since that journal was written for a different database. Public so a
+    /// manually chosen journal (e.g. the GUI's "Load Journal File…" action) gets the same check.
+    /// </summary>
+    public static (RollbackJournalFile? Journal, string? Error) LoadJournal(string journalPath, SqliteForensicDatabase database)
+    {
+        try
+        {
+            var journal = new RollbackJournalFile(journalPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage);
+            int journalPageSize = journal.Segments[0].Header.SizeOfJournalPages;
+            if (journalPageSize != database.Header.PageSize)
+                return (null, $"its page size ({journalPageSize:N0}) does not match the database's ({database.Header.PageSize:N0})");
+            return (journal, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex.Message);
         }
     }
 
@@ -157,17 +218,21 @@ public sealed class EvidenceSession : IDisposable
     /// doesn't have to be this evidence file's sibling. A no-op returning (0, 0) if
     /// <see cref="RecoveryFlags.ProcessWal"/> is off. Each half fails independently (matching
     /// this operation's previous behavior) — a sync failure doesn't prevent the deleted-record
-    /// recovery half from still running, and vice versa.
+    /// recovery half from still running, and vice versa — and each half's failure message is
+    /// returned so the caller can report it rather than it being silently dropped.
     /// </summary>
-    public (int Synced, int Recovered) SyncAndRecoverWal(ShadowProject project, WalFile wal, RecoveryFlags? flags = null)
+    public WalSyncResult SyncAndRecoverWal(ShadowProject project, WalFile wal, RecoveryFlags? flags = null)
     {
         flags ??= RecoveryFlags.Default;
-        if (!flags.ProcessWal) return (0, 0);
+        if (!flags.ProcessWal) return new WalSyncResult(0, 0, null, null);
 
         int synced = 0, recovered = 0;
-        try { synced = project.SyncWalFramesToShadow(wal, Database); } catch { }
-        try { recovered = project.RecoverWalDeletedRows(wal, Database); } catch { }
-        return (synced, recovered);
+        string? syncError = null, recoveryError = null;
+        try { synced = project.SyncWalFramesToShadow(wal, Database); }
+        catch (Exception ex) { syncError = ex.Message; }
+        try { recovered = project.RecoverWalDeletedRows(wal, Database); }
+        catch (Exception ex) { recoveryError = ex.Message; }
+        return new WalSyncResult(synced, recovered, syncError, recoveryError);
     }
 
     /// <summary>Explicit, user-triggered scan of pages with no known owning table. Never runs
@@ -181,4 +246,15 @@ public sealed class EvidenceSession : IDisposable
     }
 
     public void Dispose() => Database.Dispose();
+}
+
+/// <summary>Outcome of <see cref="EvidenceSession.SyncAndRecoverWal"/>. Deconstructs to
+/// (Synced, Recovered) for callers that only want the counts.</summary>
+public sealed record WalSyncResult(int Synced, int Recovered, string? SyncError, string? RecoveryError)
+{
+    public void Deconstruct(out int synced, out int recovered)
+    {
+        synced = Synced;
+        recovered = Recovered;
+    }
 }

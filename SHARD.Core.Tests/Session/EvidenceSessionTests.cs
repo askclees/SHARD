@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
 using SHARD.Core.Session;
@@ -174,7 +176,152 @@ public class EvidenceSessionTests
         }
     }
 
+    // ── Sidecar detection: WAL vs rollback journal ───────────────────────────
+
+    [Fact]
+    public void Open_DetectsSiblingJournalFile()
+    {
+        string dir = MakeTempDir();
+        try
+        {
+            string db = CreateRollbackModeDatabase(dir, pageSize: 512);
+            WriteJournal(db + "-journal", pageSize: 512);
+
+            using var session = EvidenceSession.Open(db);
+
+            Assert.True(session.HasJournal);
+            Assert.False(session.HasWal);
+            Assert.Null(session.JournalError);
+            Assert.Null(session.IgnoredSidecarNote);
+            Assert.Single(session.Journal!.Segments);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Open_JournalWithMismatchedPageSize_IsRejectedWithError()
+    {
+        string dir = MakeTempDir();
+        try
+        {
+            string db = CreateRollbackModeDatabase(dir, pageSize: 512);
+            WriteJournal(db + "-journal", pageSize: 1024);
+
+            using var session = EvidenceSession.Open(db);
+
+            Assert.False(session.HasJournal);
+            Assert.Contains("page size", session.JournalError);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Open_BothSidecars_WalModeDatabase_UsesWalAndIgnoresJournal()
+    {
+        string dir = MakeTempDir();
+        try
+        {
+            string db = Path.Combine(dir, "evidence.db");
+            File.Copy(WalFixturePath("places_wal_multi_page.db"), db);
+            File.Copy(WalFixturePath("places_wal_multi_page.db-wal"), db + "-wal");
+            WriteJournal(db + "-journal", pageSize: 4096);
+
+            using var session = EvidenceSession.Open(db);
+
+            Assert.True(session.HasWal);
+            Assert.False(session.HasJournal);
+            Assert.Null(session.JournalError);
+            Assert.Equal("journal file ignored (database is in WAL mode)", session.IgnoredSidecarNote);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Open_BothSidecars_RollbackModeDatabase_UsesJournalAndIgnoresWal()
+    {
+        string dir = MakeTempDir();
+        try
+        {
+            string db = CreateRollbackModeDatabase(dir, pageSize: 512);
+            WriteJournal(db + "-journal", pageSize: 512);
+            File.WriteAllBytes(db + "-wal", new byte[64]); // never parsed — wrong mode
+
+            using var session = EvidenceSession.Open(db);
+
+            Assert.True(session.HasJournal);
+            Assert.False(session.HasWal);
+            Assert.Null(session.WalError);
+            Assert.Equal("WAL file ignored (database is in rollback-journal mode)", session.IgnoredSidecarNote);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Open_UnparseableWal_ReportsWalErrorInsteadOfSilentlyDroppingIt()
+    {
+        string dir = MakeTempDir();
+        try
+        {
+            string db = Path.Combine(dir, "evidence.db");
+            File.Copy(WalFixturePath("places_wal_multi_page.db"), db);
+            File.WriteAllBytes(db + "-wal", new byte[10]); // shorter than the 32-byte WAL header
+
+            using var session = EvidenceSession.Open(db);
+
+            Assert.False(session.HasWal);
+            Assert.NotNull(session.WalError);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private static string MakeTempDir()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), $"shard_session_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    /// <summary>A small database in the default rollback-journal mode (header write version 1).</summary>
+    private static string CreateRollbackModeDatabase(string dir, int pageSize)
+    {
+        string path = Path.Combine(dir, "evidence.db");
+        using var connection = new SqliteConnection($"Data Source={path};Pooling=False");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"""
+            PRAGMA page_size={pageSize};
+            CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);
+            INSERT INTO t (name) VALUES ('a'), ('b');
+            """;
+        cmd.ExecuteNonQuery();
+        return path;
+    }
+
+    /// <summary>A minimal valid single-segment rollback journal holding one page-2 record.</summary>
+    private static void WriteJournal(string path, int pageSize)
+    {
+        const uint nonce = 0x11111111;
+        const int sectorSize = 512;
+        var header = new byte[sectorSize];
+        new byte[] { 0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7 }.CopyTo(header, 0);
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(8),  1);       // page count
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(12), nonce);
+        BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(16),  2);       // original db size in pages
+        BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(20),  sectorSize);
+        BinaryPrimitives.WriteInt32BigEndian(header.AsSpan(24),  pageSize);
+
+        var pageData = new byte[pageSize];
+        Array.Fill(pageData, (byte)0x2A);
+        var record = new byte[pageSize + 8];
+        BinaryPrimitives.WriteUInt32BigEndian(record.AsSpan(0), 2);
+        pageData.CopyTo(record, 4);
+        BinaryPrimitives.WriteUInt32BigEndian(record.AsSpan(pageSize + 4),
+            RollbackJournalPageRecord.ComputeChecksum(pageData, nonce));
+
+        File.WriteAllBytes(path, [.. header, .. record]);
+    }
 
     private static ShadowProject MakeProject(string evidencePath, out EvidenceSession session)
     {

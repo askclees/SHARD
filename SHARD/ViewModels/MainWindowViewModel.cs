@@ -928,32 +928,28 @@ public sealed class MainWindowViewModel : ViewModelBase
                 StatusText += $"  ·  Shadow DB failed: {ex.Message}";
             }
 
-            string journalPath = path + "-journal";
-            bool hasWal     = _session.HasWal;
-            bool hasJournal = File.Exists(journalPath);
-            string? ignoredSidecar = null;
-            if (hasWal && hasJournal)
-            {
-                // both can exist after the journal mode was switched; the header's write
-                // version says which mode the database is in now (2 = WAL, 1 = rollback)
-                bool walMode = Database.Header.WriteVersion == 2;
-                ignoredSidecar = walMode ? "journal file ignored (database is in WAL mode)"
-                                         : "WAL file ignored (database is in rollback-journal mode)";
-                hasWal     = walMode;
-                hasJournal = !walMode;
-            }
-            if (hasWal)
+            // EvidenceSession has already detected and parsed whichever sidecar matches the
+            // database's journal mode; this only populates the tab or reports why it failed.
+            if (_session.HasWal)
             {
                 Report("Loading WAL file…");
-                LoadWalFile(path + "-wal", _session.Wal);
+                LoadWalFile(_session.WalPath, _session.Wal);
             }
-            else if (hasJournal)
+            else if (_session.WalError is not null)
+            {
+                StatusText = $"WAL file could not be loaded: {_session.WalError}";
+            }
+            else if (_session.HasJournal)
             {
                 Report("Loading journal file…");
-                LoadJournalFile(journalPath);
+                LoadJournalFile(_session.JournalPath, _session.Journal);
             }
-            if (ignoredSidecar is not null)
-                StatusText += $"  ·  {ignoredSidecar}";
+            else if (_session.JournalError is not null)
+            {
+                StatusText = $"Journal file could not be loaded: {_session.JournalError}";
+            }
+            if (_session.IgnoredSidecarNote is not null)
+                StatusText += $"  ·  {_session.IgnoredSidecarNote}";
 
             if (AutoCarveUnknownPagesOnOpen)
             {
@@ -1160,20 +1156,23 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    public void LoadJournalFile(string journalPath)
+    /// <summary>Loads a rollback journal into the Journal tab. <paramref name="preloaded"/> is
+    /// passed by the auto-detect path, where <see cref="EvidenceSession"/> has already parsed and
+    /// validated it; the manual "Load Journal File…" action omits it.</summary>
+    public void LoadJournalFile(string journalPath, RollbackJournalFile? preloaded = null)
     {
         if (Database is null) return;
         try
         {
-            var journal = new RollbackJournalFile(journalPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
-
-            // a journal with a different page size was written for a different database
-            int journalPageSize = journal.Segments[0].Header.SizeOfJournalPages;
-            if (journalPageSize != Database.Header.PageSize)
+            var journal = preloaded;
+            if (journal is null)
             {
-                StatusText = $"Journal file could not be loaded: its page size ({journalPageSize:N0}) " +
-                             $"does not match the database's ({Database.Header.PageSize:N0})";
-                return;
+                (journal, string? error) = EvidenceSession.LoadJournal(journalPath, Database);
+                if (journal is null)
+                {
+                    StatusText = $"Journal file could not be loaded: {error}";
+                    return;
+                }
             }
 
             JournalTab = new JournalViewModel(journalPath, journal, Database);
@@ -1191,11 +1190,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void SyncWalToProject()
     {
         if (Project is null || WalTab is null || _session is null) return;
-        var (synced, recovered) = _session.SyncAndRecoverWal(Project, WalTab.WalFile);
-        if (synced > 0)
-            StatusText += $"  ·  {synced} WAL record{(synced == 1 ? "" : "s")} synced";
-        if (recovered > 0)
-            StatusText += $"  ·  {recovered} deleted WAL record{(recovered == 1 ? "" : "s")} recovered";
+        var result = _session.SyncAndRecoverWal(Project, WalTab.WalFile);
+        if (result.Synced > 0)
+            StatusText += $"  ·  {result.Synced} WAL record{(result.Synced == 1 ? "" : "s")} synced";
+        if (result.SyncError is not null)
+            StatusText += $"  ·  WAL sync failed: {result.SyncError}";
+        if (result.Recovered > 0)
+            StatusText += $"  ·  {result.Recovered} deleted WAL record{(result.Recovered == 1 ? "" : "s")} recovered";
+        if (result.RecoveryError is not null)
+            StatusText += $"  ·  WAL deleted recovery failed: {result.RecoveryError}";
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
