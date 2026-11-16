@@ -3,6 +3,7 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using ReactiveUI.Primitives;
 using SHARD.ViewModels;
 
 namespace SHARD.Views;

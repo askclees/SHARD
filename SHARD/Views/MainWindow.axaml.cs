@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using ReactiveUI.Primitives;
 using SHARD.Controls;
 using SHARD.Core.Enums;
 using SHARD.Core.Records;

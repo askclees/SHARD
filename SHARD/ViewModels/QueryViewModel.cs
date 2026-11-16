@@ -1,10 +1,10 @@
 using System;
 using System.Collections.ObjectModel;
-using System.Reactive;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using ReactiveUI;
+using ReactiveUI.Primitives;
 using SHARD.Core.Shadow;
 
 namespace SHARD.ViewModels;
@@ -80,7 +80,7 @@ public sealed class QueryViewModel : ViewModelBase
 
     // ── Command ───────────────────────────────────────────────────────────────
 
-    public ReactiveCommand<Unit, Unit> RunQueryCommand { get; }
+    public ReactiveCommand<RxVoid, RxVoid> RunQueryCommand { get; }
 
     public QueryViewModel()
     {

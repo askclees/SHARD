@@ -21,7 +21,7 @@
             <Grid ColumnDefinitions="*,Auto">
                 <TextBox Grid.Column="0"
                          Name="PathBox"
-                         Watermark="/path/to/project"
+                         PlaceholderText="/path/to/project"
                          FontSize="13" />
                 <Button Grid.Column="1"
                         Name="BrowseButton"

@@ -1,5 +1,5 @@
 ﻿using Avalonia;
-using Avalonia.ReactiveUI;
+using ReactiveUI.Avalonia;
 using Avalonia.X11;
 
 namespace SHARD;
@@ -15,5 +15,5 @@ internal static class Program
                   .UsePlatformDetect()
                   .With(new X11PlatformOptions { OverlayPopups = true })
                   .LogToTrace()
-                  .UseReactiveUI();
+                  .UseReactiveUI(_ => { }); // default activation, property and command binding
 }

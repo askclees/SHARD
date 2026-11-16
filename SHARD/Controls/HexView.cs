@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -165,7 +166,7 @@ public sealed class HexView : Control
 
     // Lock before base.OnGotFocus so we catch BringIntoView called inside it,
     // and also catch focus-return after a popup (ContextMenu) closes.
-    protected override void OnGotFocus(GotFocusEventArgs e)
+    protected override void OnGotFocus(FocusChangedEventArgs e)
     {
         _scrollLock = _parentSv?.Offset ?? default;
         base.OnGotFocus(e);
