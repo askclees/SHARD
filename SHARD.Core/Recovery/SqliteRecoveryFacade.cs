@@ -82,9 +82,12 @@ public static class SqliteRecoveryFacade
             var results = OrphanPageCarver.Carve(session.Database, candidates, out carveAmbiguous);
             carved = results.Count;
 
-            using var carveConnection = new SqliteConnection($"Data Source={outputPath}");
-            carveConnection.Open();
-            ShadowDatabaseBuilder.PersistCarvedOrphanRecords(carveConnection, results);
+            using (var carveConnection = new SqliteConnection($"Data Source={outputPath}"))
+            {
+                carveConnection.Open();
+                ShadowDatabaseBuilder.PersistCarvedOrphanRecords(carveConnection, results);
+            }
+            session.UpdateRowStates(outputPath, options.Flags); // label the carved rows too
         }
 
         var tables = new List<TableRecoverySummary>();

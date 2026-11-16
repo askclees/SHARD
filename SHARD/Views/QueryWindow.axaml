@@ -85,6 +85,18 @@
                                  IsChecked="{Binding IsLiveAndRecovered}"
                                  FontSize="11"
                                  ToolTip.Tip="Union both, tagged with an _is_recovered column." />
+                    <TextBlock Text="Row state:" FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0" Opacity="0.7" />
+                    <ComboBox ItemsSource="{Binding RowStateFilters}"
+                              SelectedItem="{Binding SelectedRowStateFilter}"
+                              FontSize="11"
+                              MinWidth="200"
+                              ToolTip.Tip="{Binding SelectedRowStateFilter.Tip}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:RowStateFilter">
+                                <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Tip}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                 </StackPanel>
             </Border>
 

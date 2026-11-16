@@ -903,7 +903,7 @@ public static class ShadowDatabaseBuilder
         }
     }
 
-    private static string QuoteLiteral(string value) => $"'{value.Replace("'", "''")}'";
+    internal static string QuoteLiteral(string value) => $"'{value.Replace("'", "''")}'";
 
     /// <summary>
     /// Walks every WAL frame oldest-to-newest and inserts into the shadow database any deleted or
@@ -1107,11 +1107,12 @@ public static class ShadowDatabaseBuilder
         var liveValueKeys      = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var recoveredValueKeys = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var partialCopies      = new Dictionary<string, Dictionary<string, List<long>>>(StringComparer.OrdinalIgnoreCase);
+        var recoveredVersions  = new Dictionary<string, HashSet<(long RowId, string Key)>>(StringComparer.OrdinalIgnoreCase);
         var recordStructures   = new Dictionary<string, RecordStructure>(StringComparer.OrdinalIgnoreCase);
         foreach (var (tableName, (schema, _)) in allSchemas)
         {
             liveValueKeys[tableName] = livePayloads[tableName].Values.Select(v => ValueKey(schema, v)).ToHashSet();
-            (recoveredValueKeys[tableName], partialCopies[tableName]) = GetRecoveredValueKeysFromShadow(connection, schema);
+            (recoveredValueKeys[tableName], partialCopies[tableName], recoveredVersions[tableName]) = GetRecoveredValueKeysFromShadow(connection, schema);
             if (deletedDataFlags is not null)
                 recordStructures[tableName] = RecordStructure.FromSchema(schema);
         }
@@ -1162,11 +1163,15 @@ public static class ShadowDatabaseBuilder
                 }
                 else if (knownLive.Contains(rowId) && knownPayloads.TryGetValue(rowId, out var livePayload))
                 {
-                    // Stage 3: record still exists but payload has changed — keep the older version
-                    if (FieldsDiffer(cell.FieldValues, livePayload))
+                    // Stage 3: record still exists but payload has changed — keep the older version,
+                    // unless another pass already recovered this same version (e.g. from the file
+                    // as well as from a WAL frame that still held it)
+                    if (FieldsDiffer(cell.FieldValues, livePayload) &&
+                        !recoveredVersions[tableName].Contains((rowId, ValueKey(schema, cell.FieldValues))))
                     {
                         ReplacePartialCopies(connection, transaction, schema, partialCopies[tableName], ValueKey(schema, cell.FieldValues));
                         InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, previousVersionMethod, walFrame);
+                        recoveredVersions[tableName].Add((rowId, ValueKey(schema, cell.FieldValues)));
                         addedSet.Add(rowId);
                         recoveredValueKeys[tableName].Add(ValueKey(schema, cell.FieldValues));
                         inserted++;
@@ -1230,10 +1235,10 @@ public static class ShadowDatabaseBuilder
     /// round-trips through a shadow column's type affinity (e.g. 5 stored in a TEXT column as '5')
     /// still matches.
     /// </summary>
-    private static string ValueKey(TableSchema schema, IReadOnlyList<SqliteValue?> fieldValues) =>
+    internal static string ValueKey(TableSchema schema, IReadOnlyList<SqliteValue?> fieldValues) =>
         ValueKey(schema, i => i < fieldValues.Count ? fieldValues[i]?.Value : null);
 
-    private static string ValueKey(TableSchema schema, Func<int, object?> valueAt)
+    internal static string ValueKey(TableSchema schema, Func<int, object?> valueAt)
     {
         var sb = new System.Text.StringBuilder();
         for (int i = 0; i < schema.Columns.Count; i++)
@@ -1256,11 +1261,12 @@ public static class ShadowDatabaseBuilder
     /// table's recovered table, plus — for rows recovered without a rowid (no rowid-alias column, or
     /// its value NULL or not positive) — their shadow rowids by key, so a complete copy can replace them.
     /// </summary>
-    private static (HashSet<string> Keys, Dictionary<string, List<long>> Partials) GetRecoveredValueKeysFromShadow(
-        SqliteConnection connection, TableSchema schema)
+    private static (HashSet<string> Keys, Dictionary<string, List<long>> Partials, HashSet<(long RowId, string Key)> Versions)
+        GetRecoveredValueKeysFromShadow(SqliteConnection connection, TableSchema schema)
     {
         var keys = new HashSet<string>();
         var partials = new Dictionary<string, List<long>>();
+        var versions = new HashSet<(long RowId, string Key)>();
         int aliasIndex = schema.Columns.FindIndex(c => c.IsRowIdAlias);
         try
         {
@@ -1273,15 +1279,17 @@ public static class ShadowDatabaseBuilder
             {
                 string key = ValueKey(schema, i => reader.IsDBNull(i) ? null : reader.GetValue(i));
                 keys.Add(key);
-                bool rowIdKnown = aliasIndex >= 0 && !reader.IsDBNull(aliasIndex) &&
-                                  reader.GetValue(aliasIndex) is long id && id > 0;
-                if (rowIdKnown) continue;
+                if (aliasIndex >= 0 && !reader.IsDBNull(aliasIndex) && reader.GetValue(aliasIndex) is long id && id > 0)
+                {
+                    versions.Add((id, key));
+                    continue;
+                }
                 if (!partials.TryGetValue(key, out var ids)) partials[key] = ids = [];
                 ids.Add(reader.GetInt64(shadowRowIdOrdinal));
             }
         }
         catch (SqliteException) { /* table may not exist yet */ }
-        return (keys, partials);
+        return (keys, partials, versions);
     }
 
     /// <summary>Deletes recovered rows that are rowid-less copies of the record with <paramref name="key"/>,
@@ -1406,5 +1414,5 @@ public static class ShadowDatabaseBuilder
         return ids;
     }
 
-    private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";
+    internal static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";
 }
