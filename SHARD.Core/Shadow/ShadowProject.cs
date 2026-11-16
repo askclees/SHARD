@@ -46,7 +46,8 @@ public sealed class ShadowProject : IDisposable
     /// large evidence file prefer <see cref="Create"/> with a folder on real disk instead.
     /// </summary>
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) CreateTemporary(
-        string evidenceFilePath, SqliteForensicDatabase database, Action<string>? reportProgress = null)
+        string evidenceFilePath, SqliteForensicDatabase database,
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null)
     {
         // GetTempFileName creates a zero-byte file; rename with .db so SQLite is happy.
         string tempBase = Path.GetTempFileName();
@@ -59,7 +60,7 @@ public sealed class ShadowProject : IDisposable
             CreatedUtc       = DateTime.UtcNow,
         };
 
-        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, reportProgress);
+        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, flags, reportProgress);
         return (new ShadowProject(null, manifest, tempPath, tempPath), warnings);
     }
 
@@ -70,7 +71,8 @@ public sealed class ShadowProject : IDisposable
     /// <see cref="CreateTemporary"/> would otherwise use (see its remarks).
     /// </summary>
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) Create(
-        string evidenceFilePath, SqliteForensicDatabase database, string projectFolder, Action<string>? reportProgress = null)
+        string evidenceFilePath, SqliteForensicDatabase database, string projectFolder,
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null)
     {
         Directory.CreateDirectory(projectFolder);
 
@@ -84,7 +86,7 @@ public sealed class ShadowProject : IDisposable
         if (File.Exists(shadowDbPath))
             throw new InvalidOperationException($"A shadow database already exists at '{shadowDbPath}'.");
 
-        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, reportProgress);
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, flags, reportProgress);
 
         File.WriteAllText(
             Path.Combine(projectFolder, "project.json"),

@@ -3,8 +3,8 @@ using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
+using SHARD.Core.Session;
 using SHARD.Core.Shadow;
-using SHARD.Core.WAL;
 
 namespace SHARD.Core.Recovery;
 
@@ -15,9 +15,10 @@ namespace SHARD.Core.Recovery;
 // stable contract for out-of-process consumers (SHARD.Native's exports serialize
 // these types directly).
 
-/// <summary>Options controlling <see cref="SqliteRecoveryFacade.Recover"/>.</summary>
+/// <summary>Options controlling <see cref="SqliteRecoveryFacade.Recover"/>. <paramref name="Flags"/>
+/// null means <see cref="RecoveryFlags.Default"/> (everything on, matching historical behavior).</summary>
 public sealed record RecoveryOptions(
-    bool ProcessWal = true,
+    RecoveryFlags? Flags = null,
     CarveMode? CarveMode = null,
     IReadOnlyList<string>? CarveTableFilter = null);
 
@@ -66,21 +67,9 @@ public static class SqliteRecoveryFacade
     {
         options ??= new RecoveryOptions();
 
-        using var database = SqliteForensicDatabase.Open(inputPath);
-        var warnings = ShadowDatabaseBuilder.Create(outputPath, database);
-
-        int walInserted = 0;
-        if (options.ProcessWal)
-        {
-            string walPath = inputPath + "-wal";
-            if (File.Exists(walPath))
-            {
-                var wal = new WalFile(walPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage);
-                using var walConnection = new SqliteConnection($"Data Source={outputPath}");
-                walConnection.Open();
-                walInserted = ShadowDatabaseBuilder.InsertWalDeletedRows(walConnection, database, wal);
-            }
-        }
+        using var session = EvidenceSession.Open(inputPath);
+        var database = session.Database;
+        var (warnings, walInserted) = session.BuildShadowDatabase(outputPath, options.Flags);
 
         int carved = 0, carveAmbiguous = 0;
         if (options.CarveMode is { } mode)

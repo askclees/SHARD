@@ -66,7 +66,7 @@ public class SqliteRecoveryFacadeTests
         try
         {
             var result = SqliteRecoveryFacade.Recover(inputPath, outputPath,
-                new RecoveryOptions(ProcessWal: false, CarveMode: CarveMode.Loose));
+                new RecoveryOptions(Flags: new RecoveryFlags(ProcessWal: false), CarveMode: CarveMode.Loose));
 
             Assert.Equal(156, result.CarvedRecords);
             Assert.Equal(0, result.CarveAmbiguousSkipped);
