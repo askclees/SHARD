@@ -71,14 +71,15 @@ public static class SqliteRecoveryFacade
         options ??= new RecoveryOptions();
 
         using var session = EvidenceSession.Open(inputPath);
-        var database = session.Database;
+        // The committed state when a WAL applies, so live row counts match what SQLite returns
+        var database = session.ShadowSource(options.Flags);
         var (warnings, walInserted, journalInserted) = session.BuildShadowDatabase(outputPath, options.Flags);
 
         int carved = 0, carveAmbiguous = 0;
         if (options.CarveMode is { } mode)
         {
-            var candidates = OrphanPageCarver.BuildCandidates(database, mode, options.CarveTableFilter);
-            var results = OrphanPageCarver.Carve(database, candidates, out carveAmbiguous);
+            var candidates = OrphanPageCarver.BuildCandidates(session.Database, mode, options.CarveTableFilter);
+            var results = OrphanPageCarver.Carve(session.Database, candidates, out carveAmbiguous);
             carved = results.Count;
 
             using var carveConnection = new SqliteConnection($"Data Source={outputPath}");

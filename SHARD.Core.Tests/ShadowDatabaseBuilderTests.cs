@@ -167,9 +167,10 @@ public class ShadowDatabaseBuilderTests
             shadow.Open();
 
             var tables = GetTableNames(shadow);
-            Assert.Equal(82, tables.Count); // 40 source tables + 40 _shard_recovered_* tables + _shard_overflow_pages + _shard_pages
+            Assert.Equal(83, tables.Count); // 40 source tables + 40 _shard_recovered_* tables + _shard_overflow_pages + _shard_pages + _shard_info
             Assert.Contains("_shard_overflow_pages", tables);
             Assert.Contains("_shard_pages", tables);
+            Assert.Contains("_shard_info", tables);
             Assert.DoesNotContain(tables, t => t.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase));
         }
         finally

@@ -14,15 +14,19 @@ Recovered deleted records are stored in `_shard_recovered_<tablename>` tables in
 1. Open a database file.
 2. Choose **File → Create Project**.
 3. Select a folder to store the project in.
-4. If a WAL file is detected alongside the evidence file, SHARD will offer to load it. Any records present in the WAL but not in the main database are automatically synced into the shadow database's live tables.
+4. If a WAL file is detected alongside the evidence file, the shadow database's live tables hold what SQLite itself returns: the database file with the WAL's committed frames applied. Rows the WAL has deleted or changed since the last checkpoint are kept in `_shard_recovered_<tablename>`, taken from the database file's own version of the page:
+   - `db_file_deleted_in_wal`: live in the database file, deleted by a committed WAL transaction.
+   - `db_file_previous_version`: the database file's version of a row the WAL has since changed.
+
+   A WAL loaded later with **File → Load WAL File…** is applied to an already-built shadow database instead: its committed rows are added to the live tables.
 
 5. If a rollback journal (`-journal` file) is detected instead, each journal record is an earlier image of a database page. Records in those images that no longer exist in the database are added to `_shard_recovered_<tablename>` with `_recovery_method` = `journal_page`; older versions of records that still exist but have since changed are added as `journal_previous_version`.
 
-The status bar shows how many WAL records were synced, or how many journal records were recovered, after the project is created.
+The status bar shows how many WAL or journal records were recovered after the project is created.
 
 ## Opening an existing project
 
-**File → Open Project** — select the project folder. SHARD reopens the evidence file and reloads the shadow database. WAL sync and journal recovery run automatically if a WAL or journal file is loaded; journal records already recovered into the project are not added twice.
+**File → Open Project** — select the project folder. SHARD reopens the evidence file and reloads the shadow database. WAL and journal recovery run automatically if a WAL or journal file is loaded; records already recovered into the project are not added twice.
 
 ## Query Tab
 

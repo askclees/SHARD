@@ -55,14 +55,35 @@ public sealed class EvidenceSession : IDisposable
     /// database's current journal mode.</summary>
     public string? IgnoredSidecarNote { get; }
 
+    /// <summary>
+    /// The database as SQLite sees it: the file with the WAL's committed frames applied (see
+    /// <see cref="SqliteForensicDatabase.OpenCommittedState"/>). Null when there's no WAL or it has
+    /// no committed frames — the file alone is then the committed state.
+    /// </summary>
+    public SqliteForensicDatabase? CommittedDatabase { get; }
+
+    /// <summary>Why <see cref="CommittedDatabase"/> couldn't be opened although the WAL has
+    /// committed frames; shadow databases are then built from the file alone.</summary>
+    public string? CommittedStateError { get; }
+
+    /// <summary>
+    /// Where a shadow database's rows and schema come from: <see cref="CommittedDatabase"/> when
+    /// WAL processing is on and there is one, so live tables hold what SQLite returns; otherwise
+    /// the file. The page layout always comes from the file (see <see cref="ShadowDatabaseBuilder.Create"/>).
+    /// </summary>
+    public SqliteForensicDatabase ShadowSource(RecoveryFlags? flags = null) =>
+        (flags ?? RecoveryFlags.Default).ProcessWal && CommittedDatabase is not null ? CommittedDatabase : Database;
+
     /// <summary>Hashes of the database and every sidecar present, taken when the session was opened.</summary>
     public IReadOnlyList<EvidenceFileHash> Hashes { get; }
 
     private EvidenceSession(string evidencePath, SqliteForensicDatabase database,
         WalFile? wal, string? walError, RollbackJournalFile? journal, string? journalError, string? ignoredSidecarNote,
-        IReadOnlyList<EvidenceFileHash> hashes)
+        IReadOnlyList<EvidenceFileHash> hashes, SqliteForensicDatabase? committedDatabase, string? committedStateError)
     {
         Hashes = hashes;
+        CommittedDatabase = committedDatabase;
+        CommittedStateError = committedStateError;
         EvidencePath = evidencePath;
         Database = database;
         Wal = wal;
@@ -103,7 +124,16 @@ public sealed class EvidenceSession : IDisposable
         if (hasJournal)
             (journal, journalError) = LoadJournal(evidencePath + "-journal", database);
 
-        return new EvidenceSession(evidencePath, database, wal, walError, journal, journalError, ignoredSidecarNote, hashes);
+        SqliteForensicDatabase? committed = null;
+        string? committedError = null;
+        if (wal is { CommittedFrameCount: > 0 })
+        {
+            try { committed = SqliteForensicDatabase.OpenCommittedState(evidencePath, wal); }
+            catch (Exception ex) { committedError = ex.Message; }
+        }
+
+        return new EvidenceSession(evidencePath, database, wal, walError, journal, journalError, ignoredSidecarNote,
+            hashes, committed, committedError);
     }
 
     /// <summary>
@@ -161,16 +191,20 @@ public sealed class EvidenceSession : IDisposable
         string shadowDbPath, RecoveryFlags? flags = null, Action<string>? reportProgress = null)
     {
         flags ??= RecoveryFlags.Default;
-        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, Database, flags, reportProgress, Hashes).ToList();
+        var source = ShadowSource(flags);
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, source, flags, reportProgress, Hashes,
+            layoutDatabase: Database).ToList();
         if (flags.ProcessWal && Wal is not null)
             warnings.AddRange(DescribeWalProblems(Wal).Select(p => $"WAL: {p}"));
+        if (flags.ProcessWal && CommittedStateError is not null)
+            warnings.Add($"WAL: couldn't apply committed frames, so live tables show the database file only: {CommittedStateError}");
 
         int walInserted = 0;
         if (flags.ProcessWal && Wal is not null)
         {
             using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
             connection.Open();
-            walInserted = ShadowDatabaseBuilder.InsertWalDeletedRows(connection, Database, Wal);
+            walInserted = RecoverWalHistory(connection, Wal, source);
         }
 
         int journalInserted = 0;
@@ -284,11 +318,42 @@ public sealed class EvidenceSession : IDisposable
 
         int synced = 0, recovered = 0;
         string? syncError = null, recoveryError = null;
+
+        // This session's own WAL, and the project was built from CommittedDatabase: its live tables
+        // already hold the committed state, so there's nothing to sync — only history to recover.
+        if (ReferenceEquals(wal, Wal) && CommittedDatabase is not null && project.LiveTablesIncludeWal)
+        {
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={project.ShadowDatabasePath}");
+                connection.Open();
+                recovered = RecoverWalHistory(connection, wal, CommittedDatabase);
+            }
+            catch (Exception ex) { recoveryError = ex.Message; }
+            return new WalSyncResult(0, recovered, null, recoveryError);
+        }
+
+        // A WAL loaded separately (e.g. the GUI's "Load WAL File…"), or a project built from the file
+        // alone: add the WAL's committed rows to the live tables.
         try { synced = project.SyncWalFramesToShadow(wal, Database); }
         catch (Exception ex) { syncError = ex.Message; }
         try { recovered = project.RecoverWalDeletedRows(wal, Database); }
         catch (Exception ex) { recoveryError = ex.Message; }
         return new WalSyncResult(synced, recovered, syncError, recoveryError);
+    }
+
+    /// <summary>
+    /// WAL history into a shadow built from <paramref name="source"/>: when that's the committed
+    /// state, first the database file's versions of pages the WAL replaced (rows the WAL deleted or
+    /// changed), then every frame SQLite ignores. Both skip rows already recovered.
+    /// </summary>
+    private int RecoverWalHistory(SqliteConnection connection, WalFile wal, SqliteForensicDatabase source)
+    {
+        int inserted = 0;
+        if (source.IncludesWal)
+            inserted += ShadowDatabaseBuilder.InsertSupersededFilePageRows(connection, source, Database);
+        inserted += ShadowDatabaseBuilder.InsertWalDeletedRows(connection, source, wal);
+        return inserted;
     }
 
     /// <summary>
@@ -317,7 +382,11 @@ public sealed class EvidenceSession : IDisposable
         return (carved, ambiguousSkipped);
     }
 
-    public void Dispose() => Database.Dispose();
+    public void Dispose()
+    {
+        CommittedDatabase?.Dispose();
+        Database.Dispose();
+    }
 }
 
 /// <summary>Outcome of <see cref="EvidenceSession.SyncAndRecoverWal"/>. Deconstructs to
