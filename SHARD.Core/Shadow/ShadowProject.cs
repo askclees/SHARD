@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Comparison;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
@@ -220,6 +221,18 @@ public sealed class ShadowProject : IDisposable
         using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
         return ShadowDatabaseBuilder.InsertWalDeletedRows(connection, database, walFile);
+    }
+
+    /// <summary>
+    /// Inserts records from <paramref name="journal"/>'s page images that were deleted or changed
+    /// by the journalled transaction — see <see cref="ShadowDatabaseBuilder.InsertJournalDeletedRows"/>.
+    /// Returns the number of records inserted.
+    /// </summary>
+    public int RecoverJournalDeletedRows(RollbackJournalFile journal, SqliteForensicDatabase database)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        return ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, database, journal);
     }
 
     /// <summary>

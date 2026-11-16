@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
@@ -29,6 +30,10 @@ public static class ShadowDatabaseBuilder
     public const string RecoveryMethodManual             = "manual";
     public const string RecoveryMethodWalFrame           = "wal_frame";
     public const string RecoveryMethodWalPreviousVersion = "wal_previous_version";
+    /// <summary>A record found in a rollback-journal page image that no longer exists in the database.</summary>
+    public const string RecoveryMethodJournalPage            = "journal_page";
+    /// <summary>A rollback-journal page image's version of a record whose live payload has since changed.</summary>
+    public const string RecoveryMethodJournalPreviousVersion = "journal_previous_version";
     /// <summary>Attributed to a live table purely by content-matching an unattributed page's bytes against its <see cref="RecordStructure"/> — see <see cref="OrphanPageCarver"/>.</summary>
     public const string RecoveryMethodOrphanCarving       = "orphan_carving";
 
@@ -761,7 +766,61 @@ public static class ShadowDatabaseBuilder
         SqliteForensicDatabase database,
         WalFile wal)
     {
-        if (wal.Frames.Count == 0) return 0;
+        // Skip current-generation frames — those are live data handled by SyncWalFramesToShadow,
+        // not historical deleted data. Only salt-mismatched (pre-checkpoint) frames hold
+        // records that may have been deleted or overwritten.
+        var pageImages = wal.Frames
+            .Where(f => !f.Header.IsCurrent)
+            .Select(f => (f.Header.PageNumber, f.Page));
+        return InsertHistoricalPageRows(connection, database, pageImages,
+            RecoveryMethodWalFrame, RecoveryMethodWalPreviousVersion);
+    }
+
+    /// <summary>
+    /// Inserts records from a rollback journal's page images that are no longer in the database
+    /// (<see cref="RecoveryMethodJournalPage"/>) or whose live payload has since changed
+    /// (<see cref="RecoveryMethodJournalPreviousVersion"/>). Each journal record holds a page's
+    /// content from before the journalled transaction modified it, so it can hold rows that
+    /// transaction deleted or updated. Every record is used, not only those SQLite would play back:
+    /// a stale record (checksum from an earlier transaction's nonce) or one after playback stopped
+    /// is still a genuine earlier image of that page, and schema correlation rejects anything that
+    /// doesn't fit. For a hot journal (crashed mid-transaction) the database file itself may hold
+    /// the uncommitted changes, in which case the journal's rows are the last committed state.
+    /// Returns the number of records inserted.
+    /// </summary>
+    public static int InsertJournalDeletedRows(
+        SqliteConnection connection,
+        SqliteForensicDatabase database,
+        RollbackJournalFile journal)
+    {
+        var pageImages = journal.Segments
+            .SelectMany(s => s.PageRecords)
+            .Where(r => r.Status != JournalRecordStatus.InvalidPageNumber)
+            .Select(r => (r.PageNumber, r.Page));
+        return InsertHistoricalPageRows(connection, database, pageImages,
+            RecoveryMethodJournalPage, RecoveryMethodJournalPreviousVersion);
+    }
+
+    /// <summary>
+    /// Shared by WAL and rollback-journal recovery: walks earlier images of database pages
+    /// oldest-to-newest, correlates each table-leaf image to a table, and inserts records that are
+    /// no longer live (<paramref name="deletedMethod"/>) or whose live payload differs
+    /// (<paramref name="previousVersionMethod"/>). Skips records already in the recovered table
+    /// under either method, so running it again over the same source (e.g. re-opening a saved
+    /// project) doesn't duplicate rows.
+    /// </summary>
+    private static int InsertHistoricalPageRows(
+        SqliteConnection connection,
+        SqliteForensicDatabase database,
+        IEnumerable<(uint PageNumber, SqlitePage Page)> pageImages,
+        string deletedMethod,
+        string previousVersionMethod)
+    {
+        var leafImages = pageImages
+            .Where(p => p.Page is TableBTreeLeafPage)
+            .Select(p => (p.PageNumber, Page: (TableBTreeLeafPage)p.Page))
+            .ToList();
+        if (leafImages.Count == 0) return 0;
 
         var pageTableMap = database.BuildPageTableMap();
 
@@ -808,10 +867,15 @@ public static class ShadowDatabaseBuilder
             livePayloads[tableName] = payloads;
         }
 
-        // Build per-table: already-recovered rowid sets from the shadow DB
-        var recoveredRowIds = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
+        // Build per-table: already-recovered rowid sets from the shadow DB, plus the subset this
+        // source has already contributed (by either of its methods) on an earlier run
+        var recoveredRowIds   = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
+        var previouslyAdded   = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
         foreach (var (tableName, (schema, _)) in allSchemas)
+        {
             recoveredRowIds[tableName] = GetRecoveredRowIdsFromShadow(connection, schema);
+            previouslyAdded[tableName] = GetRecoveredRowIdsFromShadow(connection, schema, deletedMethod, previousVersionMethod);
+        }
 
         // Ensure recovered tables exist for every schema before opening a transaction
         foreach (var (_, (schema, _)) in allSchemas)
@@ -832,23 +896,14 @@ public static class ShadowDatabaseBuilder
                 $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", cols)}) VALUES ({string.Join(", ", phs)})";
         }
 
-        // Track which WAL rowids have already been inserted per table (oldest version wins)
-        var walAdded = new Dictionary<string, HashSet<long>>(StringComparer.OrdinalIgnoreCase);
         int inserted = 0;
 
         using var transaction = connection.BeginTransaction();
 
-        foreach (var frame in wal.Frames)
+        foreach (var (pageNum, imagePage) in leafImages)
         {
-            // Skip current-generation frames — those are live data handled by SyncWalFramesToShadow,
-            // not historical deleted data. Only salt-mismatched (pre-checkpoint) frames hold
-            // records that may have been deleted or overwritten.
-            if (frame.Header.IsCurrent) continue;
-            if (frame.Page is not TableBTreeLeafPage framePage) continue;
-            uint pageNum = frame.Header.PageNumber;
-
-            var schema = CorrelateWalFrameToSchema(
-                framePage, pageNum, database, pageTableMap, allSchemas,
+            var schema = CorrelatePageImageToSchema(
+                imagePage, pageNum, database, pageTableMap, allSchemas,
                 liveRowIds, recoveredRowIds, freelistPages);
             if (schema is null) continue;
 
@@ -857,15 +912,12 @@ public static class ShadowDatabaseBuilder
             var knownRecovered = recoveredRowIds.GetValueOrDefault(tableName) ?? [];
             var knownPayloads  = livePayloads.GetValueOrDefault(tableName)  ?? [];
 
-            if (!walAdded.TryGetValue(tableName, out var addedSet))
-            {
-                addedSet = new HashSet<long>();
-                walAdded[tableName] = addedSet;
-            }
+            // Rowids this source has already inserted (oldest version wins)
+            var addedSet = previouslyAdded[tableName];
 
             string insertSql = insertSqlPerTable[tableName];
 
-            foreach (var cell in framePage.Cells)
+            foreach (var cell in imagePage.Cells)
             {
                 long rowId = cell.RowId.Value;
                 if (addedSet.Contains(rowId)) continue;
@@ -873,16 +925,16 @@ public static class ShadowDatabaseBuilder
                 if (!knownLive.Contains(rowId) && !knownRecovered.Contains(rowId))
                 {
                     // Stage 2: record deleted before the current DB version
-                    InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, RecoveryMethodWalFrame);
+                    InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, deletedMethod);
                     addedSet.Add(rowId);
                     inserted++;
                 }
                 else if (knownLive.Contains(rowId) && knownPayloads.TryGetValue(rowId, out var livePayload))
                 {
                     // Stage 3: record still exists but payload has changed — keep the older version
-                    if (WalFieldsDiffer(cell.FieldValues, livePayload))
+                    if (FieldsDiffer(cell.FieldValues, livePayload))
                     {
-                        InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, RecoveryMethodWalPreviousVersion);
+                        InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, previousVersionMethod);
                         addedSet.Add(rowId);
                         inserted++;
                     }
@@ -894,7 +946,7 @@ public static class ShadowDatabaseBuilder
         return inserted;
     }
 
-    private static TableSchema? CorrelateWalFrameToSchema(
+    private static TableSchema? CorrelatePageImageToSchema(
         TableBTreeLeafPage framePage,
         uint pageNum,
         SqliteForensicDatabase database,
@@ -949,19 +1001,19 @@ public static class ShadowDatabaseBuilder
         // Page number beyond current DB page count (e.g., database was VACUUMed)
         // Accept only if exactly one known schema matches every cell's column count
         var candidates = allSchemas.Values
-            .Where(e => framePage.Cells.All(c => WalCellMatchesSchema(c, e.Schema)))
+            .Where(e => framePage.Cells.All(c => CellMatchesSchema(c, e.Schema)))
             .Select(e => e.Schema)
             .ToList();
         return candidates.Count == 1 ? candidates[0] : null;
     }
 
-    private static bool WalCellMatchesSchema(BTreeLeafCell cell, TableSchema schema)
+    private static bool CellMatchesSchema(BTreeLeafCell cell, TableSchema schema)
     {
         int expected = schema.Columns.Count(c => !c.IsRowIdAlias);
         return cell.FieldValues.Count == expected;
     }
 
-    private static bool WalFieldsDiffer(List<SqliteValue?> frameFields, List<SqliteValue?> liveFields)
+    private static bool FieldsDiffer(List<SqliteValue?> frameFields, List<SqliteValue?> liveFields)
     {
         if (frameFields.Count != liveFields.Count) return true;
         for (int i = 0; i < frameFields.Count; i++)
@@ -975,7 +1027,9 @@ public static class ShadowDatabaseBuilder
         return false;
     }
 
-    private static HashSet<long> GetRecoveredRowIdsFromShadow(SqliteConnection connection, TableSchema schema)
+    /// <summary>Rowids already in the table's recovered table — restricted to rows recovered by one
+    /// of <paramref name="methods"/> when any are given.</summary>
+    private static HashSet<long> GetRecoveredRowIdsFromShadow(SqliteConnection connection, TableSchema schema, params string[] methods)
     {
         var ids = new HashSet<long>();
         var rowIdCol = schema.Columns.FirstOrDefault(c => c.IsRowIdAlias);
@@ -986,6 +1040,13 @@ public static class ShadowDatabaseBuilder
         {
             using var cmd = connection.CreateCommand();
             cmd.CommandText = $"SELECT {QuoteIdentifier(rowIdCol.Name)} FROM {QuoteIdentifier(recoveredTable)} WHERE {QuoteIdentifier(rowIdCol.Name)} IS NOT NULL";
+            if (methods.Length > 0)
+            {
+                var placeholders = methods.Select((_, i) => $"@m{i}").ToList();
+                cmd.CommandText += $" AND {QuoteIdentifier(RecoveryMethodColumn)} IN ({string.Join(", ", placeholders)})";
+                for (int i = 0; i < methods.Length; i++)
+                    cmd.Parameters.AddWithValue(placeholders[i], methods[i]);
+            }
             using var reader = cmd.ExecuteReader();
             while (reader.Read()) ids.Add(reader.GetInt64(0));
         }

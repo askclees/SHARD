@@ -30,7 +30,8 @@ public sealed record RecoveryResult(
     IReadOnlyList<TableRecoverySummary> Tables,
     int WalRecordsInserted,
     int CarvedRecords,
-    int CarveAmbiguousSkipped);
+    int CarveAmbiguousSkipped,
+    int JournalRecordsInserted = 0);
 
 public sealed record DatabaseHeaderInfo(
     string Magic, int PageSize, string WriteVersion, int ReadVersion, int ReservedBytesPerPage,
@@ -59,7 +60,7 @@ public static class SqliteRecoveryFacade
     /// <summary>
     /// Opens <paramref name="inputPath"/>, builds a fully recovered SQLite database at
     /// <paramref name="outputPath"/> (live rows, in-tree deleted/freeblock-recovered rows, and —
-    /// per <paramref name="options"/> — WAL-recovered rows and/or orphan-page-carved rows), and
+    /// per <paramref name="options"/> — WAL- or rollback-journal-recovered rows and/or orphan-page-carved rows), and
     /// returns a summary. <paramref name="outputPath"/> is itself a normal, valid SQLite database
     /// any SQLite library (including Python's stdlib <c>sqlite3</c>) can open directly.
     /// </summary>
@@ -69,7 +70,7 @@ public static class SqliteRecoveryFacade
 
         using var session = EvidenceSession.Open(inputPath);
         var database = session.Database;
-        var (warnings, walInserted) = session.BuildShadowDatabase(outputPath, options.Flags);
+        var (warnings, walInserted, journalInserted) = session.BuildShadowDatabase(outputPath, options.Flags);
 
         int carved = 0, carveAmbiguous = 0;
         if (options.CarveMode is { } mode)
@@ -96,7 +97,7 @@ public static class SqliteRecoveryFacade
             }
         }
 
-        return new RecoveryResult(outputPath, warnings, tables, walInserted, carved, carveAmbiguous);
+        return new RecoveryResult(outputPath, warnings, tables, walInserted, carved, carveAmbiguous, journalInserted);
     }
 
     public static DatabaseHeaderInfo GetHeader(string inputPath)

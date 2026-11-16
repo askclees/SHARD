@@ -130,11 +130,12 @@ public sealed class EvidenceSession : IDisposable
     /// <summary>
     /// Builds a fully recovered shadow database at <paramref name="shadowDbPath"/> in one call:
     /// live rows, in-tree recovery per <paramref name="flags"/>, and — if this session has a WAL
-    /// and <see cref="RecoveryFlags.ProcessWal"/> is on — WAL-deleted-record recovery against the
-    /// just-built output. Orphan-page carving is deliberately not included here; call
+    /// and <see cref="RecoveryFlags.ProcessWal"/> is on — WAL-deleted-record recovery, or — if it
+    /// has a rollback journal and <see cref="RecoveryFlags.ProcessJournal"/> is on — journal
+    /// page-image recovery, against the just-built output. Orphan-page carving is deliberately not included here; call
     /// <see cref="CarveUnknownPages"/> separately if wanted, same as before this refactor.
     /// </summary>
-    public (IReadOnlyList<string> Warnings, int WalRecordsInserted) BuildShadowDatabase(
+    public (IReadOnlyList<string> Warnings, int WalRecordsInserted, int JournalRecordsInserted) BuildShadowDatabase(
         string shadowDbPath, RecoveryFlags? flags = null, Action<string>? reportProgress = null)
     {
         flags ??= RecoveryFlags.Default;
@@ -148,7 +149,15 @@ public sealed class EvidenceSession : IDisposable
             walInserted = ShadowDatabaseBuilder.InsertWalDeletedRows(connection, Database, Wal);
         }
 
-        return (warnings, walInserted);
+        int journalInserted = 0;
+        if (flags.ProcessJournal && Journal is not null)
+        {
+            using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
+            connection.Open();
+            journalInserted = ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, Database, Journal);
+        }
+
+        return (warnings, walInserted, journalInserted);
     }
 
     // ── Progressive path — GUI drives these against its own already-created ShadowProject ──────
@@ -233,6 +242,22 @@ public sealed class EvidenceSession : IDisposable
         try { recovered = project.RecoverWalDeletedRows(wal, Database); }
         catch (Exception ex) { recoveryError = ex.Message; }
         return new WalSyncResult(synced, recovered, syncError, recoveryError);
+    }
+
+    /// <summary>
+    /// Recovers deleted and previous-version records from <paramref name="journal"/>'s page images
+    /// into <paramref name="project"/>. Takes the journal explicitly for the same reason as
+    /// <see cref="SyncAndRecoverWal"/>: the GUI may have loaded one manually from an arbitrary path.
+    /// Returns (0, null) if <see cref="RecoveryFlags.ProcessJournal"/> is off; a failure is returned
+    /// as its message rather than thrown.
+    /// </summary>
+    public (int Recovered, string? Error) RecoverJournal(ShadowProject project, RollbackJournalFile journal, RecoveryFlags? flags = null)
+    {
+        flags ??= RecoveryFlags.Default;
+        if (!flags.ProcessJournal) return (0, null);
+
+        try { return (project.RecoverJournalDeletedRows(journal, Database), null); }
+        catch (Exception ex) { return (0, ex.Message); }
     }
 
     /// <summary>Explicit, user-triggered scan of pages with no known owning table. Never runs

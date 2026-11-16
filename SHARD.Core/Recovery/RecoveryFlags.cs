@@ -13,7 +13,8 @@ public sealed record RecoveryFlags(
     bool FreeblockCarving    = true,
     bool DroppedTableSchema  = true,
     bool DroppedTableCarving = true,
-    bool ProcessWal          = true)
+    bool ProcessWal          = true,
+    bool ProcessJournal      = true)
 {
     public static readonly RecoveryFlags Default = new();
 }
