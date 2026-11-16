@@ -1261,8 +1261,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             WalTab = new WalViewModel(walPath, wal, Database);
             JournalTab = null;
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
-            if (wal.HasTrailingBytes)
-                StatusText += $" (partial final frame: {wal.TrailingBytes.Length:N0} bytes ignored)";
+            StatusText += $" ({wal.CommittedFrameCount} committed)";
+            foreach (var problem in EvidenceSession.DescribeWalProblems(wal))
+                StatusText += $"  ·  WAL: {problem}";
 
             // If a project is already open sync immediately; if not, CreateProject/OpenProject
             // will call SyncWalToProject once the project is set (WAL loads before the project

@@ -247,8 +247,10 @@ public sealed class ShadowProject : IDisposable
     }
 
     /// <summary>
-    /// Compares each WAL frame against the current database page and inserts any
-    /// records that are new in the WAL into the corresponding live shadow table.
+    /// Compares each page's latest committed WAL frame against the current database page and
+    /// inserts any records that are new in the WAL into the corresponding live shadow table.
+    /// Only <see cref="WalFrameStatus.Committed"/> frames count: SQLite ignores uncommitted,
+    /// invalid and old-generation frames, so their rows aren't live.
     /// Returns the number of records inserted.
     /// </summary>
     public int SyncWalFramesToShadow(WalFile walFile, SqliteForensicDatabase database)
@@ -256,7 +258,7 @@ public sealed class ShadowProject : IDisposable
         using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
 
-        var latestFrames = walFile.Frames
+        var latestFrames = walFile.CommittedFrames
             .GroupBy(f => f.Header.PageNumber)
             .Select(g => g.Last())
             .ToList();

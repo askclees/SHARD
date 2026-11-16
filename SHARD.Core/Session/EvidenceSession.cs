@@ -162,8 +162,8 @@ public sealed class EvidenceSession : IDisposable
     {
         flags ??= RecoveryFlags.Default;
         var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, Database, flags, reportProgress, Hashes).ToList();
-        if (flags.ProcessWal && Wal?.StopReason is { } walStop)
-            warnings.Add($"WAL: {walStop}");
+        if (flags.ProcessWal && Wal is not null)
+            warnings.AddRange(DescribeWalProblems(Wal).Select(p => $"WAL: {p}"));
 
         int walInserted = 0;
         if (flags.ProcessWal && Wal is not null)
@@ -182,6 +182,29 @@ public sealed class EvidenceSession : IDisposable
         }
 
         return (warnings, walInserted, journalInserted);
+    }
+
+    /// <summary>
+    /// Things about a WAL worth reporting: a partial final frame, frames SQLite rejects (bad
+    /// checksum or page number, or an invalid header), and frames that never committed.
+    /// Old-generation frames aren't reported — they're normal after a checkpoint.
+    /// </summary>
+    public static IReadOnlyList<string> DescribeWalProblems(WalFile wal)
+    {
+        var problems = new List<string>();
+        if (!wal.HeaderChecksumValid)
+            problems.Add("the header checksum is invalid, so SQLite would ignore every frame");
+        if (wal.Frames.Any(f => f.Status is WalFrameStatus.InvalidChecksum or WalFrameStatus.InvalidPageNumber))
+        {
+            int ignored = wal.Frames.Count(f => f.Status == WalFrameStatus.AfterInvalid);
+            problems.Add($"{wal.ValidationStopReason}; SQLite stops reading there, ignoring it and {ignored} later frame{(ignored == 1 ? "" : "s")}");
+        }
+        int uncommitted = wal.Frames.Count(f => f.Status == WalFrameStatus.Uncommitted);
+        if (uncommitted > 0)
+            problems.Add($"{uncommitted} valid frame{(uncommitted == 1 ? "" : "s")} after the last commit never committed; SQLite ignores {(uncommitted == 1 ? "it" : "them")}");
+        if (wal.StopReason is { } partial)
+            problems.Add(partial);
+        return problems;
     }
 
     // ── Progressive path — GUI drives these against its own already-created ShadowProject ──────

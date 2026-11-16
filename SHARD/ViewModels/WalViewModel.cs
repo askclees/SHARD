@@ -95,6 +95,10 @@ public sealed class WalViewModel : ViewModelBase
         HeaderRows.Add(new InfoRow("Checksum-1",          $"0x{h.VerificationData.Checksum1:X8}"));
         HeaderRows.Add(new InfoRow("Checksum-2",          $"0x{h.VerificationData.Checksum2:X8}"));
         HeaderRows.Add(new InfoRow("Frame Count",         $"{walFile.Frames.Count}"));
+        HeaderRows.Add(new InfoRow("Header Checksum",     walFile.HeaderChecksumValid ? "Valid" : "Invalid (SQLite ignores every frame)"));
+        HeaderRows.Add(new InfoRow("Committed Frames",    $"{walFile.CommittedFrameCount} of {walFile.Frames.Count} (what SQLite reads)"));
+        if (walFile.ValidationStopReason is { } stop)
+            HeaderRows.Add(new InfoRow("SQLite Stops",    stop));
         if (walFile.TrailingBytesOffset is { } trailingOffset)
             HeaderRows.Add(new InfoRow("Trailing Bytes",  $"{walFile.TrailingBytes.Length:N0} bytes at offset {trailingOffset:N0} (partial frame, ignored)"));
 
