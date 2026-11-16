@@ -109,10 +109,13 @@ public class SHARDCreatedTests(ITestOutputHelper output)
             int count;
             try
             {
+                // Everything recovered from the WAL: live cells of earlier frames (wal_frame /
+                // wal_previous_version) and deleted data found inside frames (tagged with _wal_frame)
                 count = QueryCount(conn, recoveredTable,
                     $"\"{ShadowDatabaseBuilder.RecoveryMethodColumn}\" IN " +
                     $"('{ShadowDatabaseBuilder.RecoveryMethodWalFrame}', " +
-                    $"'{ShadowDatabaseBuilder.RecoveryMethodWalPreviousVersion}')");
+                    $"'{ShadowDatabaseBuilder.RecoveryMethodWalPreviousVersion}') " +
+                    $"OR \"{ShadowDatabaseBuilder.WalFrameColumn}\" IS NOT NULL");
             }
             catch
             {
@@ -159,16 +162,28 @@ public class SHARDCreatedTests(ITestOutputHelper output)
 
             foreach (var expectedRow in expected.DeletedRows)
             {
-                if (!expectedRow.Fields.TryGetValue(pkCol, out string? expectedPk)) continue;
-
-                var actualRow = recovered.FirstOrDefault(r =>
-                    r.TryGetValue(pkCol, out string? actualPk) && actualPk == expectedPk);
+                // A row whose rowid doesn't survive (e.g. recovered from a freeblock, which overwrites
+                // it) is listed without its key column, and is matched on every field it does list.
+                Dictionary<string, string?>? actualRow;
+                string description;
+                if (expectedRow.Fields.TryGetValue(pkCol, out string? expectedPk))
+                {
+                    actualRow = recovered.FirstOrDefault(r =>
+                        r.TryGetValue(pkCol, out string? actualPk) && actualPk == expectedPk);
+                    description = $"{pkCol}={expectedPk}";
+                }
+                else
+                {
+                    actualRow = recovered.FirstOrDefault(r => expectedRow.Fields.All(f =>
+                        r.TryGetValue(f.Key, out string? v) && v == f.Value));
+                    description = string.Join(", ", expectedRow.Fields.Select(f => $"{f.Key}={f.Value}"));
+                }
 
                 if (actualRow is null)
                 {
                     Assert.Fail(
                         $"{file} table '{expected.Name}': expected WAL-recovered row with " +
-                        $"{pkCol}={expectedPk} but it was not found in the shadow DB");
+                        $"{description} but it was not found in the shadow DB");
                     return;
                 }
 
@@ -176,7 +191,7 @@ public class SHARDCreatedTests(ITestOutputHelper output)
                 {
                     if (!actualRow.TryGetValue(colName, out string? actualValue)) continue;
                     Assert.True(actualValue == expectedValue,
-                        $"{file} table '{expected.Name}' row {pkCol}={expectedPk}: " +
+                        $"{file} table '{expected.Name}' row {description}: " +
                         $"column '{colName}' expected '{expectedValue}', got '{actualValue}'");
                 }
             }
@@ -479,7 +494,8 @@ public class SHARDCreatedTests(ITestOutputHelper output)
             $"FROM {table} " +
             $"WHERE \"{ShadowDatabaseBuilder.RecoveryMethodColumn}\" IN " +
             $"('{ShadowDatabaseBuilder.RecoveryMethodWalFrame}', " +
-            $"'{ShadowDatabaseBuilder.RecoveryMethodWalPreviousVersion}')";
+            $"'{ShadowDatabaseBuilder.RecoveryMethodWalPreviousVersion}') " +
+            $"OR \"{ShadowDatabaseBuilder.WalFrameColumn}\" IS NOT NULL";
 
         using var reader = cmd.ExecuteReader();
         while (reader.Read())

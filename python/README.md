@@ -97,7 +97,7 @@ re-opens/re-parses the file), so nothing expensive is held open between calls.
 
 A `BLOB` field's value comes back as Python `bytes`.
 
-`_shard_recovered_<table>` has every one of the table's own columns, plus `_page_number`, `_cell_offset`, `_overflow_page`, and `_recovery_method` — so `SELECT *` against it will include those; list the table's own columns explicitly if you're `UNION`-ing with the live table.
+`_shard_recovered_<table>` has every one of the table's own columns, plus `_page_number`, `_cell_offset`, `_overflow_page`, `_recovery_method` and `_wal_frame` (the WAL frame a record came from, or NULL for the database file) — so `SELECT *` against it will include those; list the table's own columns explicitly if you're `UNION`-ing with the live table.
 
 ## Examples
 

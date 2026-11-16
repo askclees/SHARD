@@ -1,11 +1,12 @@
-# SHARD WAL Test Data Manifest — no-post-restart-writes (no false positive) variant
+# SHARD WAL Test Data Manifest — rows deleted within the WAL (no-post-restart-writes variant)
 # Database: places_wal_no_post_restart_writes.db
 # Created by: create_places_wal_no_post_restart_writes.py
 # Created: 2026-08-07
 #
-# PRAGMA wal_checkpoint(RESTART) was issued with NO subsequent write, so the
-# WAL salt was never changed.  All frames are IsCurrent=True.  SHARD must
-# recover zero records even though deleted rows exist in the WAL file.
+# PRAGMA wal_checkpoint(RESTART) was issued with NO subsequent write, so the WAL salt was never
+# changed and every frame is committed. Rows 4-6 were deleted in frame 4 with secure_delete on, so
+# frame 3 (committed, but superseded by frame 4) is the only place they survive; SHARD must
+# recover them from it, and must not report the 7 live rows as deleted.
 # All three files were captured as-is after SIGKILL with no SQLite cleanup.
 
 [places_wal_no_post_restart_writes.db]

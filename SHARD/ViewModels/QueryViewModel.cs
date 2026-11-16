@@ -229,14 +229,15 @@ public sealed class QueryViewModel : ViewModelBase
         var cols = GetTableColumns(recovered);
         if (cols.Count == 0) return QueryText;
 
-        // Live shadow table has all recovered-table columns except _recovery_method.
-        // Substitute NULL on the live side so the UNION column counts match and the
+        // The recovered table has columns the live table doesn't (_recovery_method, _wal_frame).
+        // Substitute NULL for each on the live side so the UNION column counts match and the
         // live SELECT doesn't fail with "no such column".
+        var liveCols = GetTableColumns(matched).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string colList     = string.Join(", ", cols.Select(QuoteIdentifier));
         string liveColList = string.Join(", ", cols.Select(c =>
-            c == ShadowDatabaseBuilder.RecoveryMethodColumn
-                ? $"NULL AS {QuoteIdentifier(c)}"
-                : QuoteIdentifier(c)));
+            liveCols.Contains(c)
+                ? QuoteIdentifier(c)
+                : $"NULL AS {QuoteIdentifier(c)}"));
 
         return $"WITH _shard_q AS ({QueryText})\n" +
                $"SELECT {liveColList}, 0 AS _is_recovered FROM _shard_q\n" +
