@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Journal;
 using SHARD.Core.Recovery;
 using SHARD.Core.Records;
@@ -20,6 +21,10 @@ namespace SHARD.Core.Session;
 /// can exist on disk after the journal mode was switched; the header's write version (2 = WAL,
 /// 1 = rollback journal) decides which one belongs to the database's current mode, and the other
 /// is reported via <see cref="IgnoredSidecarNote"/>.
+///
+/// <see cref="Open"/> hashes the database and every sidecar on disk (MD5, SHA-1, SHA-256) before
+/// parsing anything, giving a record of exactly what was examined; <see cref="VerifyHashes"/>
+/// re-hashes later to show whether any file changed during the examination.
 /// </summary>
 public sealed class EvidenceSession : IDisposable
 {
@@ -50,9 +55,14 @@ public sealed class EvidenceSession : IDisposable
     /// database's current journal mode.</summary>
     public string? IgnoredSidecarNote { get; }
 
+    /// <summary>Hashes of the database and every sidecar present, taken when the session was opened.</summary>
+    public IReadOnlyList<EvidenceFileHash> Hashes { get; }
+
     private EvidenceSession(string evidencePath, SqliteForensicDatabase database,
-        WalFile? wal, string? walError, RollbackJournalFile? journal, string? journalError, string? ignoredSidecarNote)
+        WalFile? wal, string? walError, RollbackJournalFile? journal, string? journalError, string? ignoredSidecarNote,
+        IReadOnlyList<EvidenceFileHash> hashes)
     {
+        Hashes = hashes;
         EvidencePath = evidencePath;
         Database = database;
         Wal = wal;
@@ -63,8 +73,12 @@ public sealed class EvidenceSession : IDisposable
     }
 
     /// <summary>Opens the evidence file and detects/loads its sibling WAL or journal file, if present.</summary>
-    public static EvidenceSession Open(string evidencePath)
+    /// <param name="reportProgress">Called with (role, bytes hashed, total bytes) while hashing,
+    /// so a caller can show progress on a large file.</param>
+    public static EvidenceSession Open(string evidencePath, Action<string, long, long>? reportProgress = null)
     {
+        // Hash before parsing, so the record describes the files as they were when examination began.
+        var hashes = EvidenceHasher.HashEvidenceSet(evidencePath, reportProgress);
         var database = SqliteForensicDatabase.Open(evidencePath);
 
         bool hasWal     = File.Exists(evidencePath + "-wal");
@@ -89,8 +103,16 @@ public sealed class EvidenceSession : IDisposable
         if (hasJournal)
             (journal, journalError) = LoadJournal(evidencePath + "-journal", database);
 
-        return new EvidenceSession(evidencePath, database, wal, walError, journal, journalError, ignoredSidecarNote);
+        return new EvidenceSession(evidencePath, database, wal, walError, journal, journalError, ignoredSidecarNote, hashes);
     }
+
+    /// <summary>
+    /// Re-hashes the evidence set and compares it with <see cref="Hashes"/>: any result other than
+    /// <see cref="HashVerificationStatus.Match"/> means a file changed, disappeared or appeared
+    /// since the session was opened.
+    /// </summary>
+    public IReadOnlyList<HashVerification> VerifyHashes(Action<string, long, long>? reportProgress = null) =>
+        EvidenceHasher.Verify(EvidencePath, Hashes, reportProgress);
 
     private static (WalFile? Wal, string? Error) LoadWal(string walPath, SqliteForensicDatabase database)
     {
@@ -139,7 +161,7 @@ public sealed class EvidenceSession : IDisposable
         string shadowDbPath, RecoveryFlags? flags = null, Action<string>? reportProgress = null)
     {
         flags ??= RecoveryFlags.Default;
-        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, Database, flags, reportProgress);
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, Database, flags, reportProgress, Hashes);
 
         int walInserted = 0;
         if (flags.ProcessWal && Wal is not null)

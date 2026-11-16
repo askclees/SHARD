@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using SHARD.Core;
+using SHARD.Core.Integrity;
 using SHARD.Core.Recovery;
 
 namespace SHARD.Native;
@@ -17,6 +18,8 @@ namespace SHARD.Native;
 public static class RecoveryApi
 {
     private static readonly ConcurrentDictionary<long, string> Sessions = new();
+    // Evidence hashes taken when each handle was opened — the baseline for VerifyHashes.
+    private static readonly ConcurrentDictionary<long, IReadOnlyList<EvidenceFileHash>> OpenHashes = new();
     private static long _nextHandle;
 
     static RecoveryApi() => NativeLibraryResolver.EnsureInitialized();
@@ -25,8 +28,11 @@ public static class RecoveryApi
     {
         try
         {
+            // Hash before parsing, so the baseline describes the files as they were when opened.
+            var hashes = SqliteRecoveryFacade.GetHashes(path);
             using (SqliteForensicDatabase.Open(path)) { } // validate before handing back a handle
             long handle = Interlocked.Increment(ref _nextHandle);
+            OpenHashes[handle] = hashes;
             Sessions[handle] = path;
             return Serialize(ApiEnvelope.Success(new OpenResult(handle)));
         }
@@ -36,7 +42,19 @@ public static class RecoveryApi
         }
     }
 
-    public static void Close(long handle) => Sessions.TryRemove(handle, out _);
+    public static void Close(long handle)
+    {
+        Sessions.TryRemove(handle, out _);
+        OpenHashes.TryRemove(handle, out _);
+    }
+
+    /// <summary>Evidence hashes taken when <paramref name="handle"/> was opened.</summary>
+    public static string GetHashes(long handle) =>
+        WithPath(handle, _ => OpenHashes[handle].ToList());
+
+    /// <summary>Re-hashes the evidence set and compares it with the hashes taken at open.</summary>
+    public static string VerifyHashes(long handle) =>
+        WithPath(handle, path => SqliteRecoveryFacade.VerifyHashes(path, OpenHashes[handle]).ToList());
 
     public static string GetHeader(long handle) =>
         WithPath(handle, path => SqliteRecoveryFacade.GetHeader(path));

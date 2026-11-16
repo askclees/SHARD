@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
@@ -44,6 +45,8 @@ public static class ShadowDatabaseBuilder
     public const string DeletedTablePrefix   = InternalTablePrefix + "deleted_";
     private const string OverflowTableName = InternalTablePrefix + "overflow_pages";
     private const string PagesTableName    = InternalTablePrefix + "pages";
+    /// <summary>Hashes of the evidence files this shadow database was built from, one row per file.</summary>
+    public  const string EvidenceTableName = InternalTablePrefix + "evidence";
 
     /// <summary>
     /// Builds the shadow database. Returns a list of warning strings for any user tables that
@@ -52,11 +55,14 @@ public static class ShadowDatabaseBuilder
     /// stage text (e.g. per-table during the row-insert pass) — useful for showing the user a
     /// large evidence file's shadow build hasn't hung. <paramref name="flags"/> controls which
     /// in-tree recovery types run per table (null means <see cref="RecoveryFlags.Default"/> —
-    /// everything on); live rows are always inserted regardless.
+    /// everything on); live rows are always inserted regardless. <paramref name="evidenceHashes"/>,
+    /// if given, is written to <see cref="EvidenceTableName"/> so the output carries a record of
+    /// exactly which files it was built from.
     /// </summary>
     public static IReadOnlyList<string> Create(
         string shadowDbPath, SqliteForensicDatabase database,
-        RecoveryFlags? flags = null, Action<string>? reportProgress = null)
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null,
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null)
     {
         flags ??= RecoveryFlags.Default;
         var warnings = new List<string>();
@@ -146,7 +152,59 @@ public static class ShadowDatabaseBuilder
 
         TagFreelistPages(connection, database);
 
+        if (evidenceHashes is not null)
+            WriteEvidenceHashes(connection, evidenceHashes);
+
         return warnings;
+    }
+
+    /// <summary>
+    /// Replaces the contents of <see cref="EvidenceTableName"/> with <paramref name="hashes"/>.
+    /// Written once when the shadow database is built: it records the files as they were then,
+    /// so re-verification results are reported elsewhere rather than overwriting it.
+    /// </summary>
+    public static void WriteEvidenceHashes(SqliteConnection connection, IReadOnlyList<EvidenceFileHash> hashes)
+    {
+        using var transaction = connection.BeginTransaction();
+        using (var create = connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText = $"""
+                CREATE TABLE IF NOT EXISTS {QuoteIdentifier(EvidenceTableName)} (
+                  role TEXT NOT NULL,
+                  path TEXT NOT NULL,
+                  size_bytes INTEGER NOT NULL,
+                  last_write_utc TEXT NOT NULL,
+                  md5 TEXT NOT NULL,
+                  sha1 TEXT NOT NULL,
+                  sha256 TEXT NOT NULL,
+                  hashed_utc TEXT NOT NULL
+                );
+                DELETE FROM {QuoteIdentifier(EvidenceTableName)};
+                """;
+            create.ExecuteNonQuery();
+        }
+
+        foreach (var h in hashes)
+        {
+            using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = $"""
+                INSERT INTO {QuoteIdentifier(EvidenceTableName)}
+                  (role, path, size_bytes, last_write_utc, md5, sha1, sha256, hashed_utc)
+                VALUES (@role, @path, @size, @lastWrite, @md5, @sha1, @sha256, @hashed)
+                """;
+            insert.Parameters.AddWithValue("@role", h.Role);
+            insert.Parameters.AddWithValue("@path", h.Path);
+            insert.Parameters.AddWithValue("@size", h.Length);
+            insert.Parameters.AddWithValue("@lastWrite", h.LastWriteUtc.ToString("O"));
+            insert.Parameters.AddWithValue("@md5", h.Md5);
+            insert.Parameters.AddWithValue("@sha1", h.Sha1);
+            insert.Parameters.AddWithValue("@sha256", h.Sha256);
+            insert.Parameters.AddWithValue("@hashed", h.HashedUtc.ToString("O"));
+            insert.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     public static string BuildCreateTableSql(TableSchema schema)

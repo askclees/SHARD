@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Comparison;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
@@ -29,6 +30,10 @@ public sealed class ShadowProject : IDisposable
     public string  ShadowDatabasePath => _shadowDatabasePath;
     public string  EvidenceFilePath   => _manifest.EvidenceFilePath;
     public DateTime CreatedUtc        => _manifest.CreatedUtc;
+
+    /// <summary>Evidence hashes recorded when the project was created; null for a project
+    /// created before hashing existed.</summary>
+    public IReadOnlyList<EvidenceFileHash>? EvidenceHashes => _manifest.EvidenceHashes;
     public bool    IsUnsaved          => _tempDbPath is not null;
 
     private ShadowProject(string? projectFolder, ProjectManifest manifest, string shadowDatabasePath, string? tempDbPath)
@@ -48,7 +53,8 @@ public sealed class ShadowProject : IDisposable
     /// </summary>
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) CreateTemporary(
         string evidenceFilePath, SqliteForensicDatabase database,
-        RecoveryFlags? flags = null, Action<string>? reportProgress = null)
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null,
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null)
     {
         // GetTempFileName creates a zero-byte file; rename with .db so SQLite is happy.
         string tempBase = Path.GetTempFileName();
@@ -57,11 +63,13 @@ public sealed class ShadowProject : IDisposable
 
         var manifest = new ProjectManifest
         {
+            ManifestVersion  = ProjectManifest.CurrentVersion,
             EvidenceFilePath = evidenceFilePath,
             CreatedUtc       = DateTime.UtcNow,
+            EvidenceHashes   = evidenceHashes?.ToList(),
         };
 
-        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, flags, reportProgress);
+        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, flags, reportProgress, evidenceHashes);
         return (new ShadowProject(null, manifest, tempPath, tempPath), warnings);
     }
 
@@ -73,21 +81,24 @@ public sealed class ShadowProject : IDisposable
     /// </summary>
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) Create(
         string evidenceFilePath, SqliteForensicDatabase database, string projectFolder,
-        RecoveryFlags? flags = null, Action<string>? reportProgress = null)
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null,
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null)
     {
         Directory.CreateDirectory(projectFolder);
 
         var manifest = new ProjectManifest
         {
+            ManifestVersion  = ProjectManifest.CurrentVersion,
             EvidenceFilePath = evidenceFilePath,
             CreatedUtc       = DateTime.UtcNow,
+            EvidenceHashes   = evidenceHashes?.ToList(),
         };
 
         string shadowDbPath = Path.Combine(projectFolder, manifest.ShadowDatabaseFileName);
         if (File.Exists(shadowDbPath))
             throw new InvalidOperationException($"A shadow database already exists at '{shadowDbPath}'.");
 
-        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, flags, reportProgress);
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, flags, reportProgress, evidenceHashes);
 
         File.WriteAllText(
             Path.Combine(projectFolder, "project.json"),

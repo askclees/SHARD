@@ -52,6 +52,7 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
         this.FindControl<MenuItem>("MenuLoadJournal")!.Click   += OnLoadJournalClick;
+        this.FindControl<MenuItem>("MenuVerifyHashes")!.Click  += (_, _) => Vm.VerifyEvidenceHashes();
         this.FindControl<MenuItem>("MenuSettings")!.Click      += (_, _) => new SettingsWindow().ShowDialog(this);
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;

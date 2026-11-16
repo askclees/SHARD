@@ -57,6 +57,14 @@ public static unsafe class NativeExports
     public static byte* ShardRecoverToFile(long handle, byte* outputPathUtf8, byte* optionsJsonUtf8) =>
         Guard(() => RecoveryApi.RecoverToFile(handle, RequireString(outputPathUtf8, nameof(outputPathUtf8)), ToString(optionsJsonUtf8)));
 
+    [UnmanagedCallersOnly(EntryPoint = "shard_get_hashes")]
+    public static byte* ShardGetHashes(long handle) =>
+        Guard(() => RecoveryApi.GetHashes(handle));
+
+    [UnmanagedCallersOnly(EntryPoint = "shard_verify_hashes")]
+    public static byte* ShardVerifyHashes(long handle) =>
+        Guard(() => RecoveryApi.VerifyHashes(handle));
+
     [UnmanagedCallersOnly(EntryPoint = "shard_free_string")]
     public static void ShardFreeString(byte* ptr)
     {

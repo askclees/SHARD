@@ -39,6 +39,10 @@
                 <MenuItem Header="Load _Journal File…"
                           Name="MenuLoadJournal"
                           IsEnabled="{Binding HasDatabase}" />
+                <MenuItem Header="_Verify Evidence Hashes"
+                          Name="MenuVerifyHashes"
+                          IsEnabled="{Binding HasDatabase}"
+                          ToolTip.Tip="Re-hash the database and its -wal/-journal/-shm files and check none changed since they were opened." />
                 <Separator />
                 <MenuItem Header="_Settings…"
                           Name="MenuSettings" />
@@ -54,6 +58,19 @@
                           ToolTip.Tip="Automatically run Carve Unknown Pages in Standard mode right after opening a database." />
             </MenuItem>
         </Menu>
+
+        <!-- ═══ Evidence integrity warning ═══════════════════════════════════ -->
+        <Border DockPanel.Dock="Bottom"
+                IsVisible="{Binding HasIntegrityWarning}"
+                Background="#33E5484D"
+                BorderBrush="#E5484D"
+                BorderThickness="0,1,0,0"
+                Padding="10,6">
+            <TextBlock Text="{Binding IntegrityWarning}"
+                       FontSize="12"
+                       FontWeight="SemiBold"
+                       TextWrapping="Wrap" />
+        </Border>
 
         <!-- ═══ Status bar ══════════════════════════════════════════════════ -->
         <Border DockPanel.Dock="Bottom"

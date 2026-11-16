@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
@@ -31,7 +32,8 @@ public sealed record RecoveryResult(
     int WalRecordsInserted,
     int CarvedRecords,
     int CarveAmbiguousSkipped,
-    int JournalRecordsInserted = 0);
+    int JournalRecordsInserted = 0,
+    IReadOnlyList<EvidenceFileHash>? EvidenceHashes = null);
 
 public sealed record DatabaseHeaderInfo(
     string Magic, int PageSize, string WriteVersion, int ReadVersion, int ReservedBytesPerPage,
@@ -97,8 +99,16 @@ public static class SqliteRecoveryFacade
             }
         }
 
-        return new RecoveryResult(outputPath, warnings, tables, walInserted, carved, carveAmbiguous, journalInserted);
+        return new RecoveryResult(outputPath, warnings, tables, walInserted, carved, carveAmbiguous, journalInserted, session.Hashes);
     }
+
+    /// <summary>MD5, SHA-1 and SHA-256 of the database and every sidecar beside it, computed now.</summary>
+    public static IReadOnlyList<EvidenceFileHash> GetHashes(string inputPath) =>
+        EvidenceHasher.HashEvidenceSet(inputPath);
+
+    /// <summary>Re-hashes the evidence set and compares it with <paramref name="recorded"/>.</summary>
+    public static IReadOnlyList<HashVerification> VerifyHashes(string inputPath, IReadOnlyList<EvidenceFileHash> recorded) =>
+        EvidenceHasher.Verify(inputPath, recorded);
 
     public static DatabaseHeaderInfo GetHeader(string inputPath)
     {

@@ -7,6 +7,14 @@
 
 Once a file is loaded the status bar at the bottom shows the file path and basic statistics.
 
+## Evidence hashes
+
+When a database is opened, SHARD computes the MD5, SHA-1 and SHA-256 of the database file and of every `-wal`, `-journal` and `-shm` file beside it, before parsing anything. The hashes are listed in the **Database Header** tab's file information.
+
+- **File → Verify Evidence Hashes** re-hashes the files and confirms none changed since they were opened. If any did, a red banner above the status bar names the file and whether it changed, disappeared or appeared.
+- A project stores the hashes taken when it was created (in `project.json`, and in the `_shard_evidence` table of its shadow database). Opening the project compares them with the files on disk and shows the same banner on a mismatch. A WAL can legitimately change if the application that owns the database was still running when it was copied.
+- Projects created before hashing was added still open; the status bar notes that they have no recorded hashes.
+
 ## Interface overview
 
 The main area is divided into tabs that appear once a database is open:

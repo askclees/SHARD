@@ -6,6 +6,7 @@ using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
@@ -282,6 +283,21 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     // ── Overview panel info rows ──────────────────────────────────────────
     public ObservableCollection<InfoRow> DatabaseInfoRows { get; } = [];
+
+    // ── Evidence integrity ────────────────────────────────────────────────
+    private string? _integrityWarning;
+    /// <summary>Set when a hash check finds an evidence file changed, missing or added; shown as
+    /// a banner above the status bar until the file is closed or a later check passes.</summary>
+    public string? IntegrityWarning
+    {
+        get => _integrityWarning;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _integrityWarning, value);
+            this.RaisePropertyChanged(nameof(HasIntegrityWarning));
+        }
+    }
+    public bool HasIntegrityWarning => IntegrityWarning is not null;
 
     // ── Raw bytes + highlights for the HexView ────────────────────────────
     private byte[] _headerBytes = [];
@@ -802,7 +818,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var info = new FileInfo(path);
 
-            _session = EvidenceSession.Open(path);
+            _session = EvidenceSession.Open(path, ReportHashProgress());
             var db = _session.Database;
             Database = db;
             _currentFilePath = path;
@@ -818,6 +834,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             DatabaseInfoRows.Add(new InfoRow("File",                        info.Name));
             DatabaseInfoRows.Add(new InfoRow("Path",                        path));
             DatabaseInfoRows.Add(new InfoRow("Size",                        FormatBytes(info.Length)));
+            AddHashRows(_session.Hashes);
 
             // ── Header fields in byte-offset order ───────────────────────────
             // Offset 0
@@ -896,8 +913,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 Report("Building shadow database…");
                 var (project, warnings) = projectFolder is null
-                    ? ShadowProject.CreateTemporary(_currentFilePath!, Database, reportProgress: msg => Report(msg))
-                    : ShadowProject.Create(_currentFilePath!, Database, projectFolder, reportProgress: msg => Report(msg));
+                    ? ShadowProject.CreateTemporary(_currentFilePath!, Database, reportProgress: msg => Report(msg), evidenceHashes: _session.Hashes)
+                    : ShadowProject.Create(_currentFilePath!, Database, projectFolder, reportProgress: msg => Report(msg), evidenceHashes: _session.Hashes);
                 Project = project;
 
                 Report("Recovering deleted records…");
@@ -983,9 +1000,107 @@ public sealed class MainWindowViewModel : ViewModelBase
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
     }
 
+    /// <summary>
+    /// Returns a hashing progress callback for <see cref="EvidenceSession.Open"/> that reports at
+    /// most once per whole percent per file, so pumping the dispatcher doesn't slow hashing down.
+    /// </summary>
+    private Action<string, long, long> ReportHashProgress()
+    {
+        string? lastRole = null;
+        int lastPercent = -1;
+        return (role, done, total) =>
+        {
+            int percent = total == 0 ? 100 : (int)(done * 100 / total);
+            if (role == lastRole && percent == lastPercent) return;
+            lastRole = role;
+            lastPercent = percent;
+            Report($"Hashing {RoleLabel(role)} file… {percent}%");
+        };
+    }
+
+    private static string RoleLabel(string role) => role switch
+    {
+        EvidenceFileRole.Database => "database",
+        EvidenceFileRole.Wal      => "WAL",
+        EvidenceFileRole.Journal  => "journal",
+        EvidenceFileRole.Shm      => "SHM",
+        _                         => role,
+    };
+
+    private void AddHashRows(IReadOnlyList<EvidenceFileHash> hashes)
+    {
+        foreach (var h in hashes)
+        {
+            bool isDatabase = h.Role == EvidenceFileRole.Database;
+            string prefix = isDatabase ? "" : $"{RoleLabel(h.Role)} ";
+            if (!isDatabase)
+                DatabaseInfoRows.Add(new InfoRow($"{prefix}Size", FormatBytes(h.Length)));
+            DatabaseInfoRows.Add(new InfoRow($"{prefix}MD5",     h.Md5));
+            DatabaseInfoRows.Add(new InfoRow($"{prefix}SHA-1",   h.Sha1));
+            DatabaseInfoRows.Add(new InfoRow($"{prefix}SHA-256", h.Sha256));
+        }
+        if (hashes.Count > 0)
+            DatabaseInfoRows.Add(new InfoRow("Hashed (UTC)", hashes[^1].HashedUtc.ToString("yyyy-MM-dd HH:mm:ss")));
+    }
+
+    /// <summary>Compares the evidence as just opened against the hashes saved with the project.</summary>
+    private void CheckProjectHashes(ShadowProject project)
+    {
+        if (_session is null) return;
+        if (project.EvidenceHashes is not { } recorded)
+        {
+            StatusText += "  ·  project has no recorded evidence hashes (created before hashing was added)";
+            return;
+        }
+
+        var results = EvidenceHasher.Compare(recorded, _session.Hashes);
+        if (results.All(r => r.Status == HashVerificationStatus.Match))
+            StatusText += $"  ·  evidence hashes match the project ({results.Count} file{(results.Count == 1 ? "" : "s")})";
+        else
+            IntegrityWarning = DescribeMismatch(results, "since the project was created");
+    }
+
+    /// <summary>Re-hashes the evidence files and reports whether any changed since they were opened.</summary>
+    public void VerifyEvidenceHashes()
+    {
+        if (_session is null) return;
+        IsLoading = true;
+        try
+        {
+            var results = _session.VerifyHashes(ReportHashProgress());
+            if (results.All(r => r.Status == HashVerificationStatus.Match))
+            {
+                IntegrityWarning = null;
+                StatusText = $"Evidence hashes verified: {results.Count} file{(results.Count == 1 ? "" : "s")} unchanged since opened";
+            }
+            else
+            {
+                IntegrityWarning = DescribeMismatch(results, "since it was opened");
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Hash verification failed: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            LoadingStatusText = "";
+        }
+    }
+
+    private static string DescribeMismatch(IReadOnlyList<HashVerification> results, string since)
+    {
+        var problems = results
+            .Where(r => r.Status != HashVerificationStatus.Match)
+            .Select(r => $"{RoleLabel(r.Role)} file {r.Status.ToString().ToLowerInvariant()}");
+        return $"Evidence has changed {since}: {string.Join(", ", problems)}.";
+    }
+
     /// <summary>Close the current database and reset the UI state.</summary>
     public void CloseFile()
     {
+        IntegrityWarning = null;
         _session?.Dispose(); // disposes Database — session owns that lifetime now
         _session = null;
         _carveTab = null; // clear before Database, so Database's setter-driven CarveTab notification sees it already gone
@@ -1064,6 +1179,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
             StatusText = $"Project opened from {projectFolder}";
+            CheckProjectHashes(project);
             SyncWalToProject();
             SyncJournalToProject();
         }

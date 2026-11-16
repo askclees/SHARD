@@ -9,6 +9,7 @@
 - **WAL recovery** — recovers deleted-record history from a database's `-wal` sidecar file, in addition to the main database file.
 - **Orphan-page carving** — recovers records from pages whose owning table is no longer known (e.g. after a `DROP TABLE`), by matching raw page bytes against every candidate table's schema.
 - **SQL querying** over recovered data via a generated "shadow" database.
+- **Evidence hashing** — MD5, SHA-1 and SHA-256 of the database and every `-wal`, `-journal` and `-shm` file are taken when it's opened, stored with projects and recovered output, and can be re-verified to show nothing changed during the examination.
 
 It ships four ways to use the same recovery engine:
 
@@ -40,6 +41,7 @@ dotnet run --project SHARD.Cli -- --help
 dotnet run --project SHARD.Cli -- rows evidence.db users
 dotnet run --project SHARD.Cli -- deleted evidence.db users
 dotnet run --project SHARD.Cli -- carve evidence.db --mode tight
+dotnet run --project SHARD.Cli -- hash evidence.db -f text
 ```
 
 ### `SHARD.Core` as a library
@@ -51,7 +53,7 @@ var result = SqliteRecoveryFacade.Recover("evidence.db", "recovered.db",
     new RecoveryOptions(ProcessWal: true, CarveMode: CarveMode.Tight));
 ```
 
-`recovered.db` is a normal SQLite database afterwards — open it with any SQLite client. See `SqliteRecoveryFacade` for the full API (`GetHeader`, `GetSchema`, `GetRows`, `GetDeletedRows`, `CarveUnknownPages`, `Recover`).
+`recovered.db` is a normal SQLite database afterwards — open it with any SQLite client. See `SqliteRecoveryFacade` for the full API (`GetHeader`, `GetSchema`, `GetRows`, `GetDeletedRows`, `CarveUnknownPages`, `Recover`, `GetHashes`, `VerifyHashes`). `result.EvidenceHashes` holds the hashes of every input file, and the same hashes are written to a `_shard_evidence` table inside `recovered.db`.
 
 ### Python
 
