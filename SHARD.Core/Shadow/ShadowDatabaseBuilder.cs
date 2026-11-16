@@ -24,6 +24,9 @@ public static class ShadowDatabaseBuilder
     private const string CellOffsetColumn   = "_cell_offset";
     private const string OverflowPageColumn = "_overflow_page";
     public  const string RecoveryMethodColumn = "_recovery_method";
+    /// <summary>Recovered tables only: the 1-based WAL frame a recovered record was read from, or
+    /// NULL when it came from the database file (or a rollback journal).</summary>
+    public  const string WalFrameColumn       = "_wal_frame";
 
     public const string RecoveryMethodDeletedCell        = "deleted_cell";
     public const string RecoveryMethodCarving            = "carving";
@@ -305,6 +308,7 @@ public static class ShadowDatabaseBuilder
         columnSql.Add($"{QuoteIdentifier(CellOffsetColumn)}    INTEGER NOT NULL");
         columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)}  INTEGER NOT NULL DEFAULT 0");
         columnSql.Add($"{QuoteIdentifier(RecoveryMethodColumn)} TEXT NOT NULL");
+        columnSql.Add($"{QuoteIdentifier(WalFrameColumn)}       INTEGER");
 
         string tableName = RecoveredTablePrefix + schema.TableName;
         return $"CREATE TABLE {QuoteIdentifier(tableName)} (\n  {string.Join(",\n  ", columnSql)}\n)";
@@ -580,16 +584,7 @@ public static class ShadowDatabaseBuilder
         SqliteConnection connection, TableSchema schema, uint rootPage, SqliteForensicDatabase database, RecoveryFlags flags)
     {
         using var transaction = connection.BeginTransaction();
-        string recoveredTable = RecoveredTablePrefix + schema.TableName;
-
-        var columnNames  = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
-        var placeholders = schema.Columns.Select((_, i) => $"@p{i}").ToList();
-        columnNames.Add(QuoteIdentifier(PageNumberColumn));     placeholders.Add("@p_page");
-        columnNames.Add(QuoteIdentifier(CellOffsetColumn));     placeholders.Add("@p_offset");
-        columnNames.Add(QuoteIdentifier(OverflowPageColumn));   placeholders.Add("@p_overflow");
-        columnNames.Add(QuoteIdentifier(RecoveryMethodColumn)); placeholders.Add("@p_method");
-
-        string sql = $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", placeholders)})";
+        string sql = BuildRecoveredInsertSql(schema);
 
         bool needsRecordStructure = flags.InTreeCarving || flags.FreeblockCarving;
         var recordStructure = needsRecordStructure ? RecordStructure.FromSchema(schema) : null;
@@ -597,32 +592,49 @@ public static class ShadowDatabaseBuilder
         foreach (uint pageNum in database.GetTreePageNumbers(rootPage))
         {
             if (database.ReadPage(pageNum) is not TableBTreeLeafPage tlp) continue;
+            int? walFrame = database.WalFrameNumberFor(pageNum); // the page's committed WAL image, if any
 
             if (flags.DeletedCells)
                 foreach (var cell in tlp.DeletedCells)
-                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell);
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell, walFrame);
 
             if (flags.InTreeCarving)
             {
                 tlp.CarveDeletedCells(recordStructure!);
                 foreach (var cell in tlp.CarvedCells)
-                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving);
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving, walFrame);
             }
 
             if (flags.FreeblockCarving)
             {
                 tlp.CarveFreeblockCells(recordStructure!);
                 foreach (var cell in tlp.FreeblockCells)
-                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock);
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock, walFrame);
             }
         }
 
         transaction.Commit();
     }
 
-    private static void InsertRecoveredCellInTransaction(
+    /// <summary>INSERT into a table's recovered table, with parameters @p0..@pN for its columns
+    /// followed by @p_page, @p_offset, @p_overflow, @p_method and @p_wal_frame.</summary>
+    private static string BuildRecoveredInsertSql(TableSchema schema)
+    {
+        var cols = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
+        var phs  = schema.Columns.Select((_, i) => $"@p{i}").ToList();
+        cols.Add(QuoteIdentifier(PageNumberColumn));     phs.Add("@p_page");
+        cols.Add(QuoteIdentifier(CellOffsetColumn));     phs.Add("@p_offset");
+        cols.Add(QuoteIdentifier(OverflowPageColumn));   phs.Add("@p_overflow");
+        cols.Add(QuoteIdentifier(RecoveryMethodColumn)); phs.Add("@p_method");
+        cols.Add(QuoteIdentifier(WalFrameColumn));       phs.Add("@p_wal_frame");
+        return $"INSERT INTO {QuoteIdentifier(RecoveredTablePrefix + schema.TableName)} " +
+               $"({string.Join(", ", cols)}) VALUES ({string.Join(", ", phs)})";
+    }
+
+    /// <summary>Inserts <paramref name="cell"/> into the recovered table and returns its shadow rowid.</summary>
+    private static long InsertRecoveredCellInTransaction(
         SqliteConnection connection, SqliteTransaction transaction,
-        string sql, TableSchema schema, BTreeLeafCell cell, uint pageNum, string recoveryMethod)
+        string sql, TableSchema schema, BTreeLeafCell cell, uint pageNum, string recoveryMethod, int? walFrame = null)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -640,7 +652,13 @@ public static class ShadowDatabaseBuilder
         command.Parameters.AddWithValue("@p_offset",  cell.PageOffset);
         command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
         command.Parameters.AddWithValue("@p_method",  recoveryMethod);
+        command.Parameters.AddWithValue("@p_wal_frame", walFrame is { } f ? f : DBNull.Value);
         command.ExecuteNonQuery();
+
+        using var last = connection.CreateCommand();
+        last.Transaction = transaction;
+        last.CommandText = "SELECT last_insert_rowid()";
+        return (long)last.ExecuteScalar()!;
     }
 
     /// <summary>
@@ -863,27 +881,48 @@ public static class ShadowDatabaseBuilder
     {
         string sql = BuildCreateRecoveredTableSql(schema)
             .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", StringComparison.Ordinal);
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+        }
+
+        // A recovered table from a shadow built before _wal_frame existed
+        string table = RecoveredTablePrefix + schema.TableName;
+        bool hasWalFrame;
+        using (var info = connection.CreateCommand())
+        {
+            info.CommandText = $"SELECT 1 FROM pragma_table_info({QuoteLiteral(table)}) WHERE name = {QuoteLiteral(WalFrameColumn)}";
+            hasWalFrame = info.ExecuteScalar() is not null;
+        }
+        if (!hasWalFrame)
+        {
+            using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE {QuoteIdentifier(table)} ADD COLUMN {QuoteIdentifier(WalFrameColumn)} INTEGER";
+            alter.ExecuteNonQuery();
+        }
     }
 
+    private static string QuoteLiteral(string value) => $"'{value.Replace("'", "''")}'";
+
     /// <summary>
-    /// Walks all WAL frames oldest-to-newest and inserts into the shadow database
-    /// any deleted or superseded records that do not already appear in the live or
-    /// recovered tables. Returns the number of records inserted.
+    /// Walks every WAL frame oldest-to-newest and inserts into the shadow database any deleted or
+    /// superseded records that do not already appear in the live or recovered tables, each tagged
+    /// with its frame number. That includes committed frames a later committed frame replaced — a
+    /// row inserted and deleted within the WAL survives only there — as well as frames SQLite
+    /// ignores (old generation, uncommitted, bad checksum, or after the point it stops reading).
+    /// Live cells that are still live are skipped. With <paramref name="flags"/> (default: all on),
+    /// each frame's deleted cells, unallocated space and freeblocks are searched too.
+    /// Returns the number of records inserted.
     /// </summary>
     public static int InsertWalDeletedRows(
         SqliteConnection connection,
         SqliteForensicDatabase database,
-        WalFile wal)
+        WalFile wal,
+        RecoveryFlags? flags = null)
     {
-        // Skip committed frames — those are live data handled by SyncWalFramesToShadow. Every
-        // frame SQLite would ignore (old generation, uncommitted, bad checksum, or after the point
-        // SQLite stops reading) holds history whose records may have been deleted or overwritten.
         var pageImages = wal.Frames
-            .Where(f => f.Status != WalFrameStatus.Committed)
-            .Select(f => (f.Header.PageNumber, f.Page));
+            .Select((f, i) => new PageImage(f.Header.PageNumber, f.Page, i + 1));
 
         // Rows on each page's latest committed frame are live as far as SQLite is concerned, even
         // though they aren't in the database file yet — without this, an ignored frame that also
@@ -894,7 +933,8 @@ public static class ShadowDatabaseBuilder
             .Select(f => (f.Header.PageNumber, f.Page));
 
         return InsertHistoricalPageRows(connection, database, pageImages,
-            RecoveryMethodWalFrame, RecoveryMethodWalPreviousVersion, committedPages);
+            RecoveryMethodWalFrame, RecoveryMethodWalPreviousVersion, committedPages,
+            flags ?? RecoveryFlags.Default);
     }
 
     /// <summary>
@@ -906,20 +946,24 @@ public static class ShadowDatabaseBuilder
     /// lost. Such rows are inserted as <see cref="RecoveryMethodDbFileDeletedInWal"/>, and the
     /// file's version of a row the WAL changed as <see cref="RecoveryMethodDbFilePreviousVersion"/>.
     /// Rows are compared per table by rowid, so a row that merely moved to another page isn't
-    /// reported. Returns the number of records inserted.
+    /// reported. With <paramref name="flags"/> (default: all on), those file pages' deleted cells,
+    /// unallocated space and freeblocks are searched too — in-tree recovery only reads the
+    /// committed version of each page. Returns the number of records inserted.
     /// </summary>
     public static int InsertSupersededFilePageRows(
         SqliteConnection connection,
         SqliteForensicDatabase committed,
-        SqliteForensicDatabase file)
+        SqliteForensicDatabase file,
+        RecoveryFlags? flags = null)
     {
         var pageImages = committed.WalPageNumbers
             .Where(p => p >= 1 && p <= file.PageCount)
             .OrderBy(p => p)
-            .Select(p => (p, file.ReadPage(p)))
+            .Select(p => new PageImage(p, file.ReadPage(p), null))
             .ToList();
         return InsertHistoricalPageRows(connection, committed, pageImages,
-            RecoveryMethodDbFileDeletedInWal, RecoveryMethodDbFilePreviousVersion);
+            RecoveryMethodDbFileDeletedInWal, RecoveryMethodDbFilePreviousVersion,
+            deletedDataFlags: flags ?? RecoveryFlags.Default);
     }
 
     /// <summary>
@@ -942,10 +986,16 @@ public static class ShadowDatabaseBuilder
         var pageImages = journal.Segments
             .SelectMany(s => s.PageRecords)
             .Where(r => r.Status != JournalRecordStatus.InvalidPageNumber)
-            .Select(r => (r.PageNumber, r.Page));
+            .Select(r => new PageImage(r.PageNumber, r.Page, null));
+        // Journal images' deleted data isn't searched yet: without a journal provenance column
+        // it would be indistinguishable from the database file's own.
         return InsertHistoricalPageRows(connection, database, pageImages,
             RecoveryMethodJournalPage, RecoveryMethodJournalPreviousVersion);
     }
+
+    /// <summary>One image of a database page to mine: from the database file, a rollback journal, or
+    /// a WAL frame (<paramref name="WalFrame"/>, 1-based; null otherwise).</summary>
+    private readonly record struct PageImage(uint PageNumber, SqlitePage Page, int? WalFrame);
 
     /// <summary>
     /// Shared by WAL and rollback-journal recovery: walks earlier images of database pages
@@ -954,18 +1004,26 @@ public static class ShadowDatabaseBuilder
     /// (<paramref name="previousVersionMethod"/>). Skips records already in the recovered table
     /// under either method, so running it again over the same source (e.g. re-opening a saved
     /// project) doesn't duplicate rows.
+    /// <para>
+    /// When <paramref name="deletedDataFlags"/> is given, each image's deleted data is searched as
+    /// well — deleted cells, carved unallocated space and freeblocks, gated by the same flags as
+    /// in-tree recovery — and inserted under those techniques' own methods. Such records often have
+    /// no usable rowid (a freeblock overwrites it), so they're de-duplicated by value: a copy of a
+    /// live row, of a record already recovered, or of one seen in an earlier image is skipped, as
+    /// is a record with no non-NULL values at all.
+    /// </para>
     /// </summary>
     private static int InsertHistoricalPageRows(
         SqliteConnection connection,
         SqliteForensicDatabase database,
-        IEnumerable<(uint PageNumber, SqlitePage Page)> pageImages,
+        IEnumerable<PageImage> pageImages,
         string deletedMethod,
         string previousVersionMethod,
-        IEnumerable<(uint PageNumber, SqlitePage Page)>? alsoLivePages = null)
+        IEnumerable<(uint PageNumber, SqlitePage Page)>? alsoLivePages = null,
+        RecoveryFlags? deletedDataFlags = null)
     {
         var leafImages = pageImages
             .Where(p => p.Page is TableBTreeLeafPage)
-            .Select(p => (p.PageNumber, Page: (TableBTreeLeafPage)p.Page))
             .ToList();
         if (leafImages.Count == 0) return 0;
 
@@ -1042,30 +1100,40 @@ public static class ShadowDatabaseBuilder
         foreach (var (_, (schema, _)) in allSchemas)
             EnsureRecoveredTableExists(connection, schema);
 
-        // Pre-build INSERT SQL per table (recovery method is a parameter, not in SQL)
-        var insertSqlPerTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Value-based de-duplication for deleted data (see remarks): values of live rows, and of
+        // every record already recovered, per table.
+        // Rowid-less recovered copies (keyed by values) are kept as their shadow rowids, so a complete
+        // copy of the same record found later replaces them rather than sitting beside them.
+        var liveValueKeys      = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var recoveredValueKeys = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var partialCopies      = new Dictionary<string, Dictionary<string, List<long>>>(StringComparer.OrdinalIgnoreCase);
+        var recordStructures   = new Dictionary<string, RecordStructure>(StringComparer.OrdinalIgnoreCase);
         foreach (var (tableName, (schema, _)) in allSchemas)
         {
-            string recoveredTable = RecoveredTablePrefix + tableName;
-            var cols = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
-            var phs  = schema.Columns.Select((_, i) => $"@p{i}").ToList();
-            cols.Add(QuoteIdentifier(PageNumberColumn));     phs.Add("@p_page");
-            cols.Add(QuoteIdentifier(CellOffsetColumn));     phs.Add("@p_offset");
-            cols.Add(QuoteIdentifier(OverflowPageColumn));   phs.Add("@p_overflow");
-            cols.Add(QuoteIdentifier(RecoveryMethodColumn)); phs.Add("@p_method");
-            insertSqlPerTable[tableName] =
-                $"INSERT INTO {QuoteIdentifier(recoveredTable)} ({string.Join(", ", cols)}) VALUES ({string.Join(", ", phs)})";
+            liveValueKeys[tableName] = livePayloads[tableName].Values.Select(v => ValueKey(schema, v)).ToHashSet();
+            (recoveredValueKeys[tableName], partialCopies[tableName]) = GetRecoveredValueKeysFromShadow(connection, schema);
+            if (deletedDataFlags is not null)
+                recordStructures[tableName] = RecordStructure.FromSchema(schema);
         }
+
+        var insertSqlPerTable = allSchemas.ToDictionary(
+            e => e.Key, e => BuildRecoveredInsertSql(e.Value.Schema), StringComparer.OrdinalIgnoreCase);
 
         int inserted = 0;
 
         using var transaction = connection.BeginTransaction();
 
-        foreach (var (pageNum, imagePage) in leafImages)
+        foreach (var (pageNum, page, walFrame) in leafImages)
         {
+            var imagePage = (TableBTreeLeafPage)page;
             var schema = CorrelatePageImageToSchema(
                 imagePage, pageNum, database, pageTableMap, allSchemas,
                 liveRowIds, recoveredRowIds, freelistPages);
+            // An image with no live cells can't be matched by rowid; for deleted data, fall back to
+            // the table that owns the page now.
+            if (schema is null && deletedDataFlags is not null && imagePage.Cells.Count == 0 &&
+                pageTableMap.TryGetValue(pageNum, out var ownerName) && allSchemas.TryGetValue(ownerName, out var owner))
+                schema = owner.Schema;
             if (schema is null) continue;
 
             string tableName = schema.TableName;
@@ -1086,8 +1154,10 @@ public static class ShadowDatabaseBuilder
                 if (!knownLive.Contains(rowId) && !knownRecovered.Contains(rowId))
                 {
                     // Stage 2: record deleted before the current DB version
-                    InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, deletedMethod);
+                    ReplacePartialCopies(connection, transaction, schema, partialCopies[tableName], ValueKey(schema, cell.FieldValues));
+                    InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, deletedMethod, walFrame);
                     addedSet.Add(rowId);
+                    recoveredValueKeys[tableName].Add(ValueKey(schema, cell.FieldValues));
                     inserted++;
                 }
                 else if (knownLive.Contains(rowId) && knownPayloads.TryGetValue(rowId, out var livePayload))
@@ -1095,16 +1165,136 @@ public static class ShadowDatabaseBuilder
                     // Stage 3: record still exists but payload has changed — keep the older version
                     if (FieldsDiffer(cell.FieldValues, livePayload))
                     {
-                        InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, previousVersionMethod);
+                        ReplacePartialCopies(connection, transaction, schema, partialCopies[tableName], ValueKey(schema, cell.FieldValues));
+                        InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, previousVersionMethod, walFrame);
                         addedSet.Add(rowId);
+                        recoveredValueKeys[tableName].Add(ValueKey(schema, cell.FieldValues));
                         inserted++;
                     }
                 }
+            }
+
+            if (deletedDataFlags is null) continue;
+
+            // Deleted data inside the image: the same three techniques as in-tree recovery
+            var candidates = new List<(BTreeLeafCell Cell, string Method)>();
+            if (deletedDataFlags.DeletedCells)
+                candidates.AddRange(imagePage.DeletedCells.Select(c => (c, RecoveryMethodDeletedCell)));
+            if (deletedDataFlags.InTreeCarving)
+            {
+                imagePage.CarveDeletedCells(recordStructures[tableName]);
+                candidates.AddRange(imagePage.CarvedCells.Select(c => (c, RecoveryMethodCarving)));
+            }
+            if (deletedDataFlags.FreeblockCarving)
+            {
+                imagePage.CarveFreeblockCells(recordStructures[tableName]);
+                candidates.AddRange(imagePage.FreeblockCells.Select(c => (c, RecoveryMethodFreeblock)));
+            }
+
+            var liveKeys = liveValueKeys[tableName];
+            var seenKeys = recoveredValueKeys[tableName];
+            foreach (var (cell, method) in candidates)
+            {
+                if (cell.FieldValues.All(v => v?.Value is null)) continue;   // nothing left to recover
+                string key = ValueKey(schema, cell.FieldValues);
+                long rowId = cell.RowId.Value;
+
+                // A copy of a live row: by rowid and values when the rowid survives, otherwise by values
+                if (rowId > 0 && knownPayloads.TryGetValue(rowId, out var live) && !FieldsDiffer(cell.FieldValues, live)) continue;
+                if (rowId <= 0 && liveKeys.Contains(key)) continue;
+                // Already recovered, from this image or an earlier one, or by in-tree recovery —
+                // unless this copy kept its rowid and the earlier ones didn't
+                bool replacesPartial = rowId > 0 && partialCopies[tableName].ContainsKey(key);
+                if (!seenKeys.Add(key) && !replacesPartial) continue;
+                if (replacesPartial)
+                    ReplacePartialCopies(connection, transaction, schema, partialCopies[tableName], key);
+
+                long shadowRowId = InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, method, walFrame);
+                if (rowId <= 0)
+                {
+                    if (!partialCopies[tableName].TryGetValue(key, out var ids))
+                        partialCopies[tableName][key] = ids = [];
+                    ids.Add(shadowRowId);
+                }
+                inserted++;
             }
         }
 
         transaction.Commit();
         return inserted;
+    }
+
+    /// <summary>
+    /// A record's values as one comparable string, skipping the rowid-alias column (its value is the
+    /// rowid, which deleted data often no longer has). Values are compared as text, so a value that
+    /// round-trips through a shadow column's type affinity (e.g. 5 stored in a TEXT column as '5')
+    /// still matches.
+    /// </summary>
+    private static string ValueKey(TableSchema schema, IReadOnlyList<SqliteValue?> fieldValues) =>
+        ValueKey(schema, i => i < fieldValues.Count ? fieldValues[i]?.Value : null);
+
+    private static string ValueKey(TableSchema schema, Func<int, object?> valueAt)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < schema.Columns.Count; i++)
+        {
+            if (schema.Columns[i].IsRowIdAlias) continue;
+            object? v = valueAt(i);
+            sb.Append(v switch
+            {
+                null or DBNull => "\u0001",
+                byte[] bytes   => "x" + Convert.ToHexString(bytes),
+                _              => "v" + Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture),
+            });
+            sb.Append('\u001f');
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// <see cref="ValueKey(TableSchema, IReadOnlyList{SqliteValue?})"/> of every row already in the
+    /// table's recovered table, plus — for rows recovered without a rowid (no rowid-alias column, or
+    /// its value NULL or not positive) — their shadow rowids by key, so a complete copy can replace them.
+    /// </summary>
+    private static (HashSet<string> Keys, Dictionary<string, List<long>> Partials) GetRecoveredValueKeysFromShadow(
+        SqliteConnection connection, TableSchema schema)
+    {
+        var keys = new HashSet<string>();
+        var partials = new Dictionary<string, List<long>>();
+        int aliasIndex = schema.Columns.FindIndex(c => c.IsRowIdAlias);
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $"SELECT {string.Join(", ", schema.Columns.Select(c => QuoteIdentifier(c.Name)))}, rowid " +
+                              $"FROM {QuoteIdentifier(RecoveredTablePrefix + schema.TableName)}";
+            using var reader = cmd.ExecuteReader();
+            int shadowRowIdOrdinal = schema.Columns.Count;
+            while (reader.Read())
+            {
+                string key = ValueKey(schema, i => reader.IsDBNull(i) ? null : reader.GetValue(i));
+                keys.Add(key);
+                bool rowIdKnown = aliasIndex >= 0 && !reader.IsDBNull(aliasIndex) &&
+                                  reader.GetValue(aliasIndex) is long id && id > 0;
+                if (rowIdKnown) continue;
+                if (!partials.TryGetValue(key, out var ids)) partials[key] = ids = [];
+                ids.Add(reader.GetInt64(shadowRowIdOrdinal));
+            }
+        }
+        catch (SqliteException) { /* table may not exist yet */ }
+        return (keys, partials);
+    }
+
+    /// <summary>Deletes recovered rows that are rowid-less copies of the record with <paramref name="key"/>,
+    /// about to be replaced by a complete copy.</summary>
+    private static void ReplacePartialCopies(SqliteConnection connection, SqliteTransaction transaction,
+        TableSchema schema, Dictionary<string, List<long>> partials, string key)
+    {
+        if (!partials.Remove(key, out var ids)) return;
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = $"DELETE FROM {QuoteIdentifier(RecoveredTablePrefix + schema.TableName)} " +
+                          $"WHERE rowid IN ({string.Join(", ", ids)})";
+        cmd.ExecuteNonQuery();
     }
 
     private static TableSchema? CorrelatePageImageToSchema(

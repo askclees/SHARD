@@ -40,7 +40,15 @@ Lists every frame in the WAL. Each entry shows:
   - **IGNORED**: after the point where SQLite stopped reading.
   - **OLD**: from an earlier generation of the WAL (before it was last reset after a checkpoint). This is normal history.
 
-Only committed frames are treated as live data: the shadow database's live tables are the database file with each page's latest committed frame applied, which is what SQLite returns. Records in the other frames are recovered into `_shard_recovered_<table>` with `_recovery_method` = `wal_frame` when they aren't live. Rows the committed frames deleted or changed are recovered from the database file's own version of the page (`db_file_deleted_in_wal`, `db_file_previous_version`).
+Only committed frames are treated as live data: the shadow database's live tables are the database file with each page's latest committed frame applied, which is what SQLite returns.
+
+Every frame is searched for history, including committed frames that a later committed frame replaced. A row inserted and then deleted within the WAL may survive only there. From each frame SHARD recovers into `_shard_recovered_<table>`:
+- records that are no longer live (`wal_frame`), or older versions of rows that are (`wal_previous_version`);
+- deleted data inside the frame's page image: deleted cells, unallocated space and freeblocks (`deleted_cell`, `carving`, `freeblock`).
+
+Rows the committed frames deleted or changed are also recovered from the database file's own version of the page (`db_file_deleted_in_wal`, `db_file_previous_version`), along with that page's deleted data.
+
+The `_wal_frame` column says which frame a recovered record came from (NULL when it came from the database file). Each record is listed once: copies of a live row are skipped, and a copy that kept its rowid replaces copies of the same record that didn't.
 
 Select a frame to view its contents on the right.
 

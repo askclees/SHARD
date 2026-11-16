@@ -2,13 +2,18 @@
 """
 Creates places_wal_secure_delete.db and its WAL for SHARD WAL recovery testing.
 
-Key difference from places_wal.db: PRAGMA secure_delete=ON is enabled, which
-overwrites freed cell space with zeros on every delete transaction.  This
-destroys the evidence that page-level carving relies on, making page-level
-recovery return nothing.  The historical WAL frames (IsCurrent=False) still
-hold the original page images captured *before* each deletion, so SHARD's
-WAL analysis can recover all deleted rows even when secure_delete defeated
-conventional carving.
+PRAGMA secure_delete=ON is enabled, which overwrites freed cell space with zeros
+on every delete transaction. This destroys the evidence that page-level carving
+relies on, making page-level recovery return nothing. The historical WAL frames
+(IsCurrent=False) still hold the original page images captured *before* each
+deletion, so SHARD's WAL analysis can recover all deleted rows even when
+secure_delete defeated conventional carving.
+
+(The other WAL fixtures turned out to have been generated with secure_delete on
+too - it was the default of the SQLite build used - and their scripts now set it
+explicitly. This fixture's distinguishing feature is three separate deletion
+stages, each in its own frame; places_wal_freeblocks.db is the variant with
+secure_delete off.)
 
 Deletion stages (each creates a separate WAL frame):
   Stage 1 — DELETE rows  6-10  → Frame 4: 25 cells remain, rows  6-10 zeroed

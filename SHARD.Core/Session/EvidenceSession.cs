@@ -204,7 +204,7 @@ public sealed class EvidenceSession : IDisposable
         {
             using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
             connection.Open();
-            walInserted = RecoverWalHistory(connection, Wal, source);
+            walInserted = RecoverWalHistory(connection, Wal, source, flags);
         }
 
         int journalInserted = 0;
@@ -327,7 +327,7 @@ public sealed class EvidenceSession : IDisposable
             {
                 using var connection = new SqliteConnection($"Data Source={project.ShadowDatabasePath}");
                 connection.Open();
-                recovered = RecoverWalHistory(connection, wal, CommittedDatabase);
+                recovered = RecoverWalHistory(connection, wal, CommittedDatabase, flags);
             }
             catch (Exception ex) { recoveryError = ex.Message; }
             return new WalSyncResult(0, recovered, null, recoveryError);
@@ -347,12 +347,12 @@ public sealed class EvidenceSession : IDisposable
     /// state, first the database file's versions of pages the WAL replaced (rows the WAL deleted or
     /// changed), then every frame SQLite ignores. Both skip rows already recovered.
     /// </summary>
-    private int RecoverWalHistory(SqliteConnection connection, WalFile wal, SqliteForensicDatabase source)
+    private int RecoverWalHistory(SqliteConnection connection, WalFile wal, SqliteForensicDatabase source, RecoveryFlags flags)
     {
         int inserted = 0;
         if (source.IncludesWal)
-            inserted += ShadowDatabaseBuilder.InsertSupersededFilePageRows(connection, source, Database);
-        inserted += ShadowDatabaseBuilder.InsertWalDeletedRows(connection, source, wal);
+            inserted += ShadowDatabaseBuilder.InsertSupersededFilePageRows(connection, source, Database, flags);
+        inserted += ShadowDatabaseBuilder.InsertWalDeletedRows(connection, source, wal, flags);
         return inserted;
     }
 

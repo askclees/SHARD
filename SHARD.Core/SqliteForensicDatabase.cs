@@ -19,6 +19,8 @@ public sealed class SqliteForensicDatabase : IDisposable
 
     // Latest committed WAL image of each page, laid over the file (null when reading the file alone).
     private readonly IReadOnlyDictionary<uint, byte[]>? _walPages;
+    // 1-based WAL frame number each of those page images came from.
+    private readonly IReadOnlyDictionary<uint, int>? _walFrameNumbers;
 
     /// <summary>Parsed 100-byte database header (from the WAL's latest image of page 1, when
     /// <see cref="IncludesWal"/> and the WAL holds one).</summary>
@@ -35,12 +37,19 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// <summary>Pages whose content comes from the WAL rather than the file.</summary>
     public IReadOnlyCollection<uint> WalPageNumbers => (IReadOnlyCollection<uint>?)_walPages?.Keys ?? [];
 
+    /// <summary>The 1-based WAL frame page <paramref name="pageNumber"/> is read from, or null when
+    /// it's read from the file.</summary>
+    public int? WalFrameNumberFor(uint pageNumber) =>
+        _walFrameNumbers is not null && _walFrameNumbers.TryGetValue(pageNumber, out int frame) ? frame : null;
+
     private SqliteForensicDatabase(FileStream stream, DatabaseHeader header,
-        IReadOnlyDictionary<uint, byte[]>? walPages = null, uint? pageCount = null)
+        IReadOnlyDictionary<uint, byte[]>? walPages = null, uint? pageCount = null,
+        IReadOnlyDictionary<uint, int>? walFrameNumbers = null)
     {
         _stream   = stream;
         Header    = header;
         _walPages = walPages;
+        _walFrameNumbers = walFrameNumbers;
         PageCount = pageCount ?? (uint)(stream.Length / header.PageSize);
     }
 
@@ -56,8 +65,13 @@ public sealed class SqliteForensicDatabase : IDisposable
         if (wal.CommittedFrameCount == 0) return Open(filePath);
 
         var walPages = new Dictionary<uint, byte[]>();
-        foreach (var frame in wal.CommittedFrames)
+        var walFrameNumbers = new Dictionary<uint, int>();
+        for (int i = 0; i < wal.CommittedFrameCount; i++)
+        {
+            var frame = wal.Frames[i];
             walPages[frame.Header.PageNumber] = frame.PageData;
+            walFrameNumbers[frame.Header.PageNumber] = i + 1;
+        }
         uint pageCount = wal.Frames[wal.CommittedFrameCount - 1].Header.SizeOfDatabaseInPages;
 
         var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -78,7 +92,7 @@ public sealed class SqliteForensicDatabase : IDisposable
                 throw new InvalidDataException(
                     $"The WAL's page size ({wal.Header.DatabasePageSize:N0}) doesn't match the database's ({header.PageSize:N0}).");
 
-            return new SqliteForensicDatabase(stream, header, walPages, pageCount);
+            return new SqliteForensicDatabase(stream, header, walPages, pageCount, walFrameNumbers);
         }
         catch
         {

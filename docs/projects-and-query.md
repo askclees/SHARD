@@ -5,7 +5,7 @@
 A project is a folder that SHARD creates alongside your evidence file. It contains:
 
 - **`project.json`** — a manifest recording the evidence file path and creation time.
-- **A shadow SQLite database** — a copy of the evidence file's schema and data, rebuilt forensically from parsed page bytes rather than by opening the file with a SQLite library. Each row carries provenance columns (`_page_number`, `_cell_offset`, `_overflow_page`) recording exactly where in the evidence file the data came from.
+- **A shadow SQLite database** — a copy of the evidence file's schema and data, rebuilt forensically from parsed page bytes rather than by opening the file with a SQLite library. Each row carries provenance columns (`_page_number`, `_cell_offset`, `_overflow_page`) recording exactly where in the evidence file the data came from. Recovered rows also carry `_recovery_method` (how the row was found) and `_wal_frame` (the WAL frame it came from, or NULL for the database file).
 
 Recovered deleted records are stored in `_shard_recovered_<tablename>` tables inside the shadow database.
 
