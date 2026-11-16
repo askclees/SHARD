@@ -21,7 +21,7 @@ It ships four ways to use the same recovery engine:
 
 ## Building
 
-Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download), version 10.0.403 or later (enforced by `global.json`). Earlier SDKs ship a .NET runtime and Native AOT compiler with a known vulnerability (GHSA-p3jp-9v83-76w9).
 
 ```
 dotnet build SHARD.sln
