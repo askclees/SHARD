@@ -46,6 +46,27 @@ Checking **Include recovered records** silently modifies the executed query to `
 
 This only applies when the query references a known table name. If no matching recovered table exists, the query runs unchanged.
 
+### Row states
+
+Every row in a live or recovered table has three state columns, describing that exact version of the row (its rowid and values):
+
+| Column | Value | Meaning |
+|---|---|---|
+| `_db_state` | 1 | Live in the database file with these values |
+| | 3 | The same rowid is live in the database file with other values |
+| | 2 | Found only in the database file's deleted data |
+| | 0 | Not in the database file |
+| `_log_state` | NULL | No WAL, or the WAL doesn't cover this row (it appears in no frame and its page was never rewritten) |
+| | 1 | Live in the WAL's committed state, and the WAL holds it |
+| | 3 | The same rowid is live in the committed state with other values |
+| | 2 | In the WAL but not live in its committed state, or live in the database file and deleted by the WAL (whether or not its bytes survive) |
+| | 0 | The WAL covers this row's page but the row isn't in it, and wasn't live before |
+| `_is_current` | 1 | This is the version SQLite returns now |
+
+A WAL is newer than the database file, so for a row the WAL updated, the new version is `_db_state = 3, _log_state = 1` and the file's old version is `_db_state = 1, _log_state = 3`. `_shard_info` records which transaction log the states describe (`transaction_log`: `wal`, `journal` or `none`). Rollback journal states aren't computed yet: with a journal, `_log_state` is NULL.
+
+The **Row state** list next to the scope buttons filters any query by these columns. It offers: Current, Deleted by the WAL, Added by the WAL, Changed by the WAL (earlier version), Only ever in the WAL, and Deleted in the database file. It wraps the query as `SELECT * FROM (query) WHERE …`, so the query's results must include the state columns, as `SELECT *` does.
+
 ### Results
 
 Results are displayed in a grid. Column names are shown in the header row. The row count and execution status appear below the query box.

@@ -9,6 +9,9 @@ using SHARD.Core.Shadow;
 
 namespace SHARD.ViewModels;
 
+/// <summary>A preset filter on the row-state columns (_db_state, _log_state, _is_current).</summary>
+public sealed record RowStateFilter(string Label, string? Condition, string Tip);
+
 public sealed class QueryViewModel : ViewModelBase
 {
     private string? _shadowDbPath;
@@ -165,6 +168,33 @@ public sealed class QueryViewModel : ViewModelBase
         set { if (value) SelectedRecordScope = RecordScope.LiveAndRecovered; }
     }
 
+    /// <summary>The Row state choices. Each wraps the query as
+    /// <c>SELECT * FROM (query) WHERE condition</c>, so the query's results must include the state
+    /// columns (a <c>SELECT *</c> does).</summary>
+    public IReadOnlyList<RowStateFilter> RowStateFilters { get; } =
+    [
+        new("All rows", null, "No filter on row state."),
+        new("Current", $"{RowStates.IsCurrentColumn} = 1",
+            "What SQLite returns now: the database file with its WAL's committed frames applied."),
+        new("Deleted by the WAL", $"{RowStates.DbStateColumn} = 1 AND {RowStates.LogStateColumn} = 2",
+            "Live in the database file, deleted by a committed WAL transaction not yet checkpointed."),
+        new("Added by the WAL", $"{RowStates.DbStateColumn} = 0 AND {RowStates.LogStateColumn} = 1",
+            "Live, but not in the database file yet: added by the WAL."),
+        new("Changed by the WAL (earlier version)", $"{RowStates.DbStateColumn} = 1 AND {RowStates.LogStateColumn} = 3",
+            "The database file's version of a row the WAL has since changed."),
+        new("Only ever in the WAL", $"{RowStates.DbStateColumn} = 0 AND {RowStates.LogStateColumn} = 2",
+            "Inserted and deleted within the WAL: never in the database file, not live now."),
+        new("Deleted in the database file", $"{RowStates.DbStateColumn} = 2",
+            "Found only in the database file's deleted data (deleted cells, unallocated space, freeblocks)."),
+    ];
+
+    private RowStateFilter? _selectedRowStateFilter;
+    public RowStateFilter SelectedRowStateFilter
+    {
+        get => _selectedRowStateFilter ?? RowStateFilters[0];
+        set => this.RaiseAndSetIfChanged(ref _selectedRowStateFilter, value);
+    }
+
     /// <summary>Set the query text to a default "SELECT * FROM ..." for the given table and run it.</summary>
     public void RunQueryForTable(string tableName)
     {
@@ -209,6 +239,17 @@ public sealed class QueryViewModel : ViewModelBase
     /// </summary>
     private string BuildRuntimeSql()
     {
+        string sql = BuildScopedSql();
+        if (SelectedRowStateFilter.Condition is not { } condition) return sql;
+
+        // Only a query that returns rows can be filtered
+        string trimmed = sql.Trim().TrimEnd(';').Trim();
+        if (!Regex.IsMatch(trimmed, @"^\s*(SELECT|WITH)\b", RegexOptions.IgnoreCase)) return sql;
+        return $"SELECT * FROM ({trimmed}) WHERE {condition}";
+    }
+
+    private string BuildScopedSql()
+    {
         if (_recordScope == RecordScope.Live) return QueryText;
 
         string? matched = FindMatchedLiveTableName();
@@ -239,7 +280,9 @@ public sealed class QueryViewModel : ViewModelBase
                 ? QuoteIdentifier(c)
                 : $"NULL AS {QuoteIdentifier(c)}"));
 
-        return $"WITH _shard_q AS ({QueryText})\n" +
+        // A trailing ';' would end the statement inside the CTE's parentheses
+        string query = QueryText.Trim().TrimEnd(';').TrimEnd();
+        return $"WITH _shard_q AS ({query})\n" +
                $"SELECT {liveColList}, 0 AS _is_recovered FROM _shard_q\n" +
                $"UNION ALL\n" +
                $"SELECT {colList}, 1 AS _is_recovered FROM {QuoteIdentifier(recovered)}";

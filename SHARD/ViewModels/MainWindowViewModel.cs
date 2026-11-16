@@ -975,6 +975,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Report("Carving unknown pages…");
                 CarveUnknownPages(OrphanPageCarver.BuildCandidates(Database, CarveMode.Loose));
             }
+
+            Report("Labelling row states…");
+            UpdateRowStates();
         }
         catch (InvalidDataException ex)
         {
@@ -1239,6 +1242,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 : "Carve unknown pages: nothing recovered" +
                   (ambiguousSkipped > 0 ? $"  ·  {ambiguousSkipped} ambiguous byte range{(ambiguousSkipped == 1 ? "" : "s")} skipped" : "");
             RefreshPagesFromShadowDatabase();
+            UpdateRowStates();
         }
         catch (Exception ex)
         {
@@ -1321,6 +1325,22 @@ public sealed class MainWindowViewModel : ViewModelBase
             StatusText += $"  ·  {recovered} deleted journal record{(recovered == 1 ? "" : "s")} recovered";
         if (error is not null)
             StatusText += $"  ·  Journal recovery failed: {error}";
+        UpdateRowStates();
+    }
+
+    /// <summary>Recomputes the shadow database's row-state columns (_db_state, _log_state,
+    /// _is_current) after a recovery step, against whichever WAL the WAL tab shows.</summary>
+    private void UpdateRowStates()
+    {
+        if (Project is null || _session is null) return;
+        try
+        {
+            _session.UpdateRowStates(Project.ShadowDatabasePath, wal: WalTab?.WalFile);
+        }
+        catch (Exception ex)
+        {
+            StatusText += $"  ·  Row states could not be computed: {ex.Message}";
+        }
     }
 
     private void SyncWalToProject()
@@ -1335,6 +1355,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             StatusText += $"  ·  {result.Recovered} deleted WAL record{(result.Recovered == 1 ? "" : "s")} recovered";
         if (result.RecoveryError is not null)
             StatusText += $"  ·  WAL deleted recovery failed: {result.RecoveryError}";
+        UpdateRowStates();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

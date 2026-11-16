@@ -215,7 +215,42 @@ public sealed class EvidenceSession : IDisposable
             journalInserted = ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, Database, Journal);
         }
 
+        UpdateRowStates(shadowDbPath, flags);
         return (warnings, walInserted, journalInserted);
+    }
+
+    /// <summary>
+    /// Computes the row-state columns (<see cref="RowStates"/>) for every live and recovered table in
+    /// the shadow database at <paramref name="shadowDbPath"/>. Run after any recovery step that adds
+    /// rows; it recomputes everything, so running it again is harmless. <paramref name="wal"/>
+    /// defaults to this session's own WAL; pass a WAL loaded separately (e.g. the GUI's "Load WAL
+    /// File…") to describe rows against that one instead.
+    /// </summary>
+    public void UpdateRowStates(string shadowDbPath, RecoveryFlags? flags = null, WalFile? wal = null)
+    {
+        flags ??= RecoveryFlags.Default;
+        wal ??= Wal;
+        using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
+        connection.Open();
+
+        if (flags.ProcessWal && wal is { CommittedFrameCount: > 0 })
+        {
+            SqliteForensicDatabase? opened = null;
+            try
+            {
+                var committed = ReferenceEquals(wal, Wal) && CommittedDatabase is not null
+                    ? CommittedDatabase
+                    : opened = SqliteForensicDatabase.OpenCommittedState(EvidencePath, wal);
+                RowStates.Update(connection, Database, wal, committed, "wal");
+            }
+            finally { opened?.Dispose(); }
+            return;
+        }
+
+        string log = flags.ProcessWal && wal is not null ? "wal"
+                   : flags.ProcessJournal && Journal is not null ? "journal"
+                   : "none";
+        RowStates.Update(connection, Database, null, null, log);
     }
 
     /// <summary>
