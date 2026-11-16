@@ -100,6 +100,12 @@ def bind() -> ctypes.CDLL:
     lib.shard_recover_to_file.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.c_char_p]
     lib.shard_recover_to_file.restype = ctypes.c_void_p
 
+    lib.shard_get_hashes.argtypes = [ctypes.c_int64]
+    lib.shard_get_hashes.restype = ctypes.c_void_p
+
+    lib.shard_verify_hashes.argtypes = [ctypes.c_int64]
+    lib.shard_verify_hashes.restype = ctypes.c_void_p
+
     lib.shard_free_string.argtypes = [ctypes.c_void_p]
     lib.shard_free_string.restype = None
 

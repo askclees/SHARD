@@ -56,6 +56,32 @@ public class RecoveryApiTests
     }
 
     [Fact]
+    public void GetHashes_ReturnsDigestsTakenAtOpen()
+    {
+        long handle = OpenHandle(OrphanLeafDb);
+        var doc = JsonDocument.Parse(RecoveryApi.GetHashes(handle));
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+
+        var db = doc.RootElement.GetProperty("data").EnumerateArray()
+            .Single(e => e.GetProperty("role").GetString() == "database");
+        string expected = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(OrphanLeafDb)));
+        Assert.Equal(expected, db.GetProperty("sha256").GetString());
+        Assert.Equal(32, db.GetProperty("md5").GetString()!.Length);
+        Assert.Equal(40, db.GetProperty("sha1").GetString()!.Length);
+    }
+
+    [Fact]
+    public void VerifyHashes_UnchangedFile_ReportsMatchAsString()
+    {
+        long handle = OpenHandle(OrphanLeafDb);
+        var doc = JsonDocument.Parse(RecoveryApi.VerifyHashes(handle));
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+        Assert.All(doc.RootElement.GetProperty("data").EnumerateArray(),
+            e => Assert.Equal("Match", e.GetProperty("status").GetString()));
+    }
+
+    [Fact]
     public void GetHeader_ReturnsPageSize()
     {
         long handle = OpenHandle(OrphanLeafDb);

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SHARD.Core;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Pages;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
@@ -64,6 +65,7 @@ try
         "pages"   => RunPages(positional, outputPath, format),
         "header"  => RunHeader(positional, outputPath, format),
         "carve"   => RunCarve(positional, outputPath, format),
+        "hash"    => RunHash(positional, outputPath, format),
         _         => Die($"Unknown command '{command}'. Run 'shard-cli --help' for usage."),
     };
 }
@@ -265,6 +267,35 @@ int RunHeader(List<string> pos, string? outPath, string fmt)
     return 0;
 }
 
+// ── hash ──────────────────────────────────────────────────────────────────────
+
+int RunHash(List<string> pos, string? outPath, string fmt)
+{
+    if (pos.Count < 2) Die("Usage: shard-cli hash <db-file>");
+    string dbPath = pos[1];
+    if (!File.Exists(dbPath)) Die($"File not found: '{dbPath}'.");
+
+    var hashes = EvidenceHasher.HashEvidenceSet(dbPath);
+    var doc = new { files = hashes };
+
+    Write(outPath, fmt, doc, d =>
+    {
+        var sb = new StringBuilder();
+        foreach (var h in d.files)
+        {
+            sb.AppendLine($"{h.Role}  {h.Path}");
+            sb.AppendLine($"  size      {h.Length:N0} bytes");
+            sb.AppendLine($"  modified  {h.LastWriteUtc:O}");
+            sb.AppendLine($"  md5       {h.Md5}");
+            sb.AppendLine($"  sha1      {h.Sha1}");
+            sb.AppendLine($"  sha256    {h.Sha256}");
+            sb.AppendLine($"  hashed    {h.HashedUtc:O}");
+        }
+        return sb.ToString();
+    });
+    return 0;
+}
+
 // ── carve ─────────────────────────────────────────────────────────────────────
 
 int RunCarve(List<string> pos, string? outPath, string fmt)
@@ -417,6 +448,8 @@ static void PrintHelp() => Console.WriteLine("""
       header  <db>           Dump database header fields
       carve   <db>           Try every live table's schema against unclaimed pages
                               [--mode loose|tight] [--table <name> ...]
+      hash    <db>           MD5, SHA-1 and SHA-256 of the database and any
+                              -wal, -journal or -shm file beside it
 
     Global options:
       -f, --format json|text   Output format (default: json)
@@ -433,6 +466,7 @@ static void PrintHelp() => Console.WriteLine("""
       shard-cli schema  mydb.sqlite
       shard-cli pages   mydb.sqlite -f text
       shard-cli header  mydb.sqlite
+      shard-cli hash    mydb.sqlite -f text
       shard-cli rows    mydb.sqlite users -o rows.json
       shard-cli carve   mydb.sqlite --mode tight
       shard-cli carve   mydb.sqlite --mode loose --table users --table notes

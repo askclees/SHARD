@@ -106,6 +106,18 @@ class ShardDatabase:
         """Every page in the file with its type and (if known) owning table."""
         return _call(_lib.shard_get_pages, ctypes.c_int64(self._require_handle()))
 
+    @property
+    def hashes(self) -> list[dict[str, Any]]:
+        """MD5, SHA-1 and SHA-256 of the database and each sidecar (-wal, -journal, -shm)
+        present, taken when this ShardDatabase was opened: one dict per file with `role`,
+        `path`, `length`, `lastWriteUtc`, `md5`, `sha1`, `sha256`, `hashedUtc`."""
+        return _call(_lib.shard_get_hashes, ctypes.c_int64(self._require_handle()))
+
+    def verify_hashes(self) -> list[dict[str, Any]]:
+        """Re-hashes the files and compares them with `hashes`. Each result has `role`,
+        `status` ("Match", "Changed", "Missing" or "Added"), `recorded` and `current`."""
+        return _call(_lib.shard_verify_hashes, ctypes.c_int64(self._require_handle()))
+
     def rows(self, table_name: str) -> list[dict[str, Any]]:
         """Live rows currently readable from `table_name`."""
         return _call(_lib.shard_get_rows, ctypes.c_int64(self._require_handle()), table_name.encode("utf-8"))

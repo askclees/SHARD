@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using SHARD.Core.Integrity;
 using SHARD.Core.Recovery;
 
 namespace SHARD.Native;
@@ -39,6 +40,8 @@ public sealed record RecoverOptionsInput(bool ProcessWal = true, string? CarveMo
 [JsonSerializable(typeof(List<PageInfo>))]
 [JsonSerializable(typeof(List<RowInfo>))]
 [JsonSerializable(typeof(List<CarvedRowInfo>))]
+[JsonSerializable(typeof(List<EvidenceFileHash>))]
+[JsonSerializable(typeof(List<HashVerification>))]
 [JsonSerializable(typeof(IReadOnlyDictionary<string, object?>))]
 [JsonSerializable(typeof(Dictionary<string, object?>))]
 [JsonSerializable(typeof(long))]

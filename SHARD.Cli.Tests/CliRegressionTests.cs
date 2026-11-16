@@ -83,4 +83,26 @@ public class CliRegressionTests
         }
         finally { File.Delete(dbPath); }
     }
+
+    [Fact]
+    public void Hash_ReportsDigestsOfDatabase()
+    {
+        string dbPath = Fixtures.CreateRowidAliasNotFirstColumnDb();
+        try
+        {
+            var result = CliRunner.Run("hash", dbPath, "-f", "json");
+            Assert.Equal(0, result.ExitCode);
+
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var db = doc.RootElement.GetProperty("files").EnumerateArray()
+                .Single(e => e.GetProperty("role").GetString() == "database");
+            string expected = Convert.ToHexStringLower(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(dbPath)));
+            Assert.Equal(expected, db.GetProperty("sha256").GetString());
+        }
+        finally
+        {
+            File.Delete(dbPath);
+        }
+    }
 }
