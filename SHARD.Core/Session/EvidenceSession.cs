@@ -161,7 +161,9 @@ public sealed class EvidenceSession : IDisposable
         string shadowDbPath, RecoveryFlags? flags = null, Action<string>? reportProgress = null)
     {
         flags ??= RecoveryFlags.Default;
-        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, Database, flags, reportProgress, Hashes);
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, Database, flags, reportProgress, Hashes).ToList();
+        if (flags.ProcessWal && Wal?.StopReason is { } walStop)
+            warnings.Add($"WAL: {walStop}");
 
         int walInserted = 0;
         if (flags.ProcessWal && Wal is not null)

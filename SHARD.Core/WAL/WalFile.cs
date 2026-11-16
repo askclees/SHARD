@@ -59,6 +59,19 @@ public class WalFile
         return Frames.GetRange(start, end - start + 1);
     }
 
+    /// <summary>File offset where bytes too few to form a whole frame begin, or null if the file
+    /// ends exactly on a frame boundary.</summary>
+    public long? TrailingBytesOffset { get; }
+
+    /// <summary>The bytes after the last whole frame (empty if none). Usually a frame that was
+    /// being written when the file was copied or the writer stopped; SQLite ignores them.</summary>
+    public byte[] TrailingBytes { get; } = [];
+
+    /// <summary>Why parsing stopped before the end of the file (null if it ran exactly to the end).</summary>
+    public string? StopReason { get; }
+
+    public bool HasTrailingBytes => TrailingBytes.Length > 0;
+
     public WalFile(string path, TextEncoding encoding, int reservedBytes)
     {
         using FileStream walFile = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -70,21 +83,27 @@ public class WalFile
         long fileSize = walFile.Length;
         long pointer = 32;
         uint pageSize = Header.DatabasePageSize;
-        byte[] frameData = new byte[24 + pageSize];
+        long frameSize = 24 + pageSize;
+        byte[] frameData = new byte[frameSize];
         while (pointer < fileSize)
         {
-            try
+            long remaining = fileSize - pointer;
+            if (remaining < frameSize)
             {
-                walFile.ReadExactly(frameData, 0, (int)(24 + pageSize));
-            }
-            catch (EndOfStreamException)
-            {
-                throw new InvalidDataException($"WAL file has a partial frame at offset {pointer} — file may be corrupted");
+                // A partial frame — typically one being written when the file was copied. SQLite
+                // stops reading at the last whole frame, so do the same and keep the rest for review.
+                TrailingBytesOffset = pointer;
+                TrailingBytes = new byte[remaining];
+                walFile.ReadExactly(TrailingBytes, 0, (int)remaining);
+                StopReason = $"{remaining:N0} byte{(remaining == 1 ? "" : "s")} at offset {pointer:N0} " +
+                             $"are less than a whole frame ({frameSize:N0} bytes) and were ignored";
+                break;
             }
 
+            walFile.ReadExactly(frameData, 0, (int)frameSize);
             WalFrame newFrame = new(frameData, pageSize, encoding, reservedBytes, Header.VerificationData);
             Frames.Add(newFrame);
-            pointer += pageSize + 24;
+            pointer += frameSize;
         }
     }
 }

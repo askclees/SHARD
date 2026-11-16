@@ -274,6 +274,47 @@ public class EvidenceSessionTests
         finally { Directory.Delete(dir, true); }
     }
 
+    [Fact]
+    public void Open_WalWithPartialFinalFrame_KeepsWholeFramesAndRecoversTheSameRows()
+    {
+        // A copy taken while the writer was mid-frame: the real WAL plus a partial frame.
+        string dir = MakeTempDir();
+        try
+        {
+            string clean = Path.Combine(dir, "clean.db");
+            string torn  = Path.Combine(dir, "torn.db");
+            foreach (string db in new[] { clean, torn })
+            {
+                File.Copy(WalFixturePath("places_wal_multi_page.db"), db);
+                File.Copy(WalFixturePath("places_wal_multi_page.db-wal"), db + "-wal");
+            }
+            using (var fs = new FileStream(torn + "-wal", FileMode.Append))
+                fs.Write(new byte[24 + 1000]); // a frame header and part of its page
+
+            int cleanInserted, tornInserted;
+            IReadOnlyList<string> tornWarnings;
+            int cleanFrames;
+            using (var session = EvidenceSession.Open(clean))
+            {
+                cleanFrames = session.Wal!.Frames.Count;
+                (_, cleanInserted, _) = session.BuildShadowDatabase(Path.Combine(dir, "clean-shadow.db"));
+            }
+            using (var session = EvidenceSession.Open(torn))
+            {
+                Assert.True(session.HasWal);
+                Assert.Null(session.WalError);
+                Assert.Equal(cleanFrames, session.Wal!.Frames.Count);
+                Assert.Equal(1024, session.Wal.TrailingBytes.Length);
+                (tornWarnings, tornInserted, _) = session.BuildShadowDatabase(Path.Combine(dir, "torn-shadow.db"));
+            }
+
+            Assert.True(cleanInserted > 0);
+            Assert.Equal(cleanInserted, tornInserted);
+            Assert.Contains(tornWarnings, w => w.StartsWith("WAL:") && w.Contains("1,024 bytes"));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static string MakeTempDir()
