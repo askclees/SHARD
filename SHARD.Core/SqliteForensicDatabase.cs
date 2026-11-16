@@ -5,6 +5,7 @@ using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Core.WAL;
 
 namespace SHARD.Core;
 
@@ -16,17 +17,92 @@ public sealed class SqliteForensicDatabase : IDisposable
 {
     private readonly FileStream _stream;
 
-    /// <summary>Parsed 100-byte database header.</summary>
+    // Latest committed WAL image of each page, laid over the file (null when reading the file alone).
+    private readonly IReadOnlyDictionary<uint, byte[]>? _walPages;
+
+    /// <summary>Parsed 100-byte database header (from the WAL's latest image of page 1, when
+    /// <see cref="IncludesWal"/> and the WAL holds one).</summary>
     public DatabaseHeader Header { get; }
 
-    /// <summary>Total number of pages derived from file size and page size.</summary>
+    /// <summary>Total number of pages: from the file size, or — when <see cref="IncludesWal"/> —
+    /// the database size recorded in the WAL's last commit frame, as SQLite uses.</summary>
     public uint PageCount { get; }
 
-    private SqliteForensicDatabase(FileStream stream, DatabaseHeader header)
+    /// <summary>True when this reads the database as SQLite sees it: the file with every
+    /// committed WAL frame applied (see <see cref="OpenCommittedState"/>).</summary>
+    public bool IncludesWal => _walPages is not null;
+
+    /// <summary>Pages whose content comes from the WAL rather than the file.</summary>
+    public IReadOnlyCollection<uint> WalPageNumbers => (IReadOnlyCollection<uint>?)_walPages?.Keys ?? [];
+
+    private SqliteForensicDatabase(FileStream stream, DatabaseHeader header,
+        IReadOnlyDictionary<uint, byte[]>? walPages = null, uint? pageCount = null)
     {
         _stream   = stream;
         Header    = header;
-        PageCount = (uint)(stream.Length / header.PageSize);
+        _walPages = walPages;
+        PageCount = pageCount ?? (uint)(stream.Length / header.PageSize);
+    }
+
+    /// <summary>
+    /// Opens the database as SQLite would see it with <paramref name="wal"/> applied: each page is
+    /// read from its latest <see cref="WalFrameStatus.Committed"/> frame if it has one, otherwise
+    /// from the file, and the page count is the database size in the last commit frame (a commit
+    /// can grow or shrink the database). Frames SQLite ignores — uncommitted, invalid or
+    /// old-generation — play no part. With no committed frames this is the same as <see cref="Open"/>.
+    /// </summary>
+    public static SqliteForensicDatabase OpenCommittedState(string filePath, WalFile wal)
+    {
+        if (wal.CommittedFrameCount == 0) return Open(filePath);
+
+        var walPages = new Dictionary<uint, byte[]>();
+        foreach (var frame in wal.CommittedFrames)
+            walPages[frame.Header.PageNumber] = frame.PageData;
+        uint pageCount = wal.Frames[wal.CommittedFrameCount - 1].Header.SizeOfDatabaseInPages;
+
+        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            byte[] headerBytes;
+            if (walPages.TryGetValue(1, out var page1))
+            {
+                headerBytes = page1[..100];
+            }
+            else
+            {
+                headerBytes = new byte[100];
+                stream.ReadExactly(headerBytes);
+            }
+            var header = new DatabaseHeader(headerBytes);
+            if (header.PageSize != wal.Header.DatabasePageSize)
+                throw new InvalidDataException(
+                    $"The WAL's page size ({wal.Header.DatabasePageSize:N0}) doesn't match the database's ({header.PageSize:N0}).");
+
+            return new SqliteForensicDatabase(stream, header, walPages, pageCount);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>A copy of page <paramref name="pageNumber"/>'s bytes, from the WAL if it holds the
+    /// page's committed image, otherwise from the file.</summary>
+    private byte[] ReadPageBytes(uint pageNumber)
+    {
+        if (_walPages is not null && _walPages.TryGetValue(pageNumber, out var walData))
+            return (byte[])walData.Clone();
+
+        int pageSize = Header.PageSize;
+        long offset = (long)(pageNumber - 1) * pageSize;
+        if (offset + pageSize > _stream.Length)
+            throw new InvalidDataException($"Page {pageNumber} is beyond the end of the file and not in the WAL.");
+
+        var data = new byte[pageSize];
+        _stream.Position = offset;
+        _stream.ReadExactly(data);
+        return data;
     }
 
     /// <summary>Open a SQLite file and parse its header.</summary>
@@ -55,7 +131,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     {
         if (pageNumber < 1 || pageNumber > PageCount)
             throw new ArgumentOutOfRangeException(nameof(pageNumber));
-        return SqlitePage.Read(_stream, pageNumber, Header.PageSize, Header.TextEncoding, Header.ReservedBytesPerPage);
+        return SqlitePage.FromBytes(pageNumber, Header.PageSize, ReadPageBytes(pageNumber), Header.TextEncoding, Header.ReservedBytesPerPage);
     }
 
     /// <summary>Enumerate all pages in page-number order.</summary>
@@ -73,7 +149,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     {
         if (pageNumber < 1 || pageNumber > PageCount)
             throw new ArgumentOutOfRangeException(nameof(pageNumber));
-        return SqlitePage.ReadOverflowPage(_stream, pageNumber, Header.PageSize);
+        return new OverflowPage(pageNumber, Header.PageSize, ReadPageBytes(pageNumber));
     }
 
     /// <summary>
@@ -505,9 +581,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     private IEnumerable<FreelistTrunkPage> GetFreelistPageNumbersFromTrunkPage(uint pageNum, int pageSize)
     {
         List<FreelistTrunkPage> retVal = new();
-        var data = new byte[pageSize];
-        _stream.Position = (long)(pageNum - 1) * pageSize;
-        _stream.ReadExactly(data);
+        var data = ReadPageBytes(pageNum);
         FreelistTrunkPage trunk = new FreelistTrunkPage(pageNum, pageSize, data);
         retVal.Add(trunk);
         if (trunk.NextTrunkPageNumber != 0)
