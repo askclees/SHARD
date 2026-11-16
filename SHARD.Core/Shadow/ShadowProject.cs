@@ -54,7 +54,8 @@ public sealed class ShadowProject : IDisposable
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) CreateTemporary(
         string evidenceFilePath, SqliteForensicDatabase database,
         RecoveryFlags? flags = null, Action<string>? reportProgress = null,
-        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null)
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null,
+        SqliteForensicDatabase? layoutDatabase = null)
     {
         // GetTempFileName creates a zero-byte file; rename with .db so SQLite is happy.
         string tempBase = Path.GetTempFileName();
@@ -69,7 +70,7 @@ public sealed class ShadowProject : IDisposable
             EvidenceHashes   = evidenceHashes?.ToList(),
         };
 
-        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, flags, reportProgress, evidenceHashes);
+        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, flags, reportProgress, evidenceHashes, layoutDatabase);
         return (new ShadowProject(null, manifest, tempPath, tempPath), warnings);
     }
 
@@ -82,7 +83,8 @@ public sealed class ShadowProject : IDisposable
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) Create(
         string evidenceFilePath, SqliteForensicDatabase database, string projectFolder,
         RecoveryFlags? flags = null, Action<string>? reportProgress = null,
-        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null)
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null,
+        SqliteForensicDatabase? layoutDatabase = null)
     {
         Directory.CreateDirectory(projectFolder);
 
@@ -98,7 +100,7 @@ public sealed class ShadowProject : IDisposable
         if (File.Exists(shadowDbPath))
             throw new InvalidOperationException($"A shadow database already exists at '{shadowDbPath}'.");
 
-        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, flags, reportProgress, evidenceHashes);
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, flags, reportProgress, evidenceHashes, layoutDatabase);
 
         File.WriteAllText(
             Path.Combine(projectFolder, "project.json"),
@@ -232,6 +234,30 @@ public sealed class ShadowProject : IDisposable
         using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
         return ShadowDatabaseBuilder.InsertWalDeletedRows(connection, database, walFile);
+    }
+
+    /// <summary>True when this project's live tables were built from the database with its WAL's
+    /// committed frames applied, so they already hold what SQLite returns.</summary>
+    public bool LiveTablesIncludeWal
+    {
+        get
+        {
+            using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath};Mode=ReadOnly");
+            connection.Open();
+            return ShadowDatabaseBuilder.ReadInfo(connection, ShadowDatabaseBuilder.InfoKeyLiveTablesSource)
+                   == ShadowDatabaseBuilder.LiveSourceCommittedWal;
+        }
+    }
+
+    /// <summary>
+    /// Recovers rows the WAL's committed frames deleted or changed from the database file's own
+    /// version of those pages — see <see cref="ShadowDatabaseBuilder.InsertSupersededFilePageRows"/>.
+    /// </summary>
+    public int RecoverSupersededFileRows(SqliteForensicDatabase committed, SqliteForensicDatabase file)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        return ShadowDatabaseBuilder.InsertSupersededFilePageRows(connection, committed, file);
     }
 
     /// <summary>

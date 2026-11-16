@@ -31,6 +31,11 @@ public static class ShadowDatabaseBuilder
     public const string RecoveryMethodManual             = "manual";
     public const string RecoveryMethodWalFrame           = "wal_frame";
     public const string RecoveryMethodWalPreviousVersion = "wal_previous_version";
+    /// <summary>A record live in the database file whose page a committed WAL transaction rewrote
+    /// without it: deleted by the WAL, though not yet checkpointed into the file.</summary>
+    public const string RecoveryMethodDbFileDeletedInWal     = "db_file_deleted_in_wal";
+    /// <summary>The database file's version of a record a committed WAL transaction has since changed.</summary>
+    public const string RecoveryMethodDbFilePreviousVersion  = "db_file_previous_version";
     /// <summary>A record found in a rollback-journal page image that no longer exists in the database.</summary>
     public const string RecoveryMethodJournalPage            = "journal_page";
     /// <summary>A rollback-journal page image's version of a record whose live payload has since changed.</summary>
@@ -47,6 +52,14 @@ public static class ShadowDatabaseBuilder
     private const string PagesTableName    = InternalTablePrefix + "pages";
     /// <summary>Hashes of the evidence files this shadow database was built from, one row per file.</summary>
     public  const string EvidenceTableName = InternalTablePrefix + "evidence";
+    /// <summary>Key/value facts about how this shadow database was built.</summary>
+    public  const string InfoTableName     = InternalTablePrefix + "info";
+
+    /// <summary><see cref="InfoTableName"/> key: what the live tables were built from — one of
+    /// <see cref="LiveSourceDatabaseFile"/> or <see cref="LiveSourceCommittedWal"/>.</summary>
+    public const string InfoKeyLiveTablesSource = "live_tables_source";
+    public const string LiveSourceDatabaseFile  = "database_file";
+    public const string LiveSourceCommittedWal  = "database_file_with_committed_wal";
 
     /// <summary>
     /// Builds the shadow database. Returns a list of warning strings for any user tables that
@@ -58,12 +71,19 @@ public static class ShadowDatabaseBuilder
     /// everything on); live rows are always inserted regardless. <paramref name="evidenceHashes"/>,
     /// if given, is written to <see cref="EvidenceTableName"/> so the output carries a record of
     /// exactly which files it was built from.
+    /// <paramref name="layoutDatabase"/>, if given, is where the page layout (<c>_shard_pages</c>:
+    /// each page's type and owning table) is taken from instead of <paramref name="database"/>.
+    /// Used when <paramref name="database"/> is the committed state with a WAL applied: rows and
+    /// schema come from that, while the page layout still describes the database file itself,
+    /// which is what page-level views browse.
     /// </summary>
     public static IReadOnlyList<string> Create(
         string shadowDbPath, SqliteForensicDatabase database,
         RecoveryFlags? flags = null, Action<string>? reportProgress = null,
-        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null)
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null,
+        SqliteForensicDatabase? layoutDatabase = null)
     {
+        var layout = layoutDatabase ?? database;
         flags ??= RecoveryFlags.Default;
         var warnings = new List<string>();
 
@@ -73,8 +93,8 @@ public static class ShadowDatabaseBuilder
         CreateOverflowTable(connection);
         CreatePagesTable(connection);
         reportProgress?.Invoke("Building shadow database — indexing pages…");
-        PopulatePagesBaseline(connection, database);
-        TagTablePages(connection, "sqlite_master", database.GetTreePageNumbers(1));
+        PopulatePagesBaseline(connection, layout);
+        TagLayoutPages(connection, layout);
 
         var masterRows = database.ReadSqliteMaster().ToList();
         int totalTables = masterRows.Count(r =>
@@ -91,11 +111,7 @@ public static class ShadowDatabaseBuilder
                 warnings.Add($"Skipped table '{row.Name}': missing SQL or root page in sqlite_master.");
                 continue;
             }
-            if (row.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase))
-            {
-                TagTablePages(connection, row.Name, database.GetTreePageNumbers(row.RootPage.Value));
-                continue;
-            }
+            if (row.Name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase)) continue;
             if (row.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase)) continue;
 
             tableIndex++;
@@ -130,7 +146,6 @@ public static class ShadowDatabaseBuilder
 
                 InsertRows(connection, tableSchema, database.ReadTableRows(row.RootPage.Value));
                 InsertDeletedRows(connection, tableSchema, row.RootPage.Value, database, flags);
-                TagTablePages(connection, tableSchema.TableName, database.GetTreePageNumbers(row.RootPage.Value));
             }
             catch (Exception ex)
             {
@@ -142,20 +157,59 @@ public static class ShadowDatabaseBuilder
             }
         }
 
-        foreach (var row in masterRows)
-        {
-            if (row.ObjectType != SqliteMasterObjectType.Index) continue;
-            if (row.RootPage is null) continue;
+        TagFreelistPages(connection, layout);
 
-            TagTablePages(connection, row.Name, database.GetTreePageNumbers(row.RootPage.Value));
-        }
-
-        TagFreelistPages(connection, database);
+        WriteInfo(connection, InfoKeyLiveTablesSource,
+            database.IncludesWal ? LiveSourceCommittedWal : LiveSourceDatabaseFile);
 
         if (evidenceHashes is not null)
             WriteEvidenceHashes(connection, evidenceHashes);
 
         return warnings;
+    }
+
+    /// <summary>Sets <paramref name="key"/> in <see cref="InfoTableName"/>, creating the table if needed.</summary>
+    public static void WriteInfo(SqliteConnection connection, string key, string value)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            CREATE TABLE IF NOT EXISTS {QuoteIdentifier(InfoTableName)} (key TEXT PRIMARY KEY, value TEXT);
+            INSERT OR REPLACE INTO {QuoteIdentifier(InfoTableName)} (key, value) VALUES (@key, @value);
+            """;
+        command.Parameters.AddWithValue("@key", key);
+        command.Parameters.AddWithValue("@value", value);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>The value of <paramref name="key"/> in <see cref="InfoTableName"/>, or null if it
+    /// (or the table — a shadow built before it existed) isn't there.</summary>
+    public static string? ReadInfo(SqliteConnection connection, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT value FROM {QuoteIdentifier(InfoTableName)} WHERE key = @key";
+        command.Parameters.AddWithValue("@key", key);
+        try { return command.ExecuteScalar() as string; }
+        catch (SqliteException) { return null; }
+    }
+
+    /// <summary>
+    /// Tags every page of <paramref name="layout"/>'s B-trees with its owning object: sqlite_master,
+    /// then each table (including sqlite_* internal tables), then each index.
+    /// </summary>
+    private static void TagLayoutPages(SqliteConnection connection, SqliteForensicDatabase layout)
+    {
+        TagTablePages(connection, "sqlite_master", layout.GetTreePageNumbers(1));
+        var masterRows = layout.ReadSqliteMaster().ToList();
+        foreach (var type in new[] { SqliteMasterObjectType.Table, SqliteMasterObjectType.Index })
+        {
+            foreach (var row in masterRows)
+            {
+                if (row.ObjectType != type || row.RootPage is null || row.Name is null) continue;
+                if (type == SqliteMasterObjectType.Table && row.Sql is not null &&
+                    row.Sql.Contains("VIRTUAL TABLE", StringComparison.OrdinalIgnoreCase)) continue;
+                TagTablePages(connection, row.Name, layout.GetTreePageNumbers(row.RootPage.Value));
+            }
+        }
     }
 
     /// <summary>
@@ -841,6 +895,31 @@ public static class ShadowDatabaseBuilder
 
         return InsertHistoricalPageRows(connection, database, pageImages,
             RecoveryMethodWalFrame, RecoveryMethodWalPreviousVersion, committedPages);
+    }
+
+    /// <summary>
+    /// Recovers records from the database file's own version of every page the WAL's committed
+    /// frames replace. <paramref name="committed"/> is the database as SQLite sees it (the file with
+    /// the WAL applied; see <see cref="SqliteForensicDatabase.OpenCommittedState"/>), and is what
+    /// the shadow's live tables were built from, so a row live in the file but no longer live
+    /// there — deleted by a committed WAL transaction not yet checkpointed — would otherwise be
+    /// lost. Such rows are inserted as <see cref="RecoveryMethodDbFileDeletedInWal"/>, and the
+    /// file's version of a row the WAL changed as <see cref="RecoveryMethodDbFilePreviousVersion"/>.
+    /// Rows are compared per table by rowid, so a row that merely moved to another page isn't
+    /// reported. Returns the number of records inserted.
+    /// </summary>
+    public static int InsertSupersededFilePageRows(
+        SqliteConnection connection,
+        SqliteForensicDatabase committed,
+        SqliteForensicDatabase file)
+    {
+        var pageImages = committed.WalPageNumbers
+            .Where(p => p >= 1 && p <= file.PageCount)
+            .OrderBy(p => p)
+            .Select(p => (p, file.ReadPage(p)))
+            .ToList();
+        return InsertHistoricalPageRows(connection, committed, pageImages,
+            RecoveryMethodDbFileDeletedInWal, RecoveryMethodDbFilePreviousVersion);
     }
 
     /// <summary>

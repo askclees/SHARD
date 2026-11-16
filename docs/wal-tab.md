@@ -40,7 +40,7 @@ Lists every frame in the WAL. Each entry shows:
   - **IGNORED**: after the point where SQLite stopped reading.
   - **OLD**: from an earlier generation of the WAL (before it was last reset after a checkpoint). This is normal history.
 
-Only committed frames are treated as live data. Records in the other frames are recovered into `_shard_recovered_<table>` with `_recovery_method` = `wal_frame` when they aren't live.
+Only committed frames are treated as live data: the shadow database's live tables are the database file with each page's latest committed frame applied, which is what SQLite returns. Records in the other frames are recovered into `_shard_recovered_<table>` with `_recovery_method` = `wal_frame` when they aren't live. Rows the committed frames deleted or changed are recovered from the database file's own version of the page (`db_file_deleted_in_wal`, `db_file_previous_version`).
 
 Select a frame to view its contents on the right.
 

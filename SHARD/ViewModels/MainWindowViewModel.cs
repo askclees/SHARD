@@ -913,8 +913,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             {
                 Report("Building shadow database…");
                 var (project, warnings) = projectFolder is null
-                    ? ShadowProject.CreateTemporary(_currentFilePath!, Database, reportProgress: msg => Report(msg), evidenceHashes: _session.Hashes)
-                    : ShadowProject.Create(_currentFilePath!, Database, projectFolder, reportProgress: msg => Report(msg), evidenceHashes: _session.Hashes);
+                    ? ShadowProject.CreateTemporary(_currentFilePath!, _session.ShadowSource(), reportProgress: msg => Report(msg),
+                                                    evidenceHashes: _session.Hashes, layoutDatabase: Database)
+                    : ShadowProject.Create(_currentFilePath!, _session.ShadowSource(), projectFolder, reportProgress: msg => Report(msg),
+                                           evidenceHashes: _session.Hashes, layoutDatabase: Database);
                 Project = project;
 
                 Report("Recovering deleted records…");
