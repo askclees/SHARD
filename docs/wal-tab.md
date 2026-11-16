@@ -44,9 +44,19 @@ Compares the selected frame's page against a baseline:
 - If an earlier frame in the WAL covers the same page number, the comparison is against that frame.
 - Otherwise, the comparison is against the corresponding page in the main database.
 
-Changes are grouped into **Added records**, **Removed records**, and **Updated records**. Updated records show a field-by-field diff.
+For table leaf pages, changes are grouped into **Added records**, **Removed records**, and **Updated records** (with a field-by-field diff). For table interior pages, changes are grouped into **Added/removed child pointers** and **key range changes** (a child pointer whose divider key changed), plus a note if the page's rightmost pointer changed.
 
-If the page type does not support comparison (e.g. overflow or interior pages), a placeholder message is shown.
+If the page type does not support comparison (index leaf/interior, overflow, or freelist pages), a placeholder message is shown.
+
+#### Show whole transaction
+
+By default the Changes tab shows only the selected frame's own page. Checking **Show whole
+transaction** instead shows every page touched between the previous COMMIT frame (exclusive)
+and the selected frame's own transaction's COMMIT frame (inclusive) — one expandable section
+per page, each showing the same Added/Removed/Updated breakdown. This gives a single view of
+everything one transaction changed, rather than clicking through its frames one page at a time.
+Each page's baseline is the state immediately before the transaction began, even if that page
+happens to have been written more than once within the same transaction.
 
 ## Hex view (right panel)
 

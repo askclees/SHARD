@@ -13,6 +13,144 @@
         WindowState="Maximized"
         DragDrop.AllowDrop="True">
 
+    <Window.Resources>
+        <DataTemplate x:Key="InteriorComparisonInfoRowTemplate" x:DataType="vm:InfoRow">
+            <Grid ColumnDefinitions="150,*" Margin="0,2">
+                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" FontFamily="Courier New" TextWrapping="Wrap" />
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <!-- Type-matched templates (no x:Key — Avalonia selects between them by the bound object's
+         runtime type; this must be DataTemplates, not Resources, for that automatic selection
+         to happen) for the WAL Changes tab's single-frame view and its whole-transaction view
+         (one instance per page touched by the transaction). Adding comparison support for
+         another page type (see issue #23) just means adding another *ComparisonViewModel
+         implementing IPageComparisonViewModel and a matching template here — no changes
+         needed at either call site. -->
+    <Window.DataTemplates>
+        <DataTemplate x:DataType="vm:PageComparisonViewModel">
+            <StackPanel Spacing="4">
+                <TextBlock Text="{Binding ComparedAgainst}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Opacity="0.6" />
+                <TextBlock Text="No changes detected"
+                           IsVisible="{Binding HasAnyChanges,
+                                       Converter={x:Static conv:BoolConverters.Not}}"
+                           FontSize="12"
+                           Opacity="0.45"
+                           Margin="4,4,0,0" />
+                <Expander Header="{Binding AddedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasAdded}">
+                    <ItemsControl ItemsSource="{Binding AddedRows}"
+                                  Margin="8,4,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:InfoRow">
+                                <TextBlock Text="{Binding Value}"
+                                           FontSize="12"
+                                           FontFamily="Courier New"
+                                           Margin="0,2" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+                <Expander Header="{Binding RemovedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasRemoved}">
+                    <ItemsControl ItemsSource="{Binding RemovedRows}"
+                                  Margin="8,4,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:InfoRow">
+                                <TextBlock Text="{Binding Value}"
+                                           FontSize="12"
+                                           FontFamily="Courier New"
+                                           Margin="0,2" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+                <Expander Header="{Binding UpdatedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasUpdated}">
+                    <ItemsControl ItemsSource="{Binding UpdatedSections}"
+                                  Margin="4,4,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:UpdatedRecordSectionViewModel">
+                                <Expander Header="{Binding Header}"
+                                          IsExpanded="False"
+                                          Margin="0,2,0,0">
+                                    <ItemsControl ItemsSource="{Binding Changes}" Margin="8,4,0,4">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:FieldChangeViewModel">
+                                                <StackPanel Margin="0,2,0,6" Spacing="2">
+                                                    <TextBlock Text="{Binding Column}" FontSize="12" FontWeight="SemiBold" />
+                                                    <Grid ColumnDefinitions="56,*" RowDefinitions="Auto,Auto" Margin="8,0,0,0">
+                                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Before" FontSize="11" Opacity="0.55" />
+                                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Before}"
+                                                                   ToolTip.Tip="{Binding BeforeFull}"
+                                                                   FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
+                                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="After" FontSize="11" Opacity="0.55" />
+                                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding After}"
+                                                                   ToolTip.Tip="{Binding AfterFull}"
+                                                                   FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
+                                                    </Grid>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Expander>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:DataType="vm:InteriorPageComparisonViewModel">
+            <StackPanel Spacing="4">
+                <TextBlock Text="{Binding ComparedAgainst}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Opacity="0.6" />
+                <TextBlock Text="No changes detected"
+                           IsVisible="{Binding HasAnyChanges,
+                                       Converter={x:Static conv:BoolConverters.Not}}"
+                           FontSize="12"
+                           Opacity="0.45"
+                           Margin="4,4,0,0" />
+                <Expander Header="{Binding AddedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasAdded}">
+                    <ItemsControl ItemsSource="{Binding AddedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <Expander Header="{Binding RemovedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasRemoved}">
+                    <ItemsControl ItemsSource="{Binding RemovedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <Expander Header="{Binding UpdatedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasUpdated}">
+                    <ItemsControl ItemsSource="{Binding UpdatedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <TextBlock Text="{Binding RightPointerChangeText, StringFormat='Rightmost pointer: {0}'}"
+                           IsVisible="{Binding HasRightPointerChange}"
+                           FontSize="12"
+                           FontFamily="Courier New"
+                           Margin="4,6,0,0" />
+            </StackPanel>
+        </DataTemplate>
+    </Window.DataTemplates>
+
     <Panel>
     <DockPanel>
 
@@ -1680,95 +1818,65 @@
 
                                             <!-- Tab: Changes -->
                                             <TabItem Header="Changes">
-                                                <Grid>
-                                                    <TextBlock IsVisible="{Binding WalTab.HasComparison,
-                                                                           Converter={x:Static conv:BoolConverters.Not}}"
-                                                               Text="No comparison available for this page type"
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center"
-                                                               Opacity="0.35"
-                                                               FontSize="13" />
-                                                    <ScrollViewer IsVisible="{Binding WalTab.HasComparison}"
-                                                                  VerticalScrollBarVisibility="Auto"
-                                                                  HorizontalScrollBarVisibility="Disabled">
-                                                        <StackPanel Margin="14,10" Spacing="4">
-                                                            <TextBlock Text="{Binding WalTab.SelectedFrameComparison.ComparedAgainst}"
-                                                                       FontSize="11"
-                                                                       FontWeight="SemiBold"
-                                                                       Opacity="0.6" />
-                                                            <TextBlock Text="No changes detected"
-                                                                       IsVisible="{Binding WalTab.SelectedFrameComparison.HasAnyChanges,
-                                                                                   Converter={x:Static conv:BoolConverters.Not}}"
-                                                                       FontSize="12"
-                                                                       Opacity="0.45"
-                                                                       Margin="4,4,0,0" />
-                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.AddedHeader}"
-                                                                      IsExpanded="True"
-                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasAdded}">
-                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.AddedRows}"
-                                                                              Margin="8,4,0,4">
+                                                <DockPanel>
+                                                    <CheckBox DockPanel.Dock="Top"
+                                                              Content="Show whole transaction"
+                                                              IsChecked="{Binding WalTab.ShowWholeTransaction}"
+                                                              IsVisible="{Binding WalTab.SelectedFrame,
+                                                                          Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                              FontSize="12"
+                                                              Margin="14,8,14,0" />
+                                                    <Grid>
+                                                        <TextBlock IsVisible="{Binding WalTab.ShowNoComparisonPlaceholder}"
+                                                                   Text="No comparison available for this page type"
+                                                                   HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"
+                                                                   Opacity="0.35"
+                                                                   FontSize="13" />
+
+                                                        <!-- Single-frame view: this page's changes vs. its previous WAL frame or the database page. -->
+                                                        <ScrollViewer IsVisible="{Binding WalTab.ShowSingleFrameView}"
+                                                                      VerticalScrollBarVisibility="Auto"
+                                                                      HorizontalScrollBarVisibility="Disabled">
+                                                            <ContentControl Margin="14,10"
+                                                                            Content="{Binding WalTab.SelectedFrameComparison}" />
+                                                        </ScrollViewer>
+
+                                                        <!-- Whole-transaction view: every page touched between the previous commit and this one. -->
+                                                        <ScrollViewer IsVisible="{Binding WalTab.ShowWholeTransaction}"
+                                                                      VerticalScrollBarVisibility="Auto"
+                                                                      HorizontalScrollBarVisibility="Disabled">
+                                                            <StackPanel Margin="14,10" Spacing="4">
+                                                                <TextBlock Text="No changes detected in this transaction"
+                                                                           IsVisible="{Binding WalTab.HasAnyTransactionChanges,
+                                                                                       Converter={x:Static conv:BoolConverters.Not}}"
+                                                                           FontSize="12"
+                                                                           Opacity="0.45"
+                                                                           Margin="4,4,0,0" />
+                                                                <ItemsControl ItemsSource="{Binding WalTab.TransactionPages}">
                                                                     <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:InfoRow">
-                                                                            <TextBlock Text="{Binding Value}"
-                                                                                       FontSize="12"
-                                                                                       FontFamily="Courier New"
-                                                                                       Margin="0,2" />
-                                                                        </DataTemplate>
-                                                                    </ItemsControl.ItemTemplate>
-                                                                </ItemsControl>
-                                                            </Expander>
-                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.RemovedHeader}"
-                                                                      IsExpanded="True"
-                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasRemoved}">
-                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.RemovedRows}"
-                                                                              Margin="8,4,0,4">
-                                                                    <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:InfoRow">
-                                                                            <TextBlock Text="{Binding Value}"
-                                                                                       FontSize="12"
-                                                                                       FontFamily="Courier New"
-                                                                                       Margin="0,2" />
-                                                                        </DataTemplate>
-                                                                    </ItemsControl.ItemTemplate>
-                                                                </ItemsControl>
-                                                            </Expander>
-                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.UpdatedHeader}"
-                                                                      IsExpanded="True"
-                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasUpdated}">
-                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.UpdatedSections}"
-                                                                              Margin="4,4,0,4">
-                                                                    <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:UpdatedRecordSectionViewModel">
+                                                                        <DataTemplate x:DataType="vm:WalTransactionPageEntryViewModel">
                                                                             <Expander Header="{Binding Header}"
-                                                                                      IsExpanded="False"
-                                                                                      Margin="0,2,0,0">
-                                                                                <ItemsControl ItemsSource="{Binding Changes}" Margin="8,4,0,4">
-                                                                                    <ItemsControl.ItemTemplate>
-                                                                                        <DataTemplate x:DataType="vm:FieldChangeViewModel">
-                                                                                            <StackPanel Margin="0,2,0,6" Spacing="2">
-                                                                                                <TextBlock Text="{Binding Column}" FontSize="12" FontWeight="SemiBold" />
-                                                                                                <Grid ColumnDefinitions="56,*" RowDefinitions="Auto,Auto" Margin="8,0,0,0">
-                                                                                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Before" FontSize="11" Opacity="0.55" />
-                                                                                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Before}"
-                                                                                                               ToolTip.Tip="{Binding BeforeFull}"
-                                                                                                               FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
-                                                                                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="After" FontSize="11" Opacity="0.55" />
-                                                                                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding After}"
-                                                                                                               ToolTip.Tip="{Binding AfterFull}"
-                                                                                                               FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
-                                                                                                </Grid>
-                                                                                            </StackPanel>
-                                                                                        </DataTemplate>
-                                                                                    </ItemsControl.ItemTemplate>
-                                                                                </ItemsControl>
+                                                                                      IsExpanded="True"
+                                                                                      Margin="0,4">
+                                                                                <StackPanel>
+                                                                                    <TextBlock Text="No comparison available for this page type"
+                                                                                               IsVisible="{Binding HasComparison,
+                                                                                                           Converter={x:Static conv:BoolConverters.Not}}"
+                                                                                               Opacity="0.35"
+                                                                                               FontSize="12"
+                                                                                               Margin="8,4" />
+                                                                                    <ContentControl Margin="8,4"
+                                                                                                    Content="{Binding Comparison}" />
+                                                                                </StackPanel>
                                                                             </Expander>
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>
                                                                 </ItemsControl>
-                                                            </Expander>
-                                                        </StackPanel>
-                                                    </ScrollViewer>
-                                                </Grid>
+                                                            </StackPanel>
+                                                        </ScrollViewer>
+                                                    </Grid>
+                                                </DockPanel>
                                             </TabItem>
 
                                         </TabControl>

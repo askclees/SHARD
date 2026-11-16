@@ -53,7 +53,7 @@ public sealed class UpdatedRecordSectionViewModel
     }
 }
 
-public sealed class PageComparisonViewModel
+public sealed class PageComparisonViewModel : IPageComparisonViewModel
 {
     public string ComparedAgainst { get; }
     public bool HasAnyChanges { get; }
