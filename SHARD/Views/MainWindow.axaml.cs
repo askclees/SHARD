@@ -498,7 +498,7 @@ public partial class MainWindow : Window
 
     private static void OnDragOver(object? sender, DragEventArgs e)
     {
-        e.DragEffects = e.Data.Contains(DataFormats.Files)
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
         e.Handled = true;
@@ -506,7 +506,7 @@ public partial class MainWindow : Window
 
     private async void OnDrop(object? sender, DragEventArgs e)
     {
-        var file = e.Data.GetFiles()?.FirstOrDefault();
+        var file = e.DataTransfer.TryGetFile();
         if (file is not null)
             await OpenDatabaseFileAsync(file.Path.LocalPath);
         e.Handled = true;
