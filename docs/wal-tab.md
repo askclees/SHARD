@@ -21,6 +21,9 @@ A collapsible section at the top of the tab shows the parsed WAL file header:
 | Salt-1 / Salt-2 | Salts used for checksum verification |
 | Checksum-1 / Checksum-2 | Cumulative checksums for the WAL header |
 | Frame Count | Total number of frames in the file |
+| Header Checksum | Whether the header's checksum is correct. If it isn't, SQLite ignores every frame. |
+| Committed Frames | How many frames SQLite actually reads: those up to the last commit frame before the first invalid frame. |
+| SQLite Stops | Shown when SQLite would stop reading before the last frame, and why (a bad checksum, page number 0, or frames from an earlier generation of the WAL). |
 | Trailing Bytes | Shown only when the file ends partway through a frame (typically a copy taken while the frame was being written). SQLite ignores these bytes, and so does SHARD: every whole frame before them is still read and used for recovery. The status bar and the recovery warnings note how many bytes were ignored. |
 
 ## Frame list (left panel)
@@ -30,6 +33,14 @@ Lists every frame in the WAL. Each entry shows:
 - Page type (where parseable).
 - The name of the table or index that owns the page (e.g. `messages`, `sqlite_master`). Pages not reachable from any known B-tree root show no label.
 - A **COMMIT** label on frames that carry a non-zero database size in their header, indicating a transaction boundary.
+- A status label on every frame SQLite would not read, with the reason in its tooltip. These frames are dimmed:
+  - **UNCOMMITTED**: valid, but no commit frame follows it, so its transaction never committed.
+  - **BAD CHECKSUM**: its checksum doesn't continue the chain from the previous frame. SQLite stops reading the WAL here.
+  - **BAD PAGE**: page number 0. SQLite stops reading here.
+  - **IGNORED**: after the point where SQLite stopped reading.
+  - **OLD**: from an earlier generation of the WAL (before it was last reset after a checkpoint). This is normal history.
+
+Only committed frames are treated as live data. Records in the other frames are recovered into `_shard_recovered_<table>` with `_recovery_method` = `wal_frame` when they aren't live.
 
 Select a frame to view its contents on the right.
 

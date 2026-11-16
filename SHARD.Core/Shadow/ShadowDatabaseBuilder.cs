@@ -824,14 +824,23 @@ public static class ShadowDatabaseBuilder
         SqliteForensicDatabase database,
         WalFile wal)
     {
-        // Skip current-generation frames — those are live data handled by SyncWalFramesToShadow,
-        // not historical deleted data. Only salt-mismatched (pre-checkpoint) frames hold
-        // records that may have been deleted or overwritten.
+        // Skip committed frames — those are live data handled by SyncWalFramesToShadow. Every
+        // frame SQLite would ignore (old generation, uncommitted, bad checksum, or after the point
+        // SQLite stops reading) holds history whose records may have been deleted or overwritten.
         var pageImages = wal.Frames
-            .Where(f => !f.Header.IsCurrent)
+            .Where(f => f.Status != WalFrameStatus.Committed)
             .Select(f => (f.Header.PageNumber, f.Page));
+
+        // Rows on each page's latest committed frame are live as far as SQLite is concerned, even
+        // though they aren't in the database file yet — without this, an ignored frame that also
+        // carries such a row (every page image carries all of its rows) would report it as deleted.
+        var committedPages = wal.CommittedFrames
+            .GroupBy(f => f.Header.PageNumber)
+            .Select(g => g.Last())
+            .Select(f => (f.Header.PageNumber, f.Page));
+
         return InsertHistoricalPageRows(connection, database, pageImages,
-            RecoveryMethodWalFrame, RecoveryMethodWalPreviousVersion);
+            RecoveryMethodWalFrame, RecoveryMethodWalPreviousVersion, committedPages);
     }
 
     /// <summary>
@@ -872,7 +881,8 @@ public static class ShadowDatabaseBuilder
         SqliteForensicDatabase database,
         IEnumerable<(uint PageNumber, SqlitePage Page)> pageImages,
         string deletedMethod,
-        string previousVersionMethod)
+        string previousVersionMethod,
+        IEnumerable<(uint PageNumber, SqlitePage Page)>? alsoLivePages = null)
     {
         var leafImages = pageImages
             .Where(p => p.Page is TableBTreeLeafPage)
@@ -923,6 +933,20 @@ public static class ShadowDatabaseBuilder
             }
             liveRowIds[tableName]   = ids;
             livePayloads[tableName] = payloads;
+        }
+
+        // Newer live versions of pages the database file is behind on (a WAL's committed frames):
+        // their rows count as live too, with their values taking precedence as the newer version.
+        foreach (var (pageNum, page) in alsoLivePages ?? [])
+        {
+            if (page is not TableBTreeLeafPage livePage) continue;
+            if (!pageTableMap.TryGetValue(pageNum, out var tableName)) continue;
+            if (!liveRowIds.TryGetValue(tableName, out var ids)) continue;
+            foreach (var cell in livePage.Cells)
+            {
+                ids.Add(cell.RowId.Value);
+                livePayloads[tableName][cell.RowId.Value] = cell.FieldValues;
+            }
         }
 
         // Build per-table: already-recovered rowid sets from the shadow DB, plus the subset this

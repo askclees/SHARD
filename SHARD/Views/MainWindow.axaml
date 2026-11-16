@@ -1655,7 +1655,9 @@
                                          SelectedItem="{Binding WalTab.SelectedFrame}">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate x:DataType="vm:WalFrameEntryViewModel">
-                                            <Grid ColumnDefinitions="5,36,44,Auto,*,Auto" Height="26">
+                                            <Grid ColumnDefinitions="5,36,44,Auto,*,Auto" Height="26"
+                                                  Opacity="{Binding RowOpacity}"
+                                                  ToolTip.Tip="{Binding StatusTip}">
                                                 <Border Grid.Column="0"
                                                         Background="{Binding TypeBrush}"
                                                         CornerRadius="2,0,0,2" />
@@ -1685,13 +1687,21 @@
                                                            Opacity="0.6"
                                                            Padding="8,0,0,0"
                                                            TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Grid.Column="5"
-                                                           Text="COMMIT"
-                                                           IsVisible="{Binding IsCommit}"
-                                                           VerticalAlignment="Center"
-                                                           FontSize="10"
-                                                           Opacity="0.55"
-                                                           Padding="6,0,8,0" />
+                                                <StackPanel Grid.Column="5"
+                                                            Orientation="Horizontal"
+                                                            VerticalAlignment="Center"
+                                                            Spacing="6"
+                                                            Margin="6,0,8,0">
+                                                    <TextBlock Text="COMMIT"
+                                                               IsVisible="{Binding IsCommit}"
+                                                               FontSize="10"
+                                                               Opacity="0.55" />
+                                                    <TextBlock Text="{Binding StatusLabel}"
+                                                               IsVisible="{Binding HasStatusLabel}"
+                                                               ToolTip.Tip="{Binding StatusTip}"
+                                                               FontSize="10"
+                                                               FontWeight="SemiBold" />
+                                                </StackPanel>
                                             </Grid>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>

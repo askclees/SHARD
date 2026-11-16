@@ -9,6 +9,17 @@ public class WalFrame
     public byte[] PageData { get; }
     public SqlitePage Page { get; }
 
+    /// <summary>How SQLite treats this frame; set by <see cref="WalFile"/> once every frame is read.</summary>
+    public WalFrameStatus Status { get; internal set; }
+
+    /// <summary>
+    /// Whether this frame's checksum continues the chain from the frame before it (or, for the
+    /// first frame, from the header). Null when there's nothing to check it against: an
+    /// old-generation frame whose predecessor belongs to a different generation, since the frame
+    /// it was originally chained to has been overwritten.
+    /// </summary>
+    public bool? ChecksumValid { get; internal set; }
+
     public WalFrame(ReadOnlySpan<byte> data, uint pageSize, TextEncoding encoding, int reservedBytes, 
         VerificationData checksums)
     {
