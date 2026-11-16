@@ -5,11 +5,11 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Avalonia" Version="11.3.23" />
-      <PackageReference Include="Avalonia.Controls.DataGrid" Version="11.3.13" />
-      <PackageReference Include="Avalonia.Desktop" Version="11.3.23" />
-      <PackageReference Include="Avalonia.ReactiveUI" Version="11.3.9" />
-      <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.23" />
+      <PackageReference Include="Avalonia" Version="12.1.6" />
+      <PackageReference Include="Avalonia.Controls.DataGrid" Version="12.1.2" />
+      <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
+      <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
+      <PackageReference Include="ReactiveUI.Avalonia" Version="12.1.6" />
     </ItemGroup>
 
     <PropertyGroup>

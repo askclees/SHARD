@@ -3,6 +3,7 @@
         xmlns:vm="using:SHARD.ViewModels"
         xmlns:dg="using:Avalonia.Controls"
         x:Class="SHARD.Views.QueryWindow"
+        x:DataType="vm:QueryViewModel"
         Title="Query"
         Width="900"
         Height="600"
@@ -48,7 +49,7 @@
                 <Grid ColumnDefinitions="*,Auto">
                     <TextBox Grid.Column="0"
                              Text="{Binding QueryText}"
-                             Watermark="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
+                             PlaceholderText="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
                              FontFamily="Courier New"
                              FontSize="12"
                              AcceptsReturn="False"

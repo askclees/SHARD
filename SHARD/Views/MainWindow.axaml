@@ -303,7 +303,7 @@
                                         <TextBox x:Name="HdrGoToOffsetBox"
                                                  Width="80"
                                                  FontSize="11"
-                                                 Watermark="Offset"
+                                                 PlaceholderText="Offset"
                                                  ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
                                                  KeyDown="OnHdrGoToOffsetKeyDown" />
                                         <Button Content="Go"
@@ -970,7 +970,7 @@
                                                 <TextBox x:Name="PageGoToOffsetBox"
                                                          Width="80"
                                                          FontSize="11"
-                                                         Watermark="Offset"
+                                                         PlaceholderText="Offset"
                                                          ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
                                                          KeyDown="OnPageGoToOffsetKeyDown" />
                                                 <Button Content="Go"
@@ -1187,7 +1187,7 @@
                                                     <TextBox x:Name="SchemaGoToOffsetBox"
                                                              Width="80"
                                                              FontSize="11"
-                                                             Watermark="Offset"
+                                                             PlaceholderText="Offset"
                                                              ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
                                                              KeyDown="OnSchemaGoToOffsetKeyDown" />
                                                     <Button Content="Go"
@@ -1294,7 +1294,7 @@
                                 <Grid ColumnDefinitions="*,Auto">
                                     <TextBox Grid.Column="0"
                                              Text="{Binding SearchTab.Pattern}"
-                                             Watermark="Regular expression  (e.g.  CREATE TABLE|\x00\xFF)"
+                                             PlaceholderText="Regular expression  (e.g.  CREATE TABLE|\x00\xFF)"
                                              FontFamily="Courier New"
                                              FontSize="12"
                                              KeyDown="OnSearchBoxKeyDown" />
@@ -1399,7 +1399,7 @@
                                             <TextBox x:Name="SearchGoToOffsetBox"
                                                      Width="80"
                                                      FontSize="11"
-                                                     Watermark="Offset"
+                                                     PlaceholderText="Offset"
                                                      ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
                                                      KeyDown="OnSearchGoToOffsetKeyDown" />
                                             <Button Content="Go"
@@ -1508,7 +1508,7 @@
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBox Grid.Column="0"
                                                      Text="{Binding QueryTab.QueryText}"
-                                                     Watermark="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
+                                                     PlaceholderText="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
                                                      FontFamily="Courier New"
                                                      FontSize="12"
                                                      AcceptsReturn="False"
@@ -1902,7 +1902,7 @@
                                                     <TextBox x:Name="WalGoToOffsetBox"
                                                              Width="80"
                                                              FontSize="11"
-                                                             Watermark="Offset"
+                                                             PlaceholderText="Offset"
                                                              ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
                                                              KeyDown="OnWalGoToOffsetKeyDown" />
                                                     <Button Content="Go"
@@ -2312,7 +2312,7 @@
                                                     <TextBox x:Name="JournalGoToOffsetBox"
                                                              Width="80"
                                                              FontSize="11"
-                                                             Watermark="Offset"
+                                                             PlaceholderText="Offset"
                                                              ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
                                                              KeyDown="OnJournalGoToOffsetKeyDown" />
                                                     <Button Content="Go"
