@@ -4,6 +4,9 @@ public class PageUnallocatedRegion
 {
     public int Offset { get; }
     public int Size { get;}
+    public int End => Offset + Size;
+
+    /// <summary>Non-zero bytes in the region when the page was read, before any recovery.</summary>
     public int NonZeroBytes { get; }
     public bool ContainsNonZeroBytes => NonZeroBytes > 0;
     public byte[] AreaData { get; } 

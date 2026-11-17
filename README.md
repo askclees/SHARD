@@ -42,6 +42,7 @@ dotnet run --project SHARD.Cli -- rows evidence.db users
 dotnet run --project SHARD.Cli -- deleted evidence.db users
 dotnet run --project SHARD.Cli -- carve evidence.db --mode tight
 dotnet run --project SHARD.Cli -- hash evidence.db -f text
+dotnet run --project SHARD.Cli -- residual evidence.db --carve loose -f text
 ```
 
 ### `SHARD.Core` as a library

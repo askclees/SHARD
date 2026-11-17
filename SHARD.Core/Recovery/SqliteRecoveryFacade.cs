@@ -50,6 +50,17 @@ public sealed record PageInfo(uint PageNumber, string Type, string? TableName, i
 
 public sealed record RowInfo(long RowId, uint PageNumber, int CellOffset, IReadOnlyDictionary<string, object?> Fields);
 
+/// <summary>
+/// Non-zero bytes left unexplained on one page after recovery (see <see cref="SqliteRecoveryFacade.GetPageResiduals"/>).
+/// <paramref name="Area"/> is <c>"unallocated"</c> for a table leaf page, where only the space no
+/// live row uses is counted, or <c>"page"</c> for a page carved as a whole by the orphan-page
+/// carver. <paramref name="TableName"/> is the owning table, or for an orphan page the table(s) its
+/// carved records matched (null if none).
+/// </summary>
+public sealed record PageResidualInfo(
+    uint PageNumber, string Type, string? TableName, string Area,
+    int RecoveredRecords, int NonZeroBytes, int UnexplainedNonZeroBytes);
+
 public sealed record CarvedRowInfo(string TableName, long RowId, uint PageNumber, int CellOffset, IReadOnlyDictionary<string, object?> Fields);
 
 /// <summary>
@@ -181,6 +192,56 @@ public static class SqliteRecoveryFacade
                     .Select(cell => new RowInfo(cell.RowId.Value, p.PageNumber, cell.PageOffset, FieldsFromCell(schema, cell)));
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// For each table leaf page, its unallocated space's non-zero bytes and how many of them in-tree
+    /// recovery (deleted-pointer, carving and freeblock recovery) leaves unexplained. With
+    /// <paramref name="orphanCarveMode"/>, also runs the read-only orphan-page carve (as
+    /// <see cref="CarveUnknownPages"/>) and adds each scanned page holding non-zero data, counted
+    /// over the whole page. Pages with no non-zero bytes to explain are left out. Read-only.
+    /// </summary>
+    public static IReadOnlyList<PageResidualInfo> GetPageResiduals(
+        string inputPath, CarveMode? orphanCarveMode = null, IReadOnlyList<string>? tableFilter = null)
+    {
+        using var database = SqliteForensicDatabase.Open(inputPath);
+        var results = new List<PageResidualInfo>();
+
+        foreach (var master in database.ReadSqliteMaster())
+        {
+            if (master.ObjectType != SqliteMasterObjectType.Table || master.RootPage is not > 0) continue; // 0: virtual table
+            var schema = database.GetTableSchema(master.Name);
+            if (schema is null) continue;
+            var structure = RecordStructure.FromSchema(schema);
+
+            foreach (uint pageNumber in database.GetTreePageNumbers(master.RootPage.Value))
+            {
+                if (database.ReadPage(pageNumber) is not TableBTreeLeafPage page) continue;
+                page.CarveDeletedCells(structure);
+                page.CarveFreeblockCells(structure);
+                var count = page.UnallocatedResidual();
+                if (count.NonZeroBytes == 0) continue;
+                int recovered = page.DeletedCells.Count + page.CarvedCells.Count + page.FreeblockCells.Count;
+                results.Add(new PageResidualInfo(pageNumber, page.PageType.ToString(), master.Name, "unallocated",
+                    recovered, count.NonZeroBytes, count.UnexplainedNonZeroBytes));
+            }
+        }
+
+        if (orphanCarveMode is { } mode)
+        {
+            var candidates = OrphanPageCarver.BuildCandidates(database, mode, tableFilter);
+            var carved = OrphanPageCarver.Carve(database, candidates, out _);
+            var tablesByPage = carved.GroupBy(r => r.PageNumber).ToDictionary(
+                g => g.Key,
+                g => string.Join(", ", g.Select(r => r.Schema.TableName).Distinct(StringComparer.OrdinalIgnoreCase)));
+            foreach (var residual in OrphanPageCarver.Residuals(database, carved))
+                results.Add(new PageResidualInfo(residual.PageNumber,
+                    residual.PageType.ToString(),
+                    tablesByPage.GetValueOrDefault(residual.PageNumber), "page",
+                    residual.CarvedRecords, residual.Count.NonZeroBytes, residual.Count.UnexplainedNonZeroBytes));
+        }
+
+        return results.OrderBy(r => r.PageNumber).ToList();
     }
 
     /// <summary>

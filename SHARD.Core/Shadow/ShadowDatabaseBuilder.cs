@@ -20,8 +20,8 @@ namespace SHARD.Core.Shadow;
 /// </summary>
 public static class ShadowDatabaseBuilder
 {
-    private const string PageNumberColumn    = "_page_number";
-    private const string CellOffsetColumn   = "_cell_offset";
+    internal const string PageNumberColumn    = "_page_number";
+    internal const string CellOffsetColumn   = "_cell_offset";
     private const string OverflowPageColumn = "_overflow_page";
     public  const string RecoveryMethodColumn = "_recovery_method";
     /// <summary>Recovered tables only: the 1-based WAL frame a recovered record was read from, or

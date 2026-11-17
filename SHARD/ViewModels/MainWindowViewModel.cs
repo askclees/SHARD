@@ -5,6 +5,7 @@ using Avalonia.Media;
 using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
+using SHARD.Core.Analysis;
 using SHARD.Core.Enums;
 using SHARD.Core.Integrity;
 using SHARD.Core.Journal;
@@ -97,6 +98,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         set { this.RaiseAndSetIfChanged(ref _filterMinNonZero, value); if (_filterMinNonZeroEnabled) RebuildFilteredPages(); }
     }
 
+    private bool _filterUnexplainedOnly;
+    /// <summary>
+    /// Makes the unallocated filters count only the non-zero bytes recovery leaves unexplained,
+    /// and count each page no B-tree uses as one region covering the whole page. Needs recovery run
+    /// on every page, so the counts are taken the first time it's on and kept until the page list
+    /// is rebuilt (see <see cref="EnsureUnexplainedCounts"/>).
+    /// </summary>
+    public bool FilterUnexplainedOnly
+    {
+        get => _filterUnexplainedOnly;
+        set { this.RaiseAndSetIfChanged(ref _filterUnexplainedOnly, value); RebuildFilteredPages(); }
+    }
+
+    private bool UnexplainedFilterActive => FilterMinNonZeroEnabled && FilterUnexplainedOnly;
+
     private bool _filterHasDeletedPointers;
     public bool FilterHasDeletedPointers
     {
@@ -148,6 +164,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         bool deletedActive          = FilterHasDeletedPointers;
         bool deletedRecordsActive   = FilterHasDeletedRecords;
         bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
+        bool unexplained        = anyUnallocActive && UnexplainedFilterActive;
+        if (unexplained) EnsureUnexplainedCounts();
 
         foreach (var page in Pages)
         {
@@ -155,7 +173,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 continue;
             if (hasTableFilter && page.TableName != _filterTableName)
                 continue;
-            if (anyUnallocActive && !page.UnallocatedRegions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
+            var regions = unexplained ? page.UnexplainedRegions ?? page.UnallocatedRegions : page.UnallocatedRegions;
+            if (anyUnallocActive && !regions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
                 continue;
             if (deletedActive && !page.HasDeletedPointers)
                 continue;
@@ -204,7 +223,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         foreach (var section in SelectedPageDetail.UnallocatedRegionSections)
         {
-            if (!anyActive || RegionMatchesFilter(section.Size, section.NonZeroBytes))
+            int nonZero = UnexplainedFilterActive ? section.UnexplainedNonZeroBytes : section.NonZeroBytes;
+            if (!anyActive || RegionMatchesFilter(section.Size, nonZero))
                 FilteredUnallocatedSections.Add(section);
         }
 
@@ -234,6 +254,153 @@ public sealed class MainWindowViewModel : ViewModelBase
         return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions, hasDeletedPointers, hasDeletedRecords);
     }
 
+    /// <summary>
+    /// Runs the recovery the Pages tab shows for <paramref name="page"/>: in-tree carving with its
+    /// table's schema, carving a dropped table's freed root page, and the records Carve Unknown
+    /// Pages stored for it (<paramref name="orphanOffsets"/> if already read, else read now).
+    /// </summary>
+    private void RunPageRecovery(SqlitePage page, string? tableName, IEnumerable<int>? orphanOffsets = null)
+    {
+        if (Database is null) return;
+        if (page is TableBTreeLeafPage tlp && tableName is not null)
+        {
+            var schema = Database.GetTableSchema(tableName)
+                      ?? (_manualSchemas.TryGetValue(tableName, out var ms) ? ms : null);
+            if (schema is not null)
+            {
+                var rs = RecordStructure.FromSchema(schema);
+                tlp.CarveDeletedCells(rs);
+                tlp.CarveFreeblockCells(rs);
+            }
+        }
+        else if (_freedPageSchemas.TryGetValue(page.PageNumber, out var freedSchema))
+        {
+            var rs     = RecordStructure.FromSchema(freedSchema);
+            var carved = DeletedRecordParser.CarveRawBytes(page.Data, Database.Header.TextEncoding, rs);
+            page.CarvedRecoveredCells.AddRange(carved);
+        }
+        AddOrphanCarvedCells(page, orphanOffsets);
+    }
+
+    // Pages no B-tree claims (the ones Carve Unknown Pages scans) and the freelist trunks among
+    // them, read once per open database.
+    private HashSet<uint>? _unclaimedPages;
+    private IReadOnlyDictionary<uint, FreelistTrunkPage>? _freelistTrunks;
+
+    private bool IsUnclaimed(uint pageNumber)
+    {
+        if (Database is null) return false;
+        if (_unclaimedPages is null)
+        {
+            try { _unclaimedPages = Database.GetUnclaimedPageNumbers().ToHashSet(); }
+            catch { _unclaimedPages = []; }
+        }
+        return _unclaimedPages.Contains(pageNumber);
+    }
+
+    /// <summary>
+    /// What recovery leaves unexplained over the whole of an unclaimed <paramref name="page"/>.
+    /// Recovered and carved cells count as explained; cells that merely parse as live don't, as no
+    /// table owns the page, so its rows aren't recovered until something carves them.
+    /// </summary>
+    private ResidualCount WholePageResidual(SqlitePage page)
+    {
+        _freelistTrunks ??= Database is null
+            ? new Dictionary<uint, FreelistTrunkPage>()
+            : OrphanPageCarver.ReadFreelistTrunks(Database);
+        IEnumerable<BTreeLeafCell> cells = page.CarvedRecoveredCells;
+        if (page is TableBTreeLeafPage tlp)
+            cells = cells.Concat(tlp.DeletedCells).Concat(tlp.CarvedCells)
+                .Concat(tlp.FreeblockCells).Concat(tlp.AnnotatedCells);
+        return OrphanPageCarver.WholePageResidual(page, Database?.Header.ReservedBytesPerPage ?? 0,
+            cells.ToList(), _freelistTrunks);
+    }
+
+    /// <summary>
+    /// Counts the unexplained bytes of every page in the list that hasn't been counted yet, running
+    /// the same recovery as selecting it does. Table leaf pages count per unallocated region;
+    /// unclaimed pages count whole, as one region the size of the page.
+    /// </summary>
+    private void EnsureUnexplainedCounts()
+    {
+        if (Database is null || Pages.All(p => p.UnexplainedRegions is not null)) return;
+
+        Dictionary<uint, List<int>> orphanOffsets = [];
+        if (Project is not null)
+        {
+            try
+            {
+                orphanOffsets = Project.ReadAllOrphanCarvedCells()
+                    .GroupBy(c => c.PageNumber)
+                    .ToDictionary(g => g.Key, g => g.Select(c => c.CellOffset).ToList());
+            }
+            catch { /* nothing carved yet, or the project can't be read */ }
+        }
+
+        int usableSize = Database.Layout.UsableSize;
+        foreach (var entry in Pages)
+        {
+            if (entry.UnexplainedRegions is not null) continue;
+            try
+            {
+                var page = Database.ReadPage(entry.PageNumber);
+                RunPageRecovery(page, entry.TableName, orphanOffsets.GetValueOrDefault(entry.PageNumber) ?? []);
+                if (IsUnclaimed(entry.PageNumber))
+                {
+                    var count = WholePageResidual(page);
+                    entry.UnexplainedRegions = count.NonZeroBytes > 0
+                        ? [(usableSize, count.UnexplainedNonZeroBytes)]
+                        : [];
+                }
+                else if (page is TableBTreeLeafPage tlp)
+                {
+                    var explained = tlp.ExplainedRanges().ToList();
+                    entry.UnexplainedRegions = tlp.UnallocatedRegions
+                        .Select(r => (r.Size, ResidualBytes.Count(tlp.Data, r.Offset, r.End, explained).UnexplainedNonZeroBytes))
+                        .ToList();
+                }
+                else entry.UnexplainedRegions = [];
+            }
+            catch
+            {
+                entry.UnexplainedRegions = entry.UnallocatedRegions; // fall back to the raw counts
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds the records Carve Unknown Pages carved from <paramref name="page"/> (read back from the
+    /// project) to its <see cref="SqlitePage.CarvedRecoveredCells"/>, so they're listed, highlighted
+    /// and counted as explained. Each is re-read at its stored offset; its record header gives its
+    /// length. Offsets already holding a recovered cell are skipped; a live-looking cell doesn't
+    /// count, since on a page no B-tree uses it isn't a live row.
+    /// </summary>
+    private void AddOrphanCarvedCells(SqlitePage page, IEnumerable<int>? storedOffsets = null)
+    {
+        if (Project is null || Database is null) return;
+        if (storedOffsets is null)
+        {
+            try { storedOffsets = Project.ReadOrphanCarvedCells(page.PageNumber).Select(c => c.CellOffset).ToList(); }
+            catch { return; } // no recovered tables yet, or the project can't be read: nothing to add
+        }
+
+        var known = new HashSet<int>(page.CarvedRecoveredCells.Select(c => c.PageOffset));
+        if (page is TableBTreeLeafPage tlp)
+            known.UnionWith(tlp.DeletedCells.Concat(tlp.CarvedCells)
+                .Concat(tlp.FreeblockCells).Concat(tlp.AnnotatedCells).Select(c => c.PageOffset));
+
+        foreach (int offset in storedOffsets.Distinct().Order())
+        {
+            if (!known.Add(offset)) continue;
+            try
+            {
+                var result = DeletedRecordParser.RecoverBTreeLeafRecord(page.Data, offset, Database.Header.TextEncoding);
+                if (result.IsValid) page.CarvedRecoveredCells.Add(result.Cell!);
+            }
+            catch { /* the stored offset no longer parses (e.g. the evidence changed): skip it */ }
+        }
+    }
+
     // ── Selected page (left panel selection; right panel detail) ─────────
     private PageListEntryViewModel? _selectedPage;
     public PageListEntryViewModel? SelectedPage
@@ -245,26 +412,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             SqlitePage? page = value is not null && Database is not null
                 ? Database.ReadPage(value.PageNumber)
                 : null;
-            if (page is TableBTreeLeafPage tlp && value?.TableName is { } tn)
-            {
-                var schema = Database!.GetTableSchema(tn)
-                          ?? (_manualSchemas.TryGetValue(tn, out var ms) ? ms : null);
-                if (schema is not null)
-                {
-                    var rs = RecordStructure.FromSchema(schema);
-                    tlp.CarveDeletedCells(rs);
-                    tlp.CarveFreeblockCells(rs);
-                }
-            }
-            else if (page is not null && value is not null
-                     && _freedPageSchemas.TryGetValue(value.PageNumber, out var freedSchema)
-                     && Database is not null)
-            {
-                var rs     = RecordStructure.FromSchema(freedSchema);
-                var carved = DeletedRecordParser.CarveRawBytes(page.Data, Database.Header.TextEncoding, rs);
-                page.CarvedRecoveredCells.AddRange(carved);
-            }
-            SelectedPageDetail = page is not null ? new PageViewModel(page) : null;
+            if (page is not null) RunPageRecovery(page, value!.TableName);
+            SelectedPageDetail = page is not null
+                ? new PageViewModel(page, Database?.Header.ReservedBytesPerPage ?? 0,
+                    IsUnclaimed(page.PageNumber) ? () => WholePageResidual(page) : null)
+                : null;
             LastRecoveryResult = null;
             this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
@@ -1139,6 +1291,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         JournalTab   = null;
         _manualSchemas.Clear();
         _freedPageSchemas.Clear();
+        _unclaimedPages = null;
+        _freelistTrunks = null;
         _project?.Dispose();
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";

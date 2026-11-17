@@ -97,6 +97,9 @@ def bind() -> ctypes.CDLL:
     lib.shard_carve.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.c_char_p]
     lib.shard_carve.restype = ctypes.c_void_p
 
+    lib.shard_get_page_residuals.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.c_char_p]
+    lib.shard_get_page_residuals.restype = ctypes.c_void_p
+
     lib.shard_recover_to_file.argtypes = [ctypes.c_int64, ctypes.c_char_p, ctypes.c_char_p]
     lib.shard_recover_to_file.restype = ctypes.c_void_p
 

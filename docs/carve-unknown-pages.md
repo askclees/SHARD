@@ -2,6 +2,8 @@
 
 Tries every candidate table's schema — live tables, plus any dropped-table schemas recovered from `sqlite_master` history — against pages with no known owner (not reachable from any live B-tree). Pointer-map and lock-byte pages are SQLite's own bookkeeping and are never scanned. Useful for recovering records left behind after a `DROP TABLE`, or orphaned by other page reuse.
 
+After a carve, select a carved page in the Pages tab to see its records under **Recovered → Carved (from the whole page)**, highlighted in the hex view. Its Page Information shows how many of the page's non-zero bytes the carved records explain; any left unexplained are data the carve couldn't read. `shard-cli carve` reports the same per page, and `shard-cli residual <db> --carve loose|tight` lists it for every page.
+
 ## Standard vs. Focused
 
 - **Standard** (read-only reference list) matches on each candidate table's declared column types only. Simple, but ambiguous between similarly-shaped tables.

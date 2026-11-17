@@ -80,6 +80,18 @@ public static class RecoveryApi
             return SqliteRecoveryFacade.CarveUnknownPages(path, ParseCarveMode(mode), filter).ToList();
         });
 
+    /// <summary>See <see cref="SqliteRecoveryFacade.GetPageResiduals"/>; <paramref name="orphanCarveMode"/>
+    /// ("loose" or "tight") also counts the pages the orphan-page carver scans, null leaves them out.</summary>
+    public static string GetPageResiduals(long handle, string? orphanCarveMode, string? tableFilterJson) =>
+        WithPath(handle, path =>
+        {
+            var filter = tableFilterJson is null
+                ? null
+                : JsonSerializer.Deserialize(tableFilterJson, NativeJsonContext.Default.ListString);
+            return SqliteRecoveryFacade.GetPageResiduals(
+                path, orphanCarveMode is null ? null : ParseCarveMode(orphanCarveMode), filter).ToList();
+        });
+
     public static string RecoverToFile(long handle, string outputPath, string? optionsJson) =>
         WithPath(handle, path =>
         {

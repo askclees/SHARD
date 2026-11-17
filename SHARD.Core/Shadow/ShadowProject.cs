@@ -339,6 +339,54 @@ public sealed class ShadowProject : IDisposable
         return command.ExecuteScalar() as string;
     }
 
+    /// <summary>
+    /// The records <see cref="CarveUnknownPages"/> carved from <paramref name="pageNumber"/>, as the
+    /// table each matched and the cell's offset on the page. Read from the shadow database, so it
+    /// includes carves from earlier sessions of a saved project.
+    /// </summary>
+    public IReadOnlyList<(string TableName, int CellOffset)> ReadOrphanCarvedCells(uint pageNumber) =>
+        ReadOrphanCarvedCells((uint?)pageNumber).Select(c => (c.TableName, c.CellOffset)).ToList();
+
+    /// <summary>Every page's records <see cref="CarveUnknownPages"/> carved, read in one pass.</summary>
+    public IReadOnlyList<(uint PageNumber, string TableName, int CellOffset)> ReadAllOrphanCarvedCells() =>
+        ReadOrphanCarvedCells(null);
+
+    private List<(uint PageNumber, string TableName, int CellOffset)> ReadOrphanCarvedCells(uint? pageNumber)
+    {
+        var result = new List<(uint PageNumber, string TableName, int CellOffset)>();
+
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath};Mode=ReadOnly");
+        connection.Open();
+
+        var recoveredTables = new List<string>();
+        using (var list = connection.CreateCommand())
+        {
+            list.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, length(@prefix)) = @prefix";
+            list.Parameters.AddWithValue("@prefix", ShadowDatabaseBuilder.RecoveredTablePrefix);
+            using var reader = list.ExecuteReader();
+            while (reader.Read()) recoveredTables.Add(reader.GetString(0));
+        }
+
+        foreach (string table in recoveredTables)
+        {
+            using var command = connection.CreateCommand();
+            string pageColumn = ShadowDatabaseBuilder.QuoteIdentifier(ShadowDatabaseBuilder.PageNumberColumn);
+            command.CommandText = $"""
+                SELECT DISTINCT {pageColumn}, {ShadowDatabaseBuilder.QuoteIdentifier(ShadowDatabaseBuilder.CellOffsetColumn)}
+                FROM {ShadowDatabaseBuilder.QuoteIdentifier(table)}
+                WHERE {ShadowDatabaseBuilder.QuoteIdentifier(ShadowDatabaseBuilder.RecoveryMethodColumn)} = @m
+                  AND (@p IS NULL OR {pageColumn} = @p)
+                """;
+            command.Parameters.AddWithValue("@p", pageNumber is { } n ? (long)n : DBNull.Value);
+            command.Parameters.AddWithValue("@m", ShadowDatabaseBuilder.RecoveryMethodOrphanCarving);
+            using var reader = command.ExecuteReader();
+            string tableName = table[ShadowDatabaseBuilder.RecoveredTablePrefix.Length..];
+            while (reader.Read()) result.Add(((uint)reader.GetInt64(0), tableName, (int)reader.GetInt32(1)));
+        }
+
+        return result;
+    }
+
     /// <summary>Read the persisted page classifications from this project's shadow database.</summary>
     public IReadOnlyList<(uint PageNumber, PageType Type, string? TableName)> ReadPageTypes()
     {

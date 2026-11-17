@@ -136,6 +136,18 @@ class ShardDatabase:
         filter_json = json.dumps(tables).encode("utf-8") if tables is not None else None
         return _call(_lib.shard_carve, ctypes.c_int64(self._require_handle()), mode.encode("utf-8"), filter_json)
 
+    def page_residuals(self, orphan_carve_mode: str | None = None, tables: list[str] | None = None) -> list[dict[str, Any]]:
+        """
+        Non-zero bytes recovery leaves unexplained, per page: each table leaf page's unallocated
+        space after in-tree recovery (`area` "unallocated") and, with `orphan_carve_mode`
+        ("loose" or "tight"), each page the orphan-page carver scans, counted whole (`area`
+        "page"). Each dict has `pageNumber`, `type`, `tableName`, `area`, `recoveredRecords`,
+        `nonZeroBytes` and `unexplainedNonZeroBytes`. Read-only.
+        """
+        mode = orphan_carve_mode.encode("utf-8") if orphan_carve_mode is not None else None
+        filter_json = json.dumps(tables).encode("utf-8") if tables is not None else None
+        return _call(_lib.shard_get_page_residuals, ctypes.c_int64(self._require_handle()), mode, filter_json)
+
     def recover_to_file(
         self,
         output_path: str,
