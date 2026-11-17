@@ -1,0 +1,9 @@
+<Project>
+  <!-- Applies to every project in the repository -->
+  <PropertyGroup>
+    <!-- Compiler and NuGet warnings -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Warnings from other build tasks, such as Avalonia's XAML compiler -->
+    <MSBuildTreatWarningsAsErrors>true</MSBuildTreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

@@ -15,6 +15,9 @@ public partial class CreateProjectWindow : Window
 {
     private readonly string? _detectedWalPath;
 
+    /// <summary>For the XAML loader and designer, and a plain "create project" prompt.</summary>
+    public CreateProjectWindow() : this(null, null, null) { }
+
     public CreateProjectWindow(string? detectedWalPath = null, string? promptMessage = null, string? skipButtonText = null)
     {
         InitializeComponent();

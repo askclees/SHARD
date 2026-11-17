@@ -10,6 +10,9 @@ namespace SHARD.Views;
 
 public partial class QueryWindow : Window
 {
+    /// <summary>For the XAML loader and designer; the app uses the constructor below.</summary>
+    public QueryWindow() => InitializeComponent();
+
     public QueryWindow(QueryViewModel vm)
     {
         InitializeComponent();
