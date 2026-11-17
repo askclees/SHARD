@@ -27,6 +27,10 @@ public static class ShadowDatabaseBuilder
     /// <summary>Recovered tables only: the 1-based WAL frame a recovered record was read from, or
     /// NULL when it came from the database file (or a rollback journal).</summary>
     public  const string WalFrameColumn       = "_wal_frame";
+    /// <summary>Recovered tables only: the 1-based rollback-journal record (counted across the whole
+    /// file, as the Journal tab numbers them) a recovered record was read from, or NULL when it
+    /// came from the database file (or a WAL).</summary>
+    public  const string JournalRecordColumn  = "_journal_record";
 
     public const string RecoveryMethodDeletedCell        = "deleted_cell";
     public const string RecoveryMethodCarving            = "carving";
@@ -39,6 +43,12 @@ public static class ShadowDatabaseBuilder
     public const string RecoveryMethodDbFileDeletedInWal     = "db_file_deleted_in_wal";
     /// <summary>The database file's version of a record a committed WAL transaction has since changed.</summary>
     public const string RecoveryMethodDbFilePreviousVersion  = "db_file_previous_version";
+    /// <summary>A record live in the database file on a page a hot rollback journal restores without
+    /// it: written by a transaction that never committed, so SQLite discards it on rollback.</summary>
+    public const string RecoveryMethodDbFileUncommitted        = "db_file_uncommitted";
+    /// <summary>The database file's uncommitted version of a record a hot rollback journal restores
+    /// to its earlier, committed values.</summary>
+    public const string RecoveryMethodDbFileUncommittedVersion = "db_file_uncommitted_version";
     /// <summary>A record found in a rollback-journal page image that no longer exists in the database.</summary>
     public const string RecoveryMethodJournalPage            = "journal_page";
     /// <summary>A rollback-journal page image's version of a record whose live payload has since changed.</summary>
@@ -59,10 +69,12 @@ public static class ShadowDatabaseBuilder
     public  const string InfoTableName     = InternalTablePrefix + "info";
 
     /// <summary><see cref="InfoTableName"/> key: what the live tables were built from — one of
-    /// <see cref="LiveSourceDatabaseFile"/> or <see cref="LiveSourceCommittedWal"/>.</summary>
+    /// <see cref="LiveSourceDatabaseFile"/>, <see cref="LiveSourceCommittedWal"/> or
+    /// <see cref="LiveSourceRolledBackJournal"/>.</summary>
     public const string InfoKeyLiveTablesSource = "live_tables_source";
     public const string LiveSourceDatabaseFile  = "database_file";
     public const string LiveSourceCommittedWal  = "database_file_with_committed_wal";
+    public const string LiveSourceRolledBackJournal = "database_file_with_journal_rolled_back";
 
     /// <summary>
     /// Builds the shadow database. Returns a list of warning strings for any user tables that
@@ -163,7 +175,9 @@ public static class ShadowDatabaseBuilder
         TagFreelistPages(connection, layout);
 
         WriteInfo(connection, InfoKeyLiveTablesSource,
-            database.IncludesWal ? LiveSourceCommittedWal : LiveSourceDatabaseFile);
+            database.IncludesWal ? LiveSourceCommittedWal
+            : database.IncludesJournal ? LiveSourceRolledBackJournal
+            : LiveSourceDatabaseFile);
 
         if (evidenceHashes is not null)
             WriteEvidenceHashes(connection, evidenceHashes);
@@ -309,6 +323,7 @@ public static class ShadowDatabaseBuilder
         columnSql.Add($"{QuoteIdentifier(OverflowPageColumn)}  INTEGER NOT NULL DEFAULT 0");
         columnSql.Add($"{QuoteIdentifier(RecoveryMethodColumn)} TEXT NOT NULL");
         columnSql.Add($"{QuoteIdentifier(WalFrameColumn)}       INTEGER");
+        columnSql.Add($"{QuoteIdentifier(JournalRecordColumn)}  INTEGER");
 
         string tableName = RecoveredTablePrefix + schema.TableName;
         return $"CREATE TABLE {QuoteIdentifier(tableName)} (\n  {string.Join(",\n  ", columnSql)}\n)";
@@ -592,24 +607,25 @@ public static class ShadowDatabaseBuilder
         foreach (uint pageNum in database.GetTreePageNumbers(rootPage))
         {
             if (database.ReadPage(pageNum) is not TableBTreeLeafPage tlp) continue;
-            int? walFrame = database.WalFrameNumberFor(pageNum); // the page's committed WAL image, if any
+            int? walFrame = database.WalFrameNumberFor(pageNum);           // the page's committed WAL image, if any
+            int? journalRecord = database.JournalRecordNumberFor(pageNum); // or the image a hot journal restores
 
             if (flags.DeletedCells)
                 foreach (var cell in tlp.DeletedCells)
-                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell, walFrame);
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodDeletedCell, walFrame, journalRecord);
 
             if (flags.InTreeCarving)
             {
                 tlp.CarveDeletedCells(recordStructure!);
                 foreach (var cell in tlp.CarvedCells)
-                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving, walFrame);
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodCarving, walFrame, journalRecord);
             }
 
             if (flags.FreeblockCarving)
             {
                 tlp.CarveFreeblockCells(recordStructure!);
                 foreach (var cell in tlp.FreeblockCells)
-                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock, walFrame);
+                    InsertRecoveredCellInTransaction(connection, transaction, sql, schema, cell, pageNum, RecoveryMethodFreeblock, walFrame, journalRecord);
             }
         }
 
@@ -617,7 +633,7 @@ public static class ShadowDatabaseBuilder
     }
 
     /// <summary>INSERT into a table's recovered table, with parameters @p0..@pN for its columns
-    /// followed by @p_page, @p_offset, @p_overflow, @p_method and @p_wal_frame.</summary>
+    /// followed by @p_page, @p_offset, @p_overflow, @p_method, @p_wal_frame and @p_journal_record.</summary>
     private static string BuildRecoveredInsertSql(TableSchema schema)
     {
         var cols = schema.Columns.Select(c => QuoteIdentifier(c.Name)).ToList();
@@ -627,6 +643,7 @@ public static class ShadowDatabaseBuilder
         cols.Add(QuoteIdentifier(OverflowPageColumn));   phs.Add("@p_overflow");
         cols.Add(QuoteIdentifier(RecoveryMethodColumn)); phs.Add("@p_method");
         cols.Add(QuoteIdentifier(WalFrameColumn));       phs.Add("@p_wal_frame");
+        cols.Add(QuoteIdentifier(JournalRecordColumn));  phs.Add("@p_journal_record");
         return $"INSERT INTO {QuoteIdentifier(RecoveredTablePrefix + schema.TableName)} " +
                $"({string.Join(", ", cols)}) VALUES ({string.Join(", ", phs)})";
     }
@@ -634,7 +651,8 @@ public static class ShadowDatabaseBuilder
     /// <summary>Inserts <paramref name="cell"/> into the recovered table and returns its shadow rowid.</summary>
     private static long InsertRecoveredCellInTransaction(
         SqliteConnection connection, SqliteTransaction transaction,
-        string sql, TableSchema schema, BTreeLeafCell cell, uint pageNum, string recoveryMethod, int? walFrame = null)
+        string sql, TableSchema schema, BTreeLeafCell cell, uint pageNum, string recoveryMethod, int? walFrame = null,
+        int? journalRecord = null)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -653,6 +671,7 @@ public static class ShadowDatabaseBuilder
         command.Parameters.AddWithValue("@p_overflow", (long)cell.OverflowPage);
         command.Parameters.AddWithValue("@p_method",  recoveryMethod);
         command.Parameters.AddWithValue("@p_wal_frame", walFrame is { } f ? f : DBNull.Value);
+        command.Parameters.AddWithValue("@p_journal_record", journalRecord is { } j ? j : DBNull.Value);
         command.ExecuteNonQuery();
 
         using var last = connection.CreateCommand();
@@ -887,18 +906,17 @@ public static class ShadowDatabaseBuilder
             command.ExecuteNonQuery();
         }
 
-        // A recovered table from a shadow built before _wal_frame existed
+        // A recovered table from a shadow built before the provenance columns existed
         string table = RecoveredTablePrefix + schema.TableName;
-        bool hasWalFrame;
-        using (var info = connection.CreateCommand())
+        foreach (string column in new[] { WalFrameColumn, JournalRecordColumn })
         {
-            info.CommandText = $"SELECT 1 FROM pragma_table_info({QuoteLiteral(table)}) WHERE name = {QuoteLiteral(WalFrameColumn)}";
-            hasWalFrame = info.ExecuteScalar() is not null;
-        }
-        if (!hasWalFrame)
-        {
+            using (var info = connection.CreateCommand())
+            {
+                info.CommandText = $"SELECT 1 FROM pragma_table_info({QuoteLiteral(table)}) WHERE name = {QuoteLiteral(column)}";
+                if (info.ExecuteScalar() is not null) continue;
+            }
             using var alter = connection.CreateCommand();
-            alter.CommandText = $"ALTER TABLE {QuoteIdentifier(table)} ADD COLUMN {QuoteIdentifier(WalFrameColumn)} INTEGER";
+            alter.CommandText = $"ALTER TABLE {QuoteIdentifier(table)} ADD COLUMN {QuoteIdentifier(column)} INTEGER";
             alter.ExecuteNonQuery();
         }
     }
@@ -922,7 +940,7 @@ public static class ShadowDatabaseBuilder
         RecoveryFlags? flags = null)
     {
         var pageImages = wal.Frames
-            .Select((f, i) => new PageImage(f.Header.PageNumber, f.Page, i + 1));
+            .Select((f, i) => new PageImage(f.Header.PageNumber, f.Page, i + 1, null));
 
         // Rows on each page's latest committed frame are live as far as SQLite is concerned, even
         // though they aren't in the database file yet — without this, an ignored frame that also
@@ -939,7 +957,7 @@ public static class ShadowDatabaseBuilder
 
     /// <summary>
     /// Recovers records from the database file's own version of every page the WAL's committed
-    /// frames replace. <paramref name="committed"/> is the database as SQLite sees it (the file with
+    /// frames — or the records a hot rollback journal restores — replace. <paramref name="committed"/> is the database as SQLite sees it (the file with
     /// the WAL applied; see <see cref="SqliteForensicDatabase.OpenCommittedState"/>), and is what
     /// the shadow's live tables were built from, so a row live in the file but no longer live
     /// there — deleted by a committed WAL transaction not yet checkpointed — would otherwise be
@@ -948,7 +966,13 @@ public static class ShadowDatabaseBuilder
     /// Rows are compared per table by rowid, so a row that merely moved to another page isn't
     /// reported. With <paramref name="flags"/> (default: all on), those file pages' deleted cells,
     /// unallocated space and freeblocks are searched too — in-tree recovery only reads the
-    /// committed version of each page. Returns the number of records inserted.
+    /// committed version of each page.
+    /// <para>When <paramref name="committed"/> is the rolled-back state of a hot journal
+    /// (<see cref="SqliteForensicDatabase.OpenRolledBackState"/>) the direction is reversed: the
+    /// file holds the uncommitted transaction's writes, so a row live in the file but not after
+    /// rollback is inserted as <see cref="RecoveryMethodDbFileUncommitted"/>, and the file's
+    /// version of a row the rollback restores as <see cref="RecoveryMethodDbFileUncommittedVersion"/>.</para>
+    /// Returns the number of records inserted.
     /// </summary>
     public static int InsertSupersededFilePageRows(
         SqliteConnection connection,
@@ -956,13 +980,15 @@ public static class ShadowDatabaseBuilder
         SqliteForensicDatabase file,
         RecoveryFlags? flags = null)
     {
-        var pageImages = committed.WalPageNumbers
+        var pageImages = committed.OverlayPageNumbers
             .Where(p => p >= 1 && p <= file.PageCount)
             .OrderBy(p => p)
-            .Select(p => new PageImage(p, file.ReadPage(p), null))
+            .Select(p => new PageImage(p, file.ReadPage(p), null, null))
             .ToList();
+        bool journal = committed.IncludesJournal;
         return InsertHistoricalPageRows(connection, committed, pageImages,
-            RecoveryMethodDbFileDeletedInWal, RecoveryMethodDbFilePreviousVersion,
+            journal ? RecoveryMethodDbFileUncommitted : RecoveryMethodDbFileDeletedInWal,
+            journal ? RecoveryMethodDbFileUncommittedVersion : RecoveryMethodDbFilePreviousVersion,
             deletedDataFlags: flags ?? RecoveryFlags.Default);
     }
 
@@ -974,28 +1000,34 @@ public static class ShadowDatabaseBuilder
     /// transaction deleted or updated. Every record is used, not only those SQLite would play back:
     /// a stale record (checksum from an earlier transaction's nonce) or one after playback stopped
     /// is still a genuine earlier image of that page, and schema correlation rejects anything that
-    /// doesn't fit. For a hot journal (crashed mid-transaction) the database file itself may hold
-    /// the uncommitted changes, in which case the journal's rows are the last committed state.
+    /// doesn't fit. Each record is tagged with its 1-based number in the file
+    /// (<see cref="JournalRecordColumn"/>). <paramref name="database"/> is what the live tables were
+    /// built from: for a hot journal, ideally its rolled-back state
+    /// (<see cref="SqliteForensicDatabase.OpenRolledBackState"/>), whose live rows already include
+    /// those of the records SQLite would restore. With <paramref name="flags"/> (default: all on),
+    /// each image's deleted cells, unallocated space and freeblocks are searched too.
     /// Returns the number of records inserted.
     /// </summary>
     public static int InsertJournalDeletedRows(
         SqliteConnection connection,
         SqliteForensicDatabase database,
-        RollbackJournalFile journal)
+        RollbackJournalFile journal,
+        RecoveryFlags? flags = null)
     {
         var pageImages = journal.Segments
             .SelectMany(s => s.PageRecords)
-            .Where(r => r.Status != JournalRecordStatus.InvalidPageNumber)
-            .Select(r => new PageImage(r.PageNumber, r.Page, null));
-        // Journal images' deleted data isn't searched yet: without a journal provenance column
-        // it would be indistinguishable from the database file's own.
+            .Select((r, i) => (Record: r, Number: i + 1))
+            .Where(x => x.Record.Status != JournalRecordStatus.InvalidPageNumber)
+            .Select(x => new PageImage(x.Record.PageNumber, x.Record.Page, null, x.Number));
         return InsertHistoricalPageRows(connection, database, pageImages,
-            RecoveryMethodJournalPage, RecoveryMethodJournalPreviousVersion);
+            RecoveryMethodJournalPage, RecoveryMethodJournalPreviousVersion,
+            deletedDataFlags: flags ?? RecoveryFlags.Default);
     }
 
-    /// <summary>One image of a database page to mine: from the database file, a rollback journal, or
-    /// a WAL frame (<paramref name="WalFrame"/>, 1-based; null otherwise).</summary>
-    private readonly record struct PageImage(uint PageNumber, SqlitePage Page, int? WalFrame);
+    /// <summary>One image of a database page to mine: from the database file, a WAL frame
+    /// (<paramref name="WalFrame"/>, 1-based) or a rollback-journal record
+    /// (<paramref name="JournalRecord"/>, 1-based); both null for the file.</summary>
+    private readonly record struct PageImage(uint PageNumber, SqlitePage Page, int? WalFrame, int? JournalRecord);
 
     /// <summary>
     /// Shared by WAL and rollback-journal recovery: walks earlier images of database pages
@@ -1124,7 +1156,7 @@ public static class ShadowDatabaseBuilder
 
         using var transaction = connection.BeginTransaction();
 
-        foreach (var (pageNum, page, walFrame) in leafImages)
+        foreach (var (pageNum, page, walFrame, journalRecord) in leafImages)
         {
             var imagePage = (TableBTreeLeafPage)page;
             var schema = CorrelatePageImageToSchema(
@@ -1156,7 +1188,7 @@ public static class ShadowDatabaseBuilder
                 {
                     // Stage 2: record deleted before the current DB version
                     ReplacePartialCopies(connection, transaction, schema, partialCopies[tableName], ValueKey(schema, cell.FieldValues));
-                    InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, deletedMethod, walFrame);
+                    InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, deletedMethod, walFrame, journalRecord);
                     addedSet.Add(rowId);
                     recoveredValueKeys[tableName].Add(ValueKey(schema, cell.FieldValues));
                     inserted++;
@@ -1170,7 +1202,7 @@ public static class ShadowDatabaseBuilder
                         !recoveredVersions[tableName].Contains((rowId, ValueKey(schema, cell.FieldValues))))
                     {
                         ReplacePartialCopies(connection, transaction, schema, partialCopies[tableName], ValueKey(schema, cell.FieldValues));
-                        InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, previousVersionMethod, walFrame);
+                        InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, previousVersionMethod, walFrame, journalRecord);
                         recoveredVersions[tableName].Add((rowId, ValueKey(schema, cell.FieldValues)));
                         addedSet.Add(rowId);
                         recoveredValueKeys[tableName].Add(ValueKey(schema, cell.FieldValues));
@@ -1214,7 +1246,7 @@ public static class ShadowDatabaseBuilder
                 if (replacesPartial)
                     ReplacePartialCopies(connection, transaction, schema, partialCopies[tableName], key);
 
-                long shadowRowId = InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, method, walFrame);
+                long shadowRowId = InsertRecoveredCellInTransaction(connection, transaction, insertSql, schema, cell, pageNum, method, walFrame, journalRecord);
                 if (rowId <= 0)
                 {
                     if (!partialCopies[tableName].TryGetValue(key, out var ids))

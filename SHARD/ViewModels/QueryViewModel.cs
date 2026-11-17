@@ -175,7 +175,7 @@ public sealed class QueryViewModel : ViewModelBase
     [
         new("All rows", null, "No filter on row state."),
         new("Current", $"{RowStates.IsCurrentColumn} = 1",
-            "What SQLite returns now: the database file with its WAL's committed frames applied."),
+            "What SQLite returns now: the database file with its WAL's committed frames applied, or with its hot journal rolled back."),
         new("Deleted by the WAL", $"{RowStates.DbStateColumn} = 1 AND {RowStates.LogStateColumn} = 2",
             "Live in the database file, deleted by a committed WAL transaction not yet checkpointed."),
         new("Added by the WAL", $"{RowStates.DbStateColumn} = 0 AND {RowStates.LogStateColumn} = 1",
@@ -184,6 +184,12 @@ public sealed class QueryViewModel : ViewModelBase
             "The database file's version of a row the WAL has since changed."),
         new("Only ever in the WAL", $"{RowStates.DbStateColumn} = 0 AND {RowStates.LogStateColumn} = 2",
             "Inserted and deleted within the WAL: never in the database file, not live now."),
+        new("Restored by the journal", $"{RowStates.DbStateColumn} <> 1 AND {RowStates.LogStateColumn} = 1 AND {RowStates.IsCurrentColumn} = 1",
+            "Not live in the database file, but SQLite restores it when it rolls back the hot journal: removed by a transaction that never committed."),
+        new("Uncommitted (discarded by the journal)", $"{RowStates.DbStateColumn} = 1 AND {RowStates.IsCurrentColumn} = 0 AND {RowStates.LogStateColumn} IN (0, 3)",
+            "Live in the database file, but written by a transaction that never committed: SQLite discards it when it rolls back the hot journal."),
+        new("Deleted since the journal's copy", $"{RowStates.DbStateColumn} <> 1 AND {RowStates.LogStateColumn} = 1 AND {RowStates.IsCurrentColumn} = 0",
+            "Live in a journal record (a page from before a committed transaction), but not live now: deleted or changed by that transaction."),
         new("Deleted in the database file", $"{RowStates.DbStateColumn} = 2",
             "Found only in the database file's deleted data (deleted cells, unallocated space, freeblocks)."),
     ];
@@ -270,7 +276,7 @@ public sealed class QueryViewModel : ViewModelBase
         var cols = GetTableColumns(recovered);
         if (cols.Count == 0) return QueryText;
 
-        // The recovered table has columns the live table doesn't (_recovery_method, _wal_frame).
+        // The recovered table has columns the live table doesn't (_recovery_method, _wal_frame, _journal_record).
         // Substitute NULL for each on the live side so the UNION column counts match and the
         // live SELECT doesn't fail with "no such column".
         var liveCols = GetTableColumns(matched).ToHashSet(StringComparer.OrdinalIgnoreCase);

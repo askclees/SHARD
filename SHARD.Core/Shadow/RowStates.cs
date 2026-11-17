@@ -1,6 +1,7 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
@@ -26,8 +27,16 @@ namespace SHARD.Core.Shadow;
 /// A row is covered by the WAL when it appears in a WAL frame (live or as deleted data), when the
 /// page it came from in the file is one the WAL rewrote, or when its rowid's live version is on a
 /// page that came from the WAL. Rows are matched by rowid and values in tables with a rowid alias,
-/// and by values alone otherwise (or when a recovered record lost its rowid). Rollback-journal
-/// states aren't computed yet: with a journal, <see cref="LogStateColumn"/> stays NULL.
+/// and by values alone otherwise (or when a recovered record lost its rowid).
+/// <para>With a rollback journal (<see cref="UpdateForJournal"/>) the direction is reversed: the
+/// journal holds pages as they were before its transaction, so <see cref="LogStateColumn"/> says
+/// what the journal's page images hold — 1 = a journal record holds this row version as a live
+/// cell; 3 = journal records hold the rowid live, but only with other values (the row changed after
+/// the journal's copy); 2 = found only in journal records' deleted data; 0 = covered, but not in
+/// the journal (for a row live in the file, added after the journal's copy). A row is covered by the
+/// journal when it appears in a journal record, when the page it came from is one the journal holds,
+/// or when its rowid's live version is on such a page. For a hot journal, <see cref="IsCurrentColumn"/>
+/// describes the database as SQLite would see it after rolling the journal back.</para>
 /// </summary>
 public static class RowStates
 {
@@ -76,30 +85,134 @@ public static class RowStates
                 : Snapshot.Of(committed, committedTables!.GetValueOrDefault(table), schema, includeDeleted: false);
             var walSeen = wal is null ? null : WalRecords.Of(wal, table, schema, committedMap!, fileMap, file.Header);
 
+            int aliasIndex = schema.Columns.FindIndex(c => c.IsRowIdAlias);
+            LogState? log = committedSnap is null || walSeen is null ? null : row =>
+            {
+                // With a rowid, only a WAL record with the same rowid, or one that lost its rowid,
+                // can be this row — another row that merely holds the same values isn't.
+                bool appearsInWal = row.RowId is { } wr
+                    ? walSeen.RowIdKeys.Contains((wr, row.Key)) || walSeen.RowlessKeys.Contains(row.Key)
+                    : walSeen.Keys.Contains(row.Key);
+                // Where this row came from: a live row's page in the committed state, a recovered
+                // row's WAL frame, or a file page the WAL rewrote.
+                bool sourceCovered = row.IsRecovered
+                    ? row.FromWalFrame || walPages.Contains(row.Page)
+                    : committed!.WalFrameNumberFor(row.Page) is not null;
+                Snapshot.Version? committedVersion = row.RowId is { } cr && committedSnap.Live.TryGetValue(cr, out var cv) ? cv : null;
+                bool liveVersionOnWalPage = committedVersion is { } v && committed!.WalFrameNumberFor(v.Page) is not null;
+
+                if (!(appearsInWal || sourceCovered || liveVersionOnWalPage)) return null;
+                bool liveInCommitted = committedVersion is { } c
+                    ? SameValues(row.Values, c.Values, aliasIndex)
+                    : row.RowId is null && committedSnap.LiveKeys.Contains(row.Key);
+                if (liveInCommitted) return 1;
+                if (committedVersion is not null) return 3;
+                if (appearsInWal || row.Db == 1) return 2;
+                return 0;
+            };
+
             foreach (string shadowTable in new[] { live, recovered })
             {
                 if (!TableExists(connection, shadowTable)) continue;
-                EnsureColumns(connection, shadowTable);
+                var columns = EnsureColumns(connection, shadowTable);
                 bool isRecovered = shadowTable == recovered;
-                UpdateTable(connection, shadowTable, schema, isRecovered, fileSnap, committedSnap, walSeen, walPages, committed);
+                UpdateTable(connection, shadowTable, columns, schema, isRecovered, fileSnap, committedSnap ?? fileSnap, log);
             }
         }
     }
 
+    /// <summary>
+    /// Computes the state columns against a rollback journal (see the class remarks): like
+    /// <see cref="Update"/>, but <see cref="LogStateColumn"/> describes what <paramref name="journal"/>'s
+    /// page images hold. <paramref name="rolledBack"/> is <paramref name="file"/> with the journal
+    /// rolled back (<see cref="SqliteForensicDatabase.OpenRolledBackState"/>) when the journal is
+    /// hot, and is then what <see cref="IsCurrentColumn"/> describes; null otherwise.
+    /// </summary>
+    public static void UpdateForJournal(
+        SqliteConnection connection,
+        SqliteForensicDatabase file,
+        RollbackJournalFile journal,
+        SqliteForensicDatabase? rolledBack)
+    {
+        ShadowDatabaseBuilder.WriteInfo(connection, InfoKeyTransactionLog, "journal");
+
+        var fileTables = Tables(file);
+        var currentDb = rolledBack ?? file;
+        var currentTables = rolledBack is null ? fileTables : Tables(rolledBack);
+        var fileMap = file.BuildPageTableMap();
+        var currentMap = rolledBack?.BuildPageTableMap() ?? fileMap;
+        var records = journal.Segments.SelectMany(s => s.PageRecords)
+            .Where(r => r.Status != JournalRecordStatus.InvalidPageNumber)
+            .ToList();
+        var journalPages = records.Select(r => r.PageNumber).ToHashSet();
+
+        foreach (string table in currentTables.Keys)
+        {
+            var schema = currentTables[table].Schema;
+            string live = table;
+            string recovered = ShadowDatabaseBuilder.RecoveredTablePrefix + table;
+            if (!TableExists(connection, live)) continue;
+
+            var fileSnap = Snapshot.Of(file, fileTables.GetValueOrDefault(table), schema, includeDeleted: true);
+            var currentSnap = rolledBack is null ? fileSnap
+                : Snapshot.Of(currentDb, currentTables.GetValueOrDefault(table), schema, includeDeleted: false);
+            var seen = JournalRecords.Of(records, table, schema, currentMap, fileMap, file.Header);
+            int aliasIndex = schema.Columns.FindIndex(c => c.IsRowIdAlias);
+
+            LogState log = row =>
+            {
+                HashSet<string>? liveVersions = row.RowId is { } jr ? seen.LiveByRowId.GetValueOrDefault(jr) : null;
+                bool liveInJournal = row.RowId is not null
+                    ? liveVersions?.Contains(row.Key) == true
+                    : seen.LiveKeys.Contains(row.Key);
+                bool deletedInJournal = row.RowId is { } dr
+                    ? seen.DeletedRowIdKeys.Contains((dr, row.Key)) || seen.DeletedRowlessKeys.Contains(row.Key)
+                    : seen.DeletedKeys.Contains(row.Key);
+                bool sourceCovered = row.FromJournalRecord || journalPages.Contains(row.Page);
+                bool liveVersionOnJournalPage = row.RowId is { } lr && currentSnap.Live.TryGetValue(lr, out var cv) &&
+                                                journalPages.Contains(cv.Page);
+
+                if (!(liveInJournal || deletedInJournal || liveVersions is not null || sourceCovered || liveVersionOnJournalPage))
+                    return null;
+                if (liveInJournal) return 1;
+                if (liveVersions is not null) return 3;
+                if (deletedInJournal) return 2;
+                return 0;
+            };
+
+            foreach (string shadowTable in new[] { live, recovered })
+            {
+                if (!TableExists(connection, shadowTable)) continue;
+                var columns = EnsureColumns(connection, shadowTable);
+                bool isRecovered = shadowTable == recovered;
+                UpdateTable(connection, shadowTable, columns, schema, isRecovered, fileSnap, currentSnap, log);
+            }
+        }
+    }
+
+    /// <summary>What a log-state rule needs to know about one shadow row.</summary>
+    private readonly record struct RowFacts(
+        long? RowId, string Key, string?[] Values, bool IsRecovered, uint Page,
+        bool FromWalFrame, bool FromJournalRecord, int Db);
+
+    /// <summary>A row's <see cref="LogStateColumn"/> value, or null when the log doesn't cover it.</summary>
+    private delegate int? LogState(RowFacts row);
+
     private static void UpdateTable(
-        SqliteConnection connection, string shadowTable, TableSchema schema, bool isRecovered,
-        Snapshot fileSnap, Snapshot? committedSnap, WalRecords? walSeen, HashSet<uint> walPages,
-        SqliteForensicDatabase? committed)
+        SqliteConnection connection, string shadowTable, HashSet<string> columns, TableSchema schema, bool isRecovered,
+        Snapshot fileSnap, Snapshot current, LogState? logState)
     {
         int aliasIndex = schema.Columns.FindIndex(c => c.IsRowIdAlias);
-        var current = committedSnap ?? fileSnap;
 
         var updates = new List<(long ShadowRowId, int Db, int? Log, int Current)>();
         using (var read = connection.CreateCommand())
         {
+            string Provenance(string column) =>
+                isRecovered && columns.Contains(column) ? ShadowDatabaseBuilder.QuoteIdentifier(column) : "NULL";
             var cols = schema.Columns.Select(c => ShadowDatabaseBuilder.QuoteIdentifier(c.Name)).ToList();
             cols.Add(ShadowDatabaseBuilder.QuoteIdentifier("_page_number"));
-            cols.Add(isRecovered ? ShadowDatabaseBuilder.QuoteIdentifier(ShadowDatabaseBuilder.WalFrameColumn) : "NULL");
+            cols.Add(Provenance(ShadowDatabaseBuilder.WalFrameColumn));
+            cols.Add(Provenance(ShadowDatabaseBuilder.JournalRecordColumn));
             read.CommandText = $"SELECT rowid, {string.Join(", ", cols)} FROM {ShadowDatabaseBuilder.QuoteIdentifier(shadowTable)}";
             using var r = read.ExecuteReader();
             int n = schema.Columns.Count;
@@ -111,6 +224,7 @@ public static class RowStates
                 long? rowId = aliasIndex >= 0 && !r.IsDBNull(aliasIndex + 1) && r.GetValue(aliasIndex + 1) is long id && id > 0 ? id : null;
                 uint page = r.IsDBNull(n + 1) ? 0 : (uint)r.GetInt64(n + 1);
                 bool fromWalFrame = !r.IsDBNull(n + 2);
+                bool fromJournalRecord = !r.IsDBNull(n + 3);
                 string key = ShadowDatabaseBuilder.ValueKey(schema, i => values[i]);
 
                 // ── database file ──
@@ -123,34 +237,9 @@ public static class RowStates
                          : fileSnap.DeletedKeys.Contains(key)) db = 2;
                 else db = 0;
 
-                // ── WAL ──
-                int? log = null;
-                if (committedSnap is not null && walSeen is not null)
-                {
-                    // With a rowid, only a WAL record with the same rowid, or one that lost its rowid,
-                    // can be this row — another row that merely holds the same values isn't.
-                    bool appearsInWal = rowId is { } wr
-                        ? walSeen.RowIdKeys.Contains((wr, key)) || walSeen.RowlessKeys.Contains(key)
-                        : walSeen.Keys.Contains(key);
-                    // Where this row came from: a live row's page in the committed state, a recovered
-                    // row's WAL frame, or a file page the WAL rewrote.
-                    bool sourceCovered = isRecovered
-                        ? fromWalFrame || walPages.Contains(page)
-                        : committed!.WalFrameNumberFor(page) is not null;
-                    Snapshot.Version? committedVersion = rowId is { } cr && committedSnap.Live.TryGetValue(cr, out var cv) ? cv : null;
-                    bool liveVersionOnWalPage = committedVersion is { } v && committed!.WalFrameNumberFor(v.Page) is not null;
-
-                    if (appearsInWal || sourceCovered || liveVersionOnWalPage)
-                    {
-                        bool liveInCommitted = committedVersion is { } c
-                            ? SameValues(values, c.Values, aliasIndex)
-                            : rowId is null && committedSnap.LiveKeys.Contains(key);
-                        if (liveInCommitted) log = 1;
-                        else if (committedVersion is not null) log = 3;
-                        else if (appearsInWal || db == 1) log = 2;
-                        else log = 0;
-                    }
-                }
+                // ── transaction log ──
+                int? log = logState?.Invoke(new RowFacts(rowId, key, values, isRecovered, page,
+                    fromWalFrame, fromJournalRecord, db));
 
                 // ── current ──
                 bool isCurrent = rowId is { } cur
@@ -310,6 +399,55 @@ public static class RowStates
         }
     }
 
+    /// <summary>Every record of one table found in a rollback journal's page images: live cells by
+    /// rowid (one rowid can hold several versions across records from different transactions) and
+    /// by value key, and the deleted data — deleted cells, unallocated space, freeblocks — by
+    /// (rowid, value key) where the rowid survives and by value key alone where it doesn't.</summary>
+    private sealed class JournalRecords
+    {
+        public Dictionary<long, HashSet<string>> LiveByRowId { get; } = [];
+        public HashSet<string> LiveKeys { get; } = [];
+        public HashSet<string> DeletedKeys { get; } = [];
+        public HashSet<(long RowId, string Key)> DeletedRowIdKeys { get; } = [];
+        public HashSet<string> DeletedRowlessKeys { get; } = [];
+
+        public static JournalRecords Of(IEnumerable<RollbackJournalPageRecord> records, string table, TableSchema schema,
+            Dictionary<uint, string> currentMap, Dictionary<uint, string> fileMap, DatabaseHeader header)
+        {
+            var seen = new JournalRecords();
+            var structure = RecordStructure.FromSchema(schema);
+            foreach (var record in records)
+            {
+                uint p = record.PageNumber;
+                string? owner = currentMap.GetValueOrDefault(p) ?? fileMap.GetValueOrDefault(p);
+                if (!string.Equals(owner, table, StringComparison.OrdinalIgnoreCase)) continue;
+                if (record.Page is not TableBTreeLeafPage leaf) continue;
+
+                // Parse a fresh copy: carving stores its results on the page object
+                if (SqlitePage.FromBytes(p, leaf.Data.Length, (byte[])leaf.Data.Clone(), header.TextEncoding, header.ReservedBytesPerPage)
+                    is not TableBTreeLeafPage page) continue;
+                foreach (var cell in page.Cells)
+                {
+                    string key = ShadowDatabaseBuilder.ValueKey(schema, cell.FieldValues);
+                    seen.LiveKeys.Add(key);
+                    if (!seen.LiveByRowId.TryGetValue(cell.RowId.Value, out var keys))
+                        seen.LiveByRowId[cell.RowId.Value] = keys = [];
+                    keys.Add(key);
+                }
+                page.CarveDeletedCells(structure);
+                page.CarveFreeblockCells(structure);
+                foreach (var cell in page.DeletedCells.Concat(page.CarvedCells).Concat(page.FreeblockCells))
+                {
+                    string key = ShadowDatabaseBuilder.ValueKey(schema, cell.FieldValues);
+                    seen.DeletedKeys.Add(key);
+                    if (cell.RowId.Value > 0) seen.DeletedRowIdKeys.Add((cell.RowId.Value, key));
+                    else seen.DeletedRowlessKeys.Add(key);
+                }
+            }
+            return seen;
+        }
+    }
+
     // ── Schema helpers ───────────────────────────────────────────────────────
 
     private static bool TableExists(SqliteConnection connection, string table)
@@ -320,7 +458,9 @@ public static class RowStates
         return cmd.ExecuteScalar() is not null;
     }
 
-    private static void EnsureColumns(SqliteConnection connection, string table)
+    /// <summary>Adds the state columns to <paramref name="table"/> if missing; returns the names of
+    /// its columns from before.</summary>
+    private static HashSet<string> EnsureColumns(SqliteConnection connection, string table)
     {
         var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var info = connection.CreateCommand())
@@ -336,5 +476,6 @@ public static class RowStates
             alter.CommandText = $"ALTER TABLE {ShadowDatabaseBuilder.QuoteIdentifier(table)} ADD COLUMN {ShadowDatabaseBuilder.QuoteIdentifier(column)} INTEGER";
             alter.ExecuteNonQuery();
         }
+        return existing;
     }
 }

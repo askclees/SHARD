@@ -12,6 +12,8 @@ namespace SHARD.Core.Tests;
 /// Each fixture mimics a hot journal: the table's leaf page is captured before a transaction,
 /// the transaction deletes and updates rows with secure_delete on (so the database file itself
 /// keeps no trace of them), and the captured page is written out as that page's journal record.
+/// The batch path rolls such a journal back (see JournalParityTests); the project tests here
+/// build from the file alone, so the journal's rows are recovered as deleted and earlier versions.
 /// </summary>
 public class JournalRecoveryTests : IDisposable
 {
@@ -34,25 +36,36 @@ public class JournalRecoveryTests : IDisposable
     }
 
     [Fact]
-    public void BuildShadowDatabase_RecoversDeletedAndPreviousVersionRows_FromJournal()
+    public void BuildShadowDatabase_HotJournal_IsRolledBack_AndTheFilesVersionRecovered()
     {
+        // The journal's record is valid, so it's hot: SQLite would roll it back, restoring the
+        // page's earlier image. The live table shows that; the file's uncommitted rename is kept.
         BuildEvidenceWithJournal();
         string shadowPath = Path.Combine(_dir, "shadow.db");
 
         using var session = EvidenceSession.Open(_dbPath);
         Assert.True(session.HasJournal);
+        Assert.True(session.JournalIsHot);
 
         var (_, walInserted, journalInserted) = session.BuildShadowDatabase(shadowPath);
 
         Assert.Equal(0, walInserted);
-        Assert.Equal(3, journalInserted);
+        Assert.Equal(1, journalInserted);
+        Assert.Equal(["1|Alice", "2|Bob", "3|Charlie", "4|Dave", "5|Eve"], LiveRows(shadowPath));
+        Assert.Empty(ReadRecovered(shadowPath)); // the journal's rows are live
+        Assert.Equal((3L, "Charles", ShadowDatabaseBuilder.RecoveryMethodDbFileUncommittedVersion), ReadRecoveredFromFile(shadowPath).Single());
+    }
 
-        var rows = ReadRecovered(shadowPath);
-        Assert.Equal(("Bob", ShadowDatabaseBuilder.RecoveryMethodJournalPage), rows[2]);
-        Assert.Equal(("Dave", ShadowDatabaseBuilder.RecoveryMethodJournalPage), rows[4]);
-        // id 3 still exists, renamed — the journal holds its pre-update value
-        Assert.Equal(("Charlie", ShadowDatabaseBuilder.RecoveryMethodJournalPreviousVersion), rows[3]);
-        Assert.Equal(3, rows.Count);
+    [Fact]
+    public void BuildShadowDatabase_ProcessJournalOff_LiveTableIsTheFile()
+    {
+        BuildEvidenceWithJournal();
+        string shadowPath = Path.Combine(_dir, "shadow.db");
+
+        using var session = EvidenceSession.Open(_dbPath);
+        session.BuildShadowDatabase(shadowPath, new RecoveryFlags(ProcessJournal: false));
+
+        Assert.Equal(["1|Alice", "3|Charles", "5|Eve"], LiveRows(shadowPath));
     }
 
     [Fact]
@@ -107,6 +120,24 @@ public class JournalRecoveryTests : IDisposable
     }
 
     [Fact]
+    public void BuildShadowDatabase_StaleRecordOnly_JournalIsNotRolledBack()
+    {
+        // SQLite stops playback at a record whose checksum doesn't match, so with only that record
+        // nothing is restored: the live table is the file, and the record's rows are recovered.
+        BuildEvidenceWithJournal(corruptChecksum: true);
+        string shadowPath = Path.Combine(_dir, "shadow.db");
+
+        using var session = EvidenceSession.Open(_dbPath);
+        Assert.False(session.JournalIsHot);
+        Assert.Null(session.CommittedDatabase);
+        var (_, _, journalInserted) = session.BuildShadowDatabase(shadowPath);
+
+        Assert.Equal(["1|Alice", "3|Charles", "5|Eve"], LiveRows(shadowPath));
+        Assert.Equal(3, journalInserted);
+        Assert.Equal(3, ReadRecovered(shadowPath).Count);
+    }
+
+    [Fact]
     public void Facade_Recover_ReportsJournalRecordsInserted()
     {
         BuildEvidenceWithJournal();
@@ -114,8 +145,8 @@ public class JournalRecoveryTests : IDisposable
 
         var result = SqliteRecoveryFacade.Recover(_dbPath, outputPath);
 
-        Assert.Equal(3, result.JournalRecordsInserted);
-        Assert.Equal(3, ReadRecovered(outputPath).Count);
+        Assert.Equal(1, result.JournalRecordsInserted); // the file's uncommitted version of row 3
+        Assert.Equal(5, result.Tables.Single(t => t.TableName == "people").LiveRowCount);
     }
 
     // ── Fixture ──────────────────────────────────────────────────────────────
@@ -188,6 +219,35 @@ public class JournalRecoveryTests : IDisposable
         BinaryPrimitives.WriteUInt32BigEndian(record.AsSpan(PageSize + 4), checksum);
 
         File.WriteAllBytes(path, [.. header, .. record]);
+    }
+
+    private static List<string> LiveRows(string shadowPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={shadowPath};Mode=ReadOnly;Pooling=False");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT id, name FROM people ORDER BY id";
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<string>();
+        while (reader.Read()) rows.Add($"{reader.GetInt64(0)}|{reader.GetString(1)}");
+        return rows;
+    }
+
+    private static List<(long Id, string Name, string Method)> ReadRecoveredFromFile(string shadowPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={shadowPath};Mode=ReadOnly;Pooling=False");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT id, name, "{ShadowDatabaseBuilder.RecoveryMethodColumn}"
+            FROM "{ShadowDatabaseBuilder.RecoveredTablePrefix}people"
+            WHERE "{ShadowDatabaseBuilder.RecoveryMethodColumn}" IN
+                ('{ShadowDatabaseBuilder.RecoveryMethodDbFileUncommitted}', '{ShadowDatabaseBuilder.RecoveryMethodDbFileUncommittedVersion}')
+            """;
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<(long, string, string)>();
+        while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        return rows;
     }
 
     /// <summary>Recovered rows attributed to the journal. In-tree recovery also adds placeholder
