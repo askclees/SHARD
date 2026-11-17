@@ -20,8 +20,8 @@ public class WalFrame
     /// </summary>
     public bool? ChecksumValid { get; internal set; }
 
-    public WalFrame(ReadOnlySpan<byte> data, uint pageSize, TextEncoding encoding, int reservedBytes, 
-        VerificationData checksums)
+    public WalFrame(ReadOnlySpan<byte> data, uint pageSize, TextEncoding encoding, int reservedBytes,
+        VerificationData checksums, PageLayout? layout = null)
     {
         if (data.Length < 24 + pageSize)
         {
@@ -29,7 +29,7 @@ public class WalFrame
         }
         Header = new WalFrameHeader(data[0..24], checksums);
         PageData = data[24..(int)(pageSize + 24)].ToArray();
-        Page = SqlitePage.FromBytes(Header.PageNumber, (int)pageSize, PageData, encoding, reservedBytes);
+        Page = SqlitePage.FromBytes(Header.PageNumber, (int)pageSize, PageData, encoding, reservedBytes, layout);
     }
 
 }

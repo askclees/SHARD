@@ -50,12 +50,15 @@ public sealed class PageViewModel : ViewModelBase
         AnnotatedCellSections.Add(vm);
     }
 
-    // ── Cell pointers expander ────────────────────────────────────────────
-    public bool HasCellPointers => Page is BTreePage bp && bp.CellPointers.Length > 0;
+    // ── Cell pointers expander (a pointer-map page's entries use it too) ───
+    public bool HasCellPointers => CellPointerRows.Count > 0;
 
-    public string CellPointerHeader => Page is BTreePage bpH
-        ? $"Cell Pointers ({bpH.CellPointers.Length})"
-        : "Cell Pointers";
+    public string CellPointerHeader => Page switch
+    {
+        BTreePage bpH       => $"Cell Pointers ({bpH.CellPointers.Length})",
+        PointerMapPage map  => $"Pointer Map Entries ({map.Entries.Count})",
+        _                   => "Cell Pointers",
+    };
 
     public IReadOnlyList<InfoRow> CellPointerRows { get; }
 
@@ -106,6 +109,12 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < bp.CellPointers.Length; i++)
                 rows.Add(new InfoRow($"[{i}]", $"0x{bp.CellPointers[i]:X4}  ({bp.CellPointers[i]})"));
             CellPointerRows = rows;
+        }
+        else if (page is PointerMapPage map)
+        {
+            CellPointerRows = map.Entries
+                .Select(e => new InfoRow($"{e.PageNumber}", DescribeEntry(e)))
+                .ToList();
         }
         else
         {
@@ -217,6 +226,25 @@ public sealed class PageViewModel : ViewModelBase
             return sb.ToString();
         }
 
+        if (page is PointerMapPage map)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Pointer map of an auto-vacuum database: what each following page is, and its parent.");
+            if (map.Entries.Count > 0)
+                sb.AppendLine($"Covers pages     : {map.Entries[0].PageNumber}–{map.Entries[^1].PageNumber}");
+            foreach (var group in map.Entries.GroupBy(e => e.Type))
+                sb.AppendLine($"{EntryTypeLabel(group.Key),-17}: {group.Count()}");
+            return sb.ToString();
+        }
+
+        if (page is LockBytePage)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Holds file offset 1 GiB, which SQLite uses only for file locks.");
+            sb.AppendLine("SQLite never writes to this page, so nothing in it came from SQLite.");
+            return sb.ToString();
+        }
+
         if (page is not BTreePage bp) return sb.ToString();
 
         sb.AppendLine();
@@ -233,6 +261,27 @@ public sealed class PageViewModel : ViewModelBase
 
         return sb.ToString();
     }
+
+    private static string EntryTypeLabel(PointerMapEntryType? type) => type switch
+    {
+        PointerMapEntryType.RootPage  => "Root pages",
+        PointerMapEntryType.FreePage  => "Free pages",
+        PointerMapEntryType.Overflow1 => "Overflow (first)",
+        PointerMapEntryType.Overflow2 => "Overflow (later)",
+        PointerMapEntryType.BTree     => "B-tree pages",
+        _                             => "Invalid type",
+    };
+
+    private static string DescribeEntry(PointerMapEntry e) => e.Type switch
+    {
+        PointerMapEntryType.RootPage  => "root page",
+        PointerMapEntryType.FreePage  => "free page",
+        PointerMapEntryType.Overflow1 => $"overflow, first page; cell on page {e.ParentPage}",
+        PointerMapEntryType.Overflow2 => $"overflow; follows page {e.ParentPage}",
+        PointerMapEntryType.BTree     => $"B-tree page; parent {e.ParentPage}",
+        _                             => $"invalid type 0x{e.TypeByte:X2}; parent {e.ParentPage}",
+    } + (e.ParentPage != 0 && e.Type is PointerMapEntryType.RootPage or PointerMapEntryType.FreePage
+        ? $" (parent {e.ParentPage}, normally 0)" : "");
 
     private static IReadOnlyList<HexHighlight> BuildPageHighlights(SqlitePage page)
     {

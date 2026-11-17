@@ -36,6 +36,8 @@ public sealed class PageTypeToggleViewModel : ViewModelBase
         PageType.Overflow           => "Overflow",
         PageType.FreelistTrunk      => "Freelist Trunk",
         PageType.FreelistLeaf       => "Freelist Leaf",
+        PageType.PointerMap         => "Pointer Map",
+        PageType.LockByte           => "Lock Byte",
         _                           => "Unknown",
     };
 }

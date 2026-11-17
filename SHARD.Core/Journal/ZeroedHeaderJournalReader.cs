@@ -23,7 +23,8 @@ namespace SHARD.Core.Journal;
 /// any left over from an older, larger one (PERSIST mode never truncates the file).</item>
 /// </list>
 /// A record is accepted if its page number fits the database and either its data looks like a
-/// SQLite page (a B-tree page, or page 1's header) or it shares the previous record's nonce.
+/// SQLite page (a B-tree page, page 1's header, or — given the database's layout — a pointer-map
+/// page) or it shares the previous record's nonce.
 /// </summary>
 public static class ZeroedHeaderJournalReader
 {
@@ -31,11 +32,12 @@ public static class ZeroedHeaderJournalReader
     private static readonly byte[] Page1Magic = "SQLite format 3\0"u8.ToArray();
 
     public static RollbackJournalFile? TryRead(
-        string path, int pageSize, uint databasePageCount, TextEncoding encoding, int reservedBytes, out string? error)
+        string path, int pageSize, uint databasePageCount, TextEncoding encoding, int reservedBytes, out string? error,
+        PageLayout? layout = null)
     {
         try
         {
-            return Read(path, pageSize, databasePageCount, encoding, reservedBytes, out error);
+            return Read(path, pageSize, databasePageCount, encoding, reservedBytes, layout, out error);
         }
         catch (Exception ex)
         {
@@ -45,7 +47,8 @@ public static class ZeroedHeaderJournalReader
     }
 
     private static RollbackJournalFile? Read(
-        string path, int pageSize, uint databasePageCount, TextEncoding encoding, int reservedBytes, out string? error)
+        string path, int pageSize, uint databasePageCount, TextEncoding encoding, int reservedBytes, PageLayout? layout,
+        out string? error)
     {
         byte[] data;
         using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
@@ -67,9 +70,12 @@ public static class ZeroedHeaderJournalReader
 
         bool PlausiblePageNumber(uint pn) => pn >= 1 && pn != lockBytePage && pn <= maxPage;
 
+        // A pointer-map page has no type byte (its first byte is its first entry's type, 1–5)
         bool LooksLikePage(uint pn, ReadOnlySpan<byte> page) => pn == 1
             ? page.StartsWith(Page1Magic)
-            : page[0] is 0x02 or 0x05 or 0x0A or 0x0D;
+            : layout?.IsPointerMapPage(pn) == true
+                ? page[0] is >= 1 and <= 5
+                : page[0] is 0x02 or 0x05 or 0x0A or 0x0D;
 
         bool ValidRecordAt(long offset)
         {
@@ -122,7 +128,7 @@ public static class ZeroedHeaderJournalReader
                 break;
             }
 
-            var record = new RollbackJournalPageRecord(span, (uint)pageSize, encoding, reservedBytes, nonce, offsetNow)
+            var record = new RollbackJournalPageRecord(span, (uint)pageSize, encoding, reservedBytes, nonce, offsetNow, layout)
             {
                 Status = JournalRecordStatus.ZeroedHeader,
             };

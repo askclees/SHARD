@@ -3,7 +3,8 @@ namespace SHARD.Core.Enums;
 /// <summary>
 /// SQLite page type. The type byte lives at offset 0 of the page header
 /// (offset 100 for page 1, which also carries the database header).
-/// Freelist/overflow types are synthetic — identified via pointers, not a type byte.
+/// Freelist/overflow types are synthetic — identified via pointers, not a type byte — and
+/// pointer-map/lock-byte types by page number (see <see cref="SHARD.Core.PageLayout"/>).
 /// </summary>
 public enum PageType : byte
 {
@@ -14,6 +15,8 @@ public enum PageType : byte
     BTreeLeafTable       = 0x0D,
 
     // Synthetic types (no header byte in the file)
+    PointerMap           = 0xFB,
+    LockByte             = 0xFC,
     Overflow             = 0xFD,
     FreelistTrunk        = 0xFE,
     FreelistLeaf         = 0xFF,

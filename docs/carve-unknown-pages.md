@@ -1,6 +1,6 @@
 # Carve Unknown Pages Tab
 
-Tries every candidate table's schema — live tables, plus any dropped-table schemas recovered from `sqlite_master` history — against pages with no known owner (not reachable from any live B-tree). Useful for recovering records left behind after a `DROP TABLE`, or orphaned by other page reuse.
+Tries every candidate table's schema — live tables, plus any dropped-table schemas recovered from `sqlite_master` history — against pages with no known owner (not reachable from any live B-tree). Pointer-map and lock-byte pages are SQLite's own bookkeeping and are never scanned. Useful for recovering records left behind after a `DROP TABLE`, or orphaned by other page reuse.
 
 ## Standard vs. Focused
 

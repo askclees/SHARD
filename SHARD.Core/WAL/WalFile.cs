@@ -91,7 +91,9 @@ public class WalFile
     /// reads every current-generation frame.</summary>
     public string? ValidationStopReason { get; private set; }
 
-    public WalFile(string path, TextEncoding encoding, int reservedBytes)
+    /// <param name="layout">The database's page layout, so frames for pointer-map and lock-byte pages
+    /// are recognised (see <see cref="Pages.SqlitePage.FromBytes"/>).</param>
+    public WalFile(string path, TextEncoding encoding, int reservedBytes, PageLayout? layout = null)
     {
         using FileStream walFile = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
@@ -120,7 +122,7 @@ public class WalFile
             }
 
             walFile.ReadExactly(frameData, 0, (int)frameSize);
-            WalFrame newFrame = new(frameData, pageSize, encoding, reservedBytes, Header.VerificationData);
+            WalFrame newFrame = new(frameData, pageSize, encoding, reservedBytes, Header.VerificationData, layout);
             Frames.Add(newFrame);
             pointer += frameSize;
         }

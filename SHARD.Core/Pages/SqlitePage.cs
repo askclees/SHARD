@@ -75,9 +75,19 @@ public abstract class SqlitePage
     /// <summary>
     /// Classify a page from an already-read byte array (e.g. a WAL frame where the data
     /// is extracted before the stream position is known).
+    /// <para>With <paramref name="layout"/> (the database's), pointer-map and lock-byte pages are
+    /// recognised by their page number first, since their bytes can look like a B-tree page's.
+    /// It's ignored if its page size differs from <paramref name="pageSize"/>.</para>
     /// </summary>
-    public static SqlitePage FromBytes(uint pageNumber, int pageSize, byte[] data, TextEncoding encoding, int reservedBytes)
+    public static SqlitePage FromBytes(uint pageNumber, int pageSize, byte[] data, TextEncoding encoding, int reservedBytes,
+        PageLayout? layout = null)
     {
+        if (layout is not null && layout.PageSize == pageSize)
+        {
+            if (layout.IsLockBytePage(pageNumber)) return new LockBytePage(pageNumber, pageSize, data);
+            if (layout.IsPointerMapPage(pageNumber)) return new PointerMapPage(pageNumber, pageSize, data, layout);
+        }
+
         int headerOffset = pageNumber == 1 ? 100 : 0;
         var typeByte = (PageType)data[headerOffset];
         try
