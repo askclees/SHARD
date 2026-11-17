@@ -9,6 +9,15 @@ public class RollbackJournalSegment
     public long SegmentStart { get;}
     public long SegmentEnd { get; }
     public bool PlaybackEnded { get; }
+
+    /// <summary>Records the header counts that the file ends before (the journal was truncated);
+    /// 0 when the header's count is 0 or 0xFFFFFFFF (read to the end of the file).</summary>
+    public long MissingRecords { get; }
+
+    /// <summary>Bytes at the end of the file, after this segment's last whole record, that are less
+    /// than a whole record — a record cut off part-way (0 when there are none, or when the
+    /// header's record count ends the segment before the end of the file).</summary>
+    public long PartialRecordBytes { get; }
     private readonly uint _lockBytePage;
 
     /// <summary>A segment assembled from records read without a valid header (see <see cref="ZeroedHeaderJournalReader"/>).</summary>
@@ -57,6 +66,10 @@ public class RollbackJournalSegment
         long dataSize = readToEnd
             ? available
             : Math.Min((long)Header.PageCount * entrySize, available);
+        if (!readToEnd && (long)Header.PageCount * entrySize > available)
+            MissingRecords = Header.PageCount - available / entrySize;
+        if (dataSize == available)
+            PartialRecordBytes = Math.Max(0, journalFile.Length - recordStart) % entrySize;
         
         //read each record in this segment
         long pointer = recordStart;

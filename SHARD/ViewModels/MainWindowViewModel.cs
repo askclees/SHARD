@@ -1330,6 +1330,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             int records = JournalTab.Records.Count;
             StatusText += $"  ·  Journal: {records} record{(records == 1 ? "" : "s")} in " +
                           $"{journal.Segments.Count} segment{(journal.Segments.Count == 1 ? "" : "s")}";
+            foreach (var problem in EvidenceSession.DescribeJournalProblems(journal))
+                StatusText += $"  ·  Journal: {problem}";
 
             // Same as the WAL: a project exists by now in both LoadFile and the manual menu
             // action; OpenProject calls this again once the saved project replaces it.
@@ -1353,13 +1355,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Recomputes the shadow database's row-state columns (_db_state, _log_state,
-    /// _is_current) after a recovery step, against whichever WAL the WAL tab shows.</summary>
+    /// _is_current) after a recovery step, against whichever WAL or journal its tab shows.</summary>
     private void UpdateRowStates()
     {
         if (Project is null || _session is null) return;
         try
         {
-            _session.UpdateRowStates(Project.ShadowDatabasePath, wal: WalTab?.WalFile);
+            _session.UpdateRowStates(Project.ShadowDatabasePath, wal: WalTab?.WalFile, journal: JournalTab?.JournalFile);
         }
         catch (Exception ex)
         {

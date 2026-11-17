@@ -238,14 +238,19 @@ public sealed class ShadowProject : IDisposable
 
     /// <summary>True when this project's live tables were built from the database with its WAL's
     /// committed frames applied, so they already hold what SQLite returns.</summary>
-    public bool LiveTablesIncludeWal
+    public bool LiveTablesIncludeWal => LiveTablesSource == ShadowDatabaseBuilder.LiveSourceCommittedWal;
+
+    /// <summary>True when this project's live tables were built from the database with its hot
+    /// journal rolled back, so they already hold what SQLite returns.</summary>
+    public bool LiveTablesIncludeJournal => LiveTablesSource == ShadowDatabaseBuilder.LiveSourceRolledBackJournal;
+
+    private string? LiveTablesSource
     {
         get
         {
             using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath};Mode=ReadOnly");
             connection.Open();
-            return ShadowDatabaseBuilder.ReadInfo(connection, ShadowDatabaseBuilder.InfoKeyLiveTablesSource)
-                   == ShadowDatabaseBuilder.LiveSourceCommittedWal;
+            return ShadowDatabaseBuilder.ReadInfo(connection, ShadowDatabaseBuilder.InfoKeyLiveTablesSource);
         }
     }
 
@@ -265,11 +270,11 @@ public sealed class ShadowProject : IDisposable
     /// by the journalled transaction — see <see cref="ShadowDatabaseBuilder.InsertJournalDeletedRows"/>.
     /// Returns the number of records inserted.
     /// </summary>
-    public int RecoverJournalDeletedRows(RollbackJournalFile journal, SqliteForensicDatabase database)
+    public int RecoverJournalDeletedRows(RollbackJournalFile journal, SqliteForensicDatabase database, RecoveryFlags? flags = null)
     {
         using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
-        return ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, database, journal);
+        return ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, database, journal, flags);
     }
 
     /// <summary>

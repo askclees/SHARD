@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
@@ -17,10 +18,12 @@ public sealed class SqliteForensicDatabase : IDisposable
 {
     private readonly FileStream _stream;
 
-    // Latest committed WAL image of each page, laid over the file (null when reading the file alone).
-    private readonly IReadOnlyDictionary<uint, byte[]>? _walPages;
-    // 1-based WAL frame number each of those page images came from.
-    private readonly IReadOnlyDictionary<uint, int>? _walFrameNumbers;
+    // Page images laid over the file (null when reading the file alone): the latest committed WAL
+    // image of each page, or the image a hot rollback journal would restore.
+    private readonly IReadOnlyDictionary<uint, byte[]>? _overlayPages;
+    // 1-based WAL frame number, or 1-based journal record number, each of those images came from.
+    private readonly IReadOnlyDictionary<uint, int>? _overlaySources;
+    private readonly bool _overlayIsJournal;
 
     /// <summary>Parsed 100-byte database header (from the WAL's latest image of page 1, when
     /// <see cref="IncludesWal"/> and the WAL holds one).</summary>
@@ -32,24 +35,40 @@ public sealed class SqliteForensicDatabase : IDisposable
 
     /// <summary>True when this reads the database as SQLite sees it: the file with every
     /// committed WAL frame applied (see <see cref="OpenCommittedState"/>).</summary>
-    public bool IncludesWal => _walPages is not null;
+    public bool IncludesWal => _overlayPages is not null && !_overlayIsJournal;
+
+    /// <summary>True when this reads the database as SQLite would after rolling back a hot journal:
+    /// the file with the journal's original page images restored (see <see cref="OpenRolledBackState"/>).</summary>
+    public bool IncludesJournal => _overlayPages is not null && _overlayIsJournal;
 
     /// <summary>Pages whose content comes from the WAL rather than the file.</summary>
-    public IReadOnlyCollection<uint> WalPageNumbers => (IReadOnlyCollection<uint>?)_walPages?.Keys ?? [];
+    public IReadOnlyCollection<uint> WalPageNumbers => IncludesWal ? (IReadOnlyCollection<uint>)_overlayPages!.Keys : [];
+
+    /// <summary>Pages whose content comes from the rollback journal rather than the file.</summary>
+    public IReadOnlyCollection<uint> JournalPageNumbers => IncludesJournal ? (IReadOnlyCollection<uint>)_overlayPages!.Keys : [];
+
+    /// <summary>Pages whose content comes from the WAL or the journal rather than the file.</summary>
+    public IReadOnlyCollection<uint> OverlayPageNumbers => (IReadOnlyCollection<uint>?)_overlayPages?.Keys ?? [];
 
     /// <summary>The 1-based WAL frame page <paramref name="pageNumber"/> is read from, or null when
     /// it's read from the file.</summary>
     public int? WalFrameNumberFor(uint pageNumber) =>
-        _walFrameNumbers is not null && _walFrameNumbers.TryGetValue(pageNumber, out int frame) ? frame : null;
+        IncludesWal && _overlaySources!.TryGetValue(pageNumber, out int frame) ? frame : null;
+
+    /// <summary>The 1-based journal record page <paramref name="pageNumber"/> is read from, or null
+    /// when it's read from the file.</summary>
+    public int? JournalRecordNumberFor(uint pageNumber) =>
+        IncludesJournal && _overlaySources!.TryGetValue(pageNumber, out int record) ? record : null;
 
     private SqliteForensicDatabase(FileStream stream, DatabaseHeader header,
-        IReadOnlyDictionary<uint, byte[]>? walPages = null, uint? pageCount = null,
-        IReadOnlyDictionary<uint, int>? walFrameNumbers = null)
+        IReadOnlyDictionary<uint, byte[]>? overlayPages = null, uint? pageCount = null,
+        IReadOnlyDictionary<uint, int>? overlaySources = null, bool overlayIsJournal = false)
     {
         _stream   = stream;
         Header    = header;
-        _walPages = walPages;
-        _walFrameNumbers = walFrameNumbers;
+        _overlayPages = overlayPages;
+        _overlaySources = overlaySources;
+        _overlayIsJournal = overlayIsJournal;
         PageCount = pageCount ?? (uint)(stream.Length / header.PageSize);
     }
 
@@ -101,17 +120,96 @@ public sealed class SqliteForensicDatabase : IDisposable
         }
     }
 
-    /// <summary>A copy of page <paramref name="pageNumber"/>'s bytes, from the WAL if it holds the
-    /// page's committed image, otherwise from the file.</summary>
+    /// <summary>
+    /// The records of <paramref name="journal"/> SQLite would play back when it next opens the
+    /// database (pager_playback in pager.c): <see cref="JournalRecordStatus.Valid"/> records of
+    /// segments whose header gives a record count. A hot journal's header count is 0 only when
+    /// the journal was never synced, and SQLite then restores nothing from that segment. A journal
+    /// with an inferred header (zeroed: its transaction committed) is never played back. Each
+    /// record is paired with its 1-based number in the file.
+    /// </summary>
+    public static IReadOnlyList<(RollbackJournalPageRecord Record, int Number, RollbackJournalSegment Segment)>
+        RecordsPlayedBack(RollbackJournalFile journal)
+    {
+        var played = new List<(RollbackJournalPageRecord, int, RollbackJournalSegment)>();
+        if (journal.HeaderInferred) return played;
+        int number = 0;
+        foreach (var segment in journal.Segments)
+        {
+            foreach (var record in segment.PageRecords)
+            {
+                number++;
+                if (segment.Header.PageCount != 0 && record.Status == JournalRecordStatus.Valid)
+                    played.Add((record, number, segment));
+            }
+        }
+        return played;
+    }
+
+    /// <summary>
+    /// Opens the database as SQLite would see it after rolling back <paramref name="journal"/>, as
+    /// it does on opening a database with a hot journal (one left by a transaction that never
+    /// committed): each page a played-back record holds (see <see cref="RecordsPlayedBack"/>) is
+    /// read from the journal, in file order so a later record wins as it does in SQLite, and the
+    /// page count is the database size in the last played segment's header (SQLite truncates the
+    /// file to it). With nothing to play back this is the same as <see cref="Open"/>.
+    /// </summary>
+    public static SqliteForensicDatabase OpenRolledBackState(string filePath, RollbackJournalFile journal)
+    {
+        var played = RecordsPlayedBack(journal);
+        if (played.Count == 0) return Open(filePath);
+
+        var pages = new Dictionary<uint, byte[]>();
+        var numbers = new Dictionary<uint, int>();
+        foreach (var (record, number, _) in played)
+        {
+            pages[record.PageNumber] = record.Page.Data;
+            numbers[record.PageNumber] = number;
+        }
+        int originalSize = played[^1].Segment.Header.DatabaseSize;
+
+        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            byte[] headerBytes;
+            if (pages.TryGetValue(1, out var page1))
+            {
+                headerBytes = page1[..100];
+            }
+            else
+            {
+                headerBytes = new byte[100];
+                stream.ReadExactly(headerBytes);
+            }
+            var header = new DatabaseHeader(headerBytes);
+            int journalPageSize = journal.Segments[0].Header.SizeOfJournalPages;
+            if (header.PageSize != journalPageSize)
+                throw new InvalidDataException(
+                    $"The journal's page size ({journalPageSize:N0}) doesn't match the database's ({header.PageSize:N0}).");
+
+            // 0 would mean the transaction created the database; keep the file's size rather than
+            // describing an empty database.
+            uint? pageCount = originalSize > 0 ? (uint)originalSize : null;
+            return new SqliteForensicDatabase(stream, header, pages, pageCount, numbers, overlayIsJournal: true);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>A copy of page <paramref name="pageNumber"/>'s bytes, from the WAL or journal if it
+    /// holds the page's image, otherwise from the file.</summary>
     private byte[] ReadPageBytes(uint pageNumber)
     {
-        if (_walPages is not null && _walPages.TryGetValue(pageNumber, out var walData))
-            return (byte[])walData.Clone();
+        if (_overlayPages is not null && _overlayPages.TryGetValue(pageNumber, out var overlayData))
+            return (byte[])overlayData.Clone();
 
         int pageSize = Header.PageSize;
         long offset = (long)(pageNumber - 1) * pageSize;
         if (offset + pageSize > _stream.Length)
-            throw new InvalidDataException($"Page {pageNumber} is beyond the end of the file and not in the WAL.");
+            throw new InvalidDataException($"Page {pageNumber} is beyond the end of the file and not in the WAL or journal.");
 
         var data = new byte[pageSize];
         _stream.Position = offset;

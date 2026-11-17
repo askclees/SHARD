@@ -57,22 +57,35 @@ public sealed class EvidenceSession : IDisposable
 
     /// <summary>
     /// The database as SQLite sees it: the file with the WAL's committed frames applied (see
-    /// <see cref="SqliteForensicDatabase.OpenCommittedState"/>). Null when there's no WAL or it has
-    /// no committed frames — the file alone is then the committed state.
+    /// <see cref="SqliteForensicDatabase.OpenCommittedState"/>), or with a hot journal rolled back
+    /// (see <see cref="SqliteForensicDatabase.OpenRolledBackState"/>), as SQLite does when it next
+    /// opens the database. Null when there's no WAL with committed frames and no journal SQLite
+    /// would play back — the file alone is then the committed state.
     /// </summary>
     public SqliteForensicDatabase? CommittedDatabase { get; }
 
     /// <summary>Why <see cref="CommittedDatabase"/> couldn't be opened although the WAL has
-    /// committed frames; shadow databases are then built from the file alone.</summary>
+    /// committed frames or the journal is hot; shadow databases are then built from the file alone.</summary>
     public string? CommittedStateError { get; }
+
+    /// <summary>True when the journal is hot: SQLite would roll it back, restoring at least one page,
+    /// the next time it opens the database (see <see cref="SqliteForensicDatabase.RecordsPlayedBack"/>).</summary>
+    public bool JournalIsHot => Journal is not null && SqliteForensicDatabase.RecordsPlayedBack(Journal).Count > 0;
 
     /// <summary>
     /// Where a shadow database's rows and schema come from: <see cref="CommittedDatabase"/> when
-    /// WAL processing is on and there is one, so live tables hold what SQLite returns; otherwise
-    /// the file. The page layout always comes from the file (see <see cref="ShadowDatabaseBuilder.Create"/>).
+    /// there is one and processing of its transaction log (<see cref="RecoveryFlags.ProcessWal"/> or
+    /// <see cref="RecoveryFlags.ProcessJournal"/>) is on, so live tables hold what SQLite returns;
+    /// otherwise the file. The page layout always comes from the file (see <see cref="ShadowDatabaseBuilder.Create"/>).
     /// </summary>
-    public SqliteForensicDatabase ShadowSource(RecoveryFlags? flags = null) =>
-        (flags ?? RecoveryFlags.Default).ProcessWal && CommittedDatabase is not null ? CommittedDatabase : Database;
+    public SqliteForensicDatabase ShadowSource(RecoveryFlags? flags = null)
+    {
+        flags ??= RecoveryFlags.Default;
+        return CommittedDatabase is { } committed &&
+               (committed.IncludesWal ? flags.ProcessWal : flags.ProcessJournal)
+            ? committed
+            : Database;
+    }
 
     /// <summary>Hashes of the database and every sidecar present, taken when the session was opened.</summary>
     public IReadOnlyList<EvidenceFileHash> Hashes { get; }
@@ -133,6 +146,11 @@ public sealed class EvidenceSession : IDisposable
         if (wal is { CommittedFrameCount: > 0 })
         {
             try { committed = SqliteForensicDatabase.OpenCommittedState(evidencePath, wal); }
+            catch (Exception ex) { committedError = ex.Message; }
+        }
+        else if (journal is not null && SqliteForensicDatabase.RecordsPlayedBack(journal).Count > 0)
+        {
+            try { committed = SqliteForensicDatabase.OpenRolledBackState(evidencePath, journal); }
             catch (Exception ex) { committedError = ex.Message; }
         }
 
@@ -214,7 +232,8 @@ public sealed class EvidenceSession : IDisposable
     /// live rows, in-tree recovery per <paramref name="flags"/>, and — if this session has a WAL
     /// and <see cref="RecoveryFlags.ProcessWal"/> is on — WAL-deleted-record recovery, or — if it
     /// has a rollback journal and <see cref="RecoveryFlags.ProcessJournal"/> is on — journal
-    /// page-image recovery, against the just-built output. Orphan-page carving is deliberately not included here; call
+    /// page-image recovery (plus, for a hot journal, the uncommitted rows the rollback discards),
+    /// against the just-built output. Orphan-page carving is deliberately not included here; call
     /// <see cref="CarveUnknownPages"/> separately if wanted, same as before this refactor.
     /// </summary>
     public (IReadOnlyList<string> Warnings, int WalRecordsInserted, int JournalRecordsInserted) BuildShadowDatabase(
@@ -226,8 +245,12 @@ public sealed class EvidenceSession : IDisposable
             layoutDatabase: Database).ToList();
         if (flags.ProcessWal && Wal is not null)
             warnings.AddRange(DescribeWalProblems(Wal).Select(p => $"WAL: {p}"));
-        if (flags.ProcessWal && CommittedStateError is not null)
+        if (flags.ProcessWal && CommittedStateError is not null && Wal is not null)
             warnings.Add($"WAL: couldn't apply committed frames, so live tables show the database file only: {CommittedStateError}");
+        if (flags.ProcessJournal && Journal is not null)
+            warnings.AddRange(DescribeJournalProblems(Journal).Select(p => $"Journal: {p}"));
+        if (flags.ProcessJournal && CommittedStateError is not null && Journal is not null)
+            warnings.Add($"Journal: couldn't roll it back, so live tables show the database file only: {CommittedStateError}");
 
         int walInserted = 0;
         if (flags.ProcessWal && Wal is not null)
@@ -242,7 +265,7 @@ public sealed class EvidenceSession : IDisposable
         {
             using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
             connection.Open();
-            journalInserted = ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, Database, Journal);
+            journalInserted = RecoverJournalHistory(connection, Journal, source, flags);
         }
 
         UpdateRowStates(shadowDbPath, flags);
@@ -252,16 +275,37 @@ public sealed class EvidenceSession : IDisposable
     /// <summary>
     /// Computes the row-state columns (<see cref="RowStates"/>) for every live and recovered table in
     /// the shadow database at <paramref name="shadowDbPath"/>. Run after any recovery step that adds
-    /// rows; it recomputes everything, so running it again is harmless. <paramref name="wal"/>
-    /// defaults to this session's own WAL; pass a WAL loaded separately (e.g. the GUI's "Load WAL
-    /// File…") to describe rows against that one instead.
+    /// rows; it recomputes everything, so running it again is harmless. The transaction log defaults
+    /// to this session's own WAL or journal; pass one loaded separately (e.g. the GUI's "Load WAL
+    /// File…" or "Load Journal File…") to describe rows against that one instead.
     /// </summary>
-    public void UpdateRowStates(string shadowDbPath, RecoveryFlags? flags = null, WalFile? wal = null)
+    public void UpdateRowStates(string shadowDbPath, RecoveryFlags? flags = null, WalFile? wal = null,
+        RollbackJournalFile? journal = null)
     {
         flags ??= RecoveryFlags.Default;
-        wal ??= Wal;
+        if (journal is null) wal ??= Wal;      // a journal given explicitly takes the place of this session's WAL
+        if (wal is null) journal ??= Journal;
         using var connection = new SqliteConnection($"Data Source={shadowDbPath}");
         connection.Open();
+
+        if (flags.ProcessJournal && journal is not null && wal is null)
+        {
+            SqliteForensicDatabase? opened = null;
+            try
+            {
+                SqliteForensicDatabase? rolledBack = null;
+                if (ReferenceEquals(journal, Journal) && CommittedDatabase is { IncludesJournal: true })
+                    rolledBack = CommittedDatabase;
+                else if (SqliteForensicDatabase.RecordsPlayedBack(journal).Count > 0)
+                {
+                    try { rolledBack = opened = SqliteForensicDatabase.OpenRolledBackState(EvidencePath, journal); }
+                    catch (Exception) { /* states are then described against the file alone */ }
+                }
+                RowStates.UpdateForJournal(connection, Database, journal, rolledBack);
+            }
+            finally { opened?.Dispose(); }
+            return;
+        }
 
         if (flags.ProcessWal && wal is { CommittedFrameCount: > 0 })
         {
@@ -277,9 +321,7 @@ public sealed class EvidenceSession : IDisposable
             return;
         }
 
-        string log = flags.ProcessWal && wal is not null ? "wal"
-                   : flags.ProcessJournal && Journal is not null ? "journal"
-                   : "none";
+        string log = flags.ProcessWal && wal is not null ? "wal" : "none";
         RowStates.Update(connection, Database, null, null, log);
     }
 
@@ -303,6 +345,53 @@ public sealed class EvidenceSession : IDisposable
             problems.Add($"{uncommitted} valid frame{(uncommitted == 1 ? "" : "s")} after the last commit never committed; SQLite ignores {(uncommitted == 1 ? "it" : "them")}");
         if (wal.StopReason is { } partial)
             problems.Add(partial);
+        return problems;
+    }
+
+    /// <summary>
+    /// Things about a rollback journal worth reporting: that SQLite would roll it back (the
+    /// transaction that wrote it never committed), records SQLite wouldn't play back (bad checksum
+    /// or page number, or after playback stops), a segment whose header has no record count, and a
+    /// truncated last record. Nothing is reported for a journal with a zeroed header beyond the
+    /// fact: its transaction committed, so none of it is played back.
+    /// </summary>
+    public static IReadOnlyList<string> DescribeJournalProblems(RollbackJournalFile journal)
+    {
+        var problems = new List<string>();
+        if (journal.HeaderInferred)
+        {
+            problems.Add("the header is zeroed (journal_mode=PERSIST): its transaction committed, so SQLite plays nothing back; the records are earlier page images");
+            return problems;
+        }
+
+        var played = SqliteForensicDatabase.RecordsPlayedBack(journal);
+        if (played.Count > 0)
+        {
+            int pages = played.Select(p => p.Record.PageNumber).Distinct().Count();
+            problems.Add($"hot: the transaction that wrote it never committed, so SQLite would roll it back, restoring {pages} page{(pages == 1 ? "" : "s")} " +
+                         $"and truncating the database to {played[^1].Segment.Header.DatabaseSize:N0} pages; live tables show the rolled-back state");
+        }
+
+        var records = journal.Segments.SelectMany(s => s.PageRecords).ToList();
+        int Count(JournalRecordStatus status) => records.Count(r => r.Status == status);
+        string Records(int n) => $"{n} record{(n == 1 ? "" : "s")}";
+        if (Count(JournalRecordStatus.InvalidPageNumber) is > 0 and var bad)
+            problems.Add($"{Records(bad)} with page number 0 or the lock-byte page");
+        if (Count(JournalRecordStatus.Stale) is > 0 and var stale)
+            problems.Add($"{Records(stale)} with a checksum that doesn't match the segment's nonce (left over from an earlier transaction); SQLite stops playback at the first");
+        if (Count(JournalRecordStatus.AfterPlaybackStopped) is > 0 and var after)
+            problems.Add($"{Records(after)} after the point where SQLite stops playback");
+
+        for (int i = 0; i < journal.Segments.Count; i++)
+        {
+            var segment = journal.Segments[i];
+            if (segment.Header.PageCount == 0 && segment.PageRecords.Count > 0)
+                problems.Add($"segment {i + 1}'s header has no record count (it was never synced), so SQLite restores none of its {Records(segment.PageRecords.Count)}");
+            if (segment.MissingRecords > 0)
+                problems.Add($"segment {i + 1}'s header counts {segment.Header.PageCount:N0} records but the file ends after {segment.PageRecords.Count:N0}");
+            if (segment.PartialRecordBytes > 0)
+                problems.Add($"{segment.PartialRecordBytes:N0} bytes at the end of segment {i + 1} are less than a whole record");
+        }
         return problems;
     }
 
@@ -423,7 +512,9 @@ public sealed class EvidenceSession : IDisposable
 
     /// <summary>
     /// Recovers deleted and previous-version records from <paramref name="journal"/>'s page images
-    /// into <paramref name="project"/>. Takes the journal explicitly for the same reason as
+    /// into <paramref name="project"/> — and, when it's this session's own hot journal and the
+    /// project was built from the rolled-back state, the database file's uncommitted rows the
+    /// rollback discards. Takes the journal explicitly for the same reason as
     /// <see cref="SyncAndRecoverWal"/>: the GUI may have loaded one manually from an arbitrary path.
     /// Returns (0, null) if <see cref="RecoveryFlags.ProcessJournal"/> is off; a failure is returned
     /// as its message rather than thrown.
@@ -433,8 +524,32 @@ public sealed class EvidenceSession : IDisposable
         flags ??= RecoveryFlags.Default;
         if (!flags.ProcessJournal) return (0, null);
 
-        try { return (project.RecoverJournalDeletedRows(journal, Database), null); }
+        try
+        {
+            var source = ReferenceEquals(journal, Journal) && CommittedDatabase is { IncludesJournal: true } &&
+                         project.LiveTablesIncludeJournal
+                ? CommittedDatabase
+                : Database;
+            using var connection = new SqliteConnection($"Data Source={project.ShadowDatabasePath}");
+            connection.Open();
+            return (RecoverJournalHistory(connection, journal, source, flags), null);
+        }
         catch (Exception ex) { return (0, ex.Message); }
+    }
+
+    /// <summary>
+    /// Journal history into a shadow built from <paramref name="source"/>: when that's the
+    /// rolled-back state, first the database file's versions of the pages the journal restores
+    /// (the uncommitted transaction's rows), then every journal record. Both skip rows already recovered.
+    /// </summary>
+    private int RecoverJournalHistory(SqliteConnection connection, RollbackJournalFile journal,
+        SqliteForensicDatabase source, RecoveryFlags flags)
+    {
+        int inserted = 0;
+        if (source.IncludesJournal)
+            inserted += ShadowDatabaseBuilder.InsertSupersededFilePageRows(connection, source, Database, flags);
+        inserted += ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, source, journal, flags);
+        return inserted;
     }
 
     /// <summary>Explicit, user-triggered scan of pages with no known owning table. Never runs
