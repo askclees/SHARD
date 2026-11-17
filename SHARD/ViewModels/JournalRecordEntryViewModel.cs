@@ -43,6 +43,7 @@ public sealed class JournalRecordEntryViewModel
         JournalRecordStatus.AfterPlaybackStopped => "AFTER STOP",
         JournalRecordStatus.Stale                => "STALE",
         JournalRecordStatus.InvalidPageNumber    => "BAD PAGE#",
+        JournalRecordStatus.ZeroedHeader         => "ZEROED HDR",
         _                                        => status.ToString(),
     };
 }

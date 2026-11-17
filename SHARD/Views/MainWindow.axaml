@@ -194,6 +194,11 @@
                           ToggleType="CheckBox"
                           IsChecked="{Binding AutoCarveUnknownPagesOnOpen}"
                           ToolTip.Tip="Automatically run Carve Unknown Pages in Standard mode right after opening a database." />
+                <MenuItem Header="Read Journals with a Zeroed Header (Experimental)"
+                          Name="MenuInferZeroedJournalHeader"
+                          ToggleType="CheckBox"
+                          IsChecked="{Binding InferZeroedJournalHeader}"
+                          ToolTip.Tip="In journal_mode=PERSIST, SQLite zeroes a journal's header when each transaction commits but leaves its records. When this is on, SHARD reads such a journal by inferring the header's values (page size from the database, sector size from the journal's length, transactions from the record checksums). Off by default; applies the next time a database or journal is opened." />
             </MenuItem>
         </Menu>
 

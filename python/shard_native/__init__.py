@@ -143,16 +143,22 @@ class ShardDatabase:
         carve_mode: str | None = None,
         carve_table_filter: list[str] | None = None,
         process_journal: bool = True,
+        infer_zeroed_journal_header: bool = False,
     ) -> dict[str, Any]:
         """
         Builds a fully recovered SQLite database at `output_path` (live rows, in-tree
         deleted/freeblock-recovered rows, and — per the arguments — WAL- or rollback-journal-
         recovered and/or orphan-page-carved rows). Returns a summary dict; `output_path` is a normal SQLite
         file afterwards, openable with the stdlib sqlite3 module.
+
+        `infer_zeroed_journal_header` is experimental and off by default: if the sibling -journal's
+        header has been zeroed (journal_mode=PERSIST leaves the records but zeroes the header when a
+        transaction commits), read its records with the header's values inferred.
         """
         options = {
             "processWal": process_wal, "processJournal": process_journal,
             "carveMode": carve_mode, "carveTableFilter": carve_table_filter,
+            "inferZeroedJournalHeader": infer_zeroed_journal_header,
         }
         return _call(
             _lib.shard_recover_to_file,
@@ -170,6 +176,7 @@ class ShardDatabase:
         carve_mode: str | None = None,
         carve_table_filter: list[str] | None = None,
         process_journal: bool = True,
+        infer_zeroed_journal_header: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Runs a read/write SQL statement against a fully recovered copy of this database via the
@@ -186,7 +193,7 @@ class ShardDatabase:
         more explicit about when recovery actually happens.
         """
         options_key = (
-            process_wal, process_journal, carve_mode,
+            process_wal, process_journal, infer_zeroed_journal_header, carve_mode,
             tuple(carve_table_filter) if carve_table_filter else None,
         )
         if self._recovered_path is None or self._recovered_options != options_key:
@@ -196,6 +203,7 @@ class ShardDatabase:
             os.remove(path)  # recover_to_file creates it fresh; it must not already exist
             self.recover_to_file(
                 path, process_wal=process_wal, process_journal=process_journal,
+                infer_zeroed_journal_header=infer_zeroed_journal_header,
                 carve_mode=carve_mode, carve_table_filter=carve_table_filter,
             )
             self._recovered_path = path
@@ -221,6 +229,7 @@ class ShardDatabase:
         carve_mode: str | None = None,
         carve_table_filter: list[str] | None = None,
         process_journal: bool = True,
+        infer_zeroed_journal_header: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Returns `table_name`'s rows via a SQL query against a recovered copy — live rows only
@@ -235,6 +244,7 @@ class ShardDatabase:
         """
         recover_kwargs = dict(
             process_wal=process_wal, process_journal=process_journal,
+            infer_zeroed_journal_header=infer_zeroed_journal_header,
             carve_mode=carve_mode, carve_table_filter=carve_table_filter,
         )
         quoted_table = _quote_identifier(table_name)

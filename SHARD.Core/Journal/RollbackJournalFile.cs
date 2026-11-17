@@ -8,6 +8,22 @@ public class RollbackJournalFile
     //why parsing stopped after the last segment (null if it ran exactly to the end of the file)
     public string? StopReason { get; private set; }
 
+    /// <summary>True when the header was zeroed and its values were inferred (see
+    /// <see cref="ZeroedHeaderJournalReader"/>); each segment is then one transaction's records,
+    /// grouped by checksum nonce, with an inferred header.</summary>
+    public bool HeaderInferred { get; }
+
+    /// <summary>How the header's values were inferred, when <see cref="HeaderInferred"/>.</summary>
+    public string? Inference { get; }
+
+    internal RollbackJournalFile(List<RollbackJournalSegment> segments, string inference, string? stopReason)
+    {
+        Segments.AddRange(segments);
+        HeaderInferred = true;
+        Inference = inference;
+        StopReason = stopReason;
+    }
+
     public RollbackJournalFile(string path, TextEncoding encoding, int reservedBytes)
     {
         using FileStream journalFile = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);

@@ -13,4 +13,10 @@ public enum JournalRecordStatus
 
     /// <summary>Page number is 0 or the lock-byte page, which SQLite never journals.</summary>
     InvalidPageNumber,
+
+    /// <summary>From a journal whose header SQLite zeroed when the transaction committed
+    /// (journal_mode=PERSIST), read with the header's values inferred — see
+    /// <see cref="Journal.ZeroedHeaderJournalReader"/>. The transaction committed, so SQLite would
+    /// never play it back: it is an image of the page from before that transaction.</summary>
+    ZeroedHeader,
 }

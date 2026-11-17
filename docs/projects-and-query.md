@@ -22,6 +22,13 @@ Recovered deleted records are stored in `_shard_recovered_<tablename>` tables in
 
 5. If a rollback journal (`-journal` file) is detected instead, each journal record is an earlier image of a database page. Records in those images that no longer exist in the database are added to `_shard_recovered_<tablename>` with `_recovery_method` = `journal_page`; older versions of records that still exist but have since changed are added as `journal_previous_version`.
 
+   **Journals with a zeroed header (experimental, off by default).** In `journal_mode=PERSIST`, SQLite keeps the journal after each transaction commits but zeroes its 28-byte header, so the journal normally can't be read. Turn on **Recovery → Read Journals with a Zeroed Header (Experimental)** to read it anyway. SHARD then infers the header's values:
+   - the page size from the database;
+   - the sector size from the journal's length (the file is one header sector followed by whole records);
+   - which records belong to which transaction, from the nonce each record's checksum implies.
+
+   The records hold the pages as they were before the last transaction, plus any left over from older, larger transactions. They're labelled `ZEROED HDR` in the Journal tab, and the Journal tab header shows how the values were inferred. The setting is saved, and applies the next time a database or journal is opened. In the library and Python it's `RecoveryOptions.InferZeroedJournalHeader` / `infer_zeroed_journal_header=True`.
+
 The status bar shows how many WAL or journal records were recovered after the project is created.
 
 ## Opening an existing project

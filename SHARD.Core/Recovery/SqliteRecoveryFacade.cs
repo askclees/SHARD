@@ -17,11 +17,14 @@ namespace SHARD.Core.Recovery;
 // these types directly).
 
 /// <summary>Options controlling <see cref="SqliteRecoveryFacade.Recover"/>. <paramref name="Flags"/>
-/// null means <see cref="RecoveryFlags.Default"/> (everything on, matching historical behavior).</summary>
+/// null means <see cref="RecoveryFlags.Default"/> (everything on, matching historical behavior).
+/// <paramref name="InferZeroedJournalHeader"/> is experimental and off by default: read a sibling
+/// journal whose header SQLite zeroed (journal_mode=PERSIST) — see <c>ZeroedHeaderJournalReader</c>.</summary>
 public sealed record RecoveryOptions(
     RecoveryFlags? Flags = null,
     CarveMode? CarveMode = null,
-    IReadOnlyList<string>? CarveTableFilter = null);
+    IReadOnlyList<string>? CarveTableFilter = null,
+    bool InferZeroedJournalHeader = false);
 
 public sealed record TableRecoverySummary(string TableName, int LiveRowCount, int RecoveredRowCount);
 
@@ -70,7 +73,8 @@ public static class SqliteRecoveryFacade
     {
         options ??= new RecoveryOptions();
 
-        using var session = EvidenceSession.Open(inputPath);
+        // InferZeroedJournalHeader is experimental and opt-in: see ZeroedHeaderJournalReader
+        using var session = EvidenceSession.Open(inputPath, inferZeroedJournalHeader: options.InferZeroedJournalHeader);
         // The committed state when a WAL applies, so live row counts match what SQLite returns
         var database = session.ShadowSource(options.Flags);
         var (warnings, walInserted, journalInserted) = session.BuildShadowDatabase(outputPath, options.Flags);

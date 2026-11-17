@@ -82,6 +82,43 @@ public class RecoveryApiTests
     }
 
     [Fact]
+    public void RecoverToFile_InferZeroedJournalHeaderOption_IsParsedAndOffByDefault()
+    {
+        // A PERSIST-mode database whose last transaction deleted a row: its journal header is zeroed
+        string dir = Path.Combine(Path.GetTempPath(), $"shard_native_persist_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        string db = Path.Combine(dir, "p.db");
+        try
+        {
+            using (var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db};Pooling=False"))
+            {
+                c.Open();
+                using var cmd = c.CreateCommand();
+                cmd.CommandText = """
+                    PRAGMA journal_mode=PERSIST; PRAGMA secure_delete=ON;
+                    CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
+                    INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+                    DELETE FROM t WHERE id = 2;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            long handle = OpenHandle(db);
+            int Inserted(string? options) => JsonDocument.Parse(RecoveryApi.RecoverToFile(handle, Path.Combine(dir, $"{Guid.NewGuid():N}.db"), options))
+                .RootElement.GetProperty("data").GetProperty("journalRecordsInserted").GetInt32();
+
+            Assert.Equal(0, Inserted(null));
+            Assert.Equal(0, Inserted("""{"processWal":true}"""));
+            Assert.True(Inserted("""{"inferZeroedJournalHeader":true}""") > 0);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
     public void GetHeader_ReturnsPageSize()
     {
         long handle = OpenHandle(OrphanLeafDb);

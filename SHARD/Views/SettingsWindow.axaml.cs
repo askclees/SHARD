@@ -22,7 +22,10 @@ public partial class SettingsWindow : Window
         int thresholdMb = value.HasValue ? (int)value.Value : AppSettings.Current.LargeDatabaseThresholdMb;
         if (thresholdMb < 1) thresholdMb = 1;
 
-        new AppSettings { LargeDatabaseThresholdMb = thresholdMb }.Save();
+        // Update the current settings rather than saving a new object, which would reset every
+        // other setting to its default
+        AppSettings.Current.LargeDatabaseThresholdMb = thresholdMb;
+        AppSettings.Current.Save();
         Close();
     }
 }

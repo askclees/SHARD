@@ -96,7 +96,11 @@ public sealed class EvidenceSession : IDisposable
     /// <summary>Opens the evidence file and detects/loads its sibling WAL or journal file, if present.</summary>
     /// <param name="reportProgress">Called with (role, bytes hashed, total bytes) while hashing,
     /// so a caller can show progress on a large file.</param>
-    public static EvidenceSession Open(string evidencePath, Action<string, long, long>? reportProgress = null)
+    /// <param name="inferZeroedJournalHeader">Experimental, off by default: if the sibling journal's
+    /// header has been zeroed (journal_mode=PERSIST), read its records with the header's values
+    /// inferred — see <see cref="ZeroedHeaderJournalReader"/>.</param>
+    public static EvidenceSession Open(string evidencePath, Action<string, long, long>? reportProgress = null,
+        bool inferZeroedJournalHeader = false)
     {
         // Hash before parsing, so the record describes the files as they were when examination began.
         var hashes = EvidenceHasher.HashEvidenceSet(evidencePath, reportProgress);
@@ -122,7 +126,7 @@ public sealed class EvidenceSession : IDisposable
         RollbackJournalFile? journal = null;
         string? journalError = null;
         if (hasJournal)
-            (journal, journalError) = LoadJournal(evidencePath + "-journal", database);
+            (journal, journalError) = LoadJournal(evidencePath + "-journal", database, inferZeroedJournalHeader);
 
         SqliteForensicDatabase? committed = null;
         string? committedError = null;
@@ -134,6 +138,17 @@ public sealed class EvidenceSession : IDisposable
 
         return new EvidenceSession(evidencePath, database, wal, walError, journal, journalError, ignoredSidecarNote,
             hashes, committed, committedError);
+    }
+
+    private static bool HeaderIsZeroed(string journalPath)
+    {
+        try
+        {
+            using var fs = new FileStream(journalPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var header = new byte[28];
+            return fs.Length >= header.Length && fs.Read(header) == header.Length && !header.AsSpan().ContainsAnyExcept((byte)0);
+        }
+        catch { return false; }
     }
 
     /// <summary>
@@ -161,8 +176,13 @@ public sealed class EvidenceSession : IDisposable
     /// from the database's, since that journal was written for a different database. Public so a
     /// manually chosen journal (e.g. the GUI's "Load Journal File…" action) gets the same check.
     /// </summary>
-    public static (RollbackJournalFile? Journal, string? Error) LoadJournal(string journalPath, SqliteForensicDatabase database)
+    /// <para><paramref name="inferZeroedHeader"/> (experimental, off by default): when the header can't
+    /// be read because SQLite zeroed it, try <see cref="ZeroedHeaderJournalReader"/>. It's only tried
+    /// after the normal parse fails, so it never changes how a journal with a valid header is read.</para>
+    public static (RollbackJournalFile? Journal, string? Error) LoadJournal(
+        string journalPath, SqliteForensicDatabase database, bool inferZeroedHeader = false)
     {
+        string normalError;
         try
         {
             var journal = new RollbackJournalFile(journalPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage);
@@ -173,8 +193,18 @@ public sealed class EvidenceSession : IDisposable
         }
         catch (Exception ex)
         {
-            return (null, ex.Message);
+            normalError = ex.Message;
         }
+
+        if (!inferZeroedHeader)
+            return (null, HeaderIsZeroed(journalPath)
+                ? $"{normalError} The header is zeroed, as SQLite leaves it in journal_mode=PERSIST; " +
+                  "the experimental zeroed-header option (InferZeroedJournalHeader) can read it."
+                : normalError);
+
+        var inferred = ZeroedHeaderJournalReader.TryRead(journalPath, database.Header.PageSize, database.PageCount,
+            database.Header.TextEncoding, database.Header.ReservedBytesPerPage, out string? inferError);
+        return inferred is not null ? (inferred, null) : (null, $"{normalError} ({inferError})");
     }
 
     // ── One-shot / batch path — CLI, facade, Python ─────────────────────────────

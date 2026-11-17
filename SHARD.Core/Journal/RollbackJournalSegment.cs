@@ -11,6 +11,16 @@ public class RollbackJournalSegment
     public bool PlaybackEnded { get; }
     private readonly uint _lockBytePage;
 
+    /// <summary>A segment assembled from records read without a valid header (see <see cref="ZeroedHeaderJournalReader"/>).</summary>
+    internal RollbackJournalSegment(RollbackJournalHeader header, List<RollbackJournalPageRecord> records, long start, long end)
+    {
+        Header = header;
+        PageRecords.AddRange(records);
+        SegmentStart = start;
+        SegmentEnd = end;
+        PlaybackEnded = true;
+    }
+
     /// <param name="firstHeader">
     /// Header of the journal's first segment, or null when this is the first segment. SQLite only
     /// reads the page and sector size from the first header and ignores them in later ones.

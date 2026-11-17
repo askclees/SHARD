@@ -818,7 +818,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var info = new FileInfo(path);
 
-            _session = EvidenceSession.Open(path, ReportHashProgress());
+            _session = EvidenceSession.Open(path, ReportHashProgress(),
+                inferZeroedJournalHeader: InferZeroedJournalHeader);
             var db = _session.Database;
             Database = db;
             _currentFilePath = path;
@@ -965,7 +966,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             }
             else if (_session.JournalError is not null)
             {
-                StatusText = $"Journal file could not be loaded: {_session.JournalError}";
+                StatusText = $"Journal file could not be loaded: {_session.JournalError}" +
+                             (_session.JournalError.Contains("InferZeroedJournalHeader")
+                                 ? " (Recovery → Read Journals with a Zeroed Header, then reopen)" : "");
             }
             if (_session.IgnoredSidecarNote is not null)
                 StatusText += $"  ·  {_session.IgnoredSidecarNote}";
@@ -1253,6 +1256,27 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>When true, <see cref="LoadFile"/> automatically runs <see cref="CarveUnknownPages"/> in loose mode right after a file finishes loading.</summary>
     public bool AutoCarveUnknownPagesOnOpen { get; set; }
 
+    /// <summary>
+    /// Experimental: read a journal whose header SQLite zeroed (journal_mode=PERSIST), inferring the
+    /// header's values. Saved in the app settings; applies the next time a database or journal is
+    /// opened.
+    /// </summary>
+    public bool InferZeroedJournalHeader
+    {
+        get => SHARD.Settings.AppSettings.Current.InferZeroedJournalHeader;
+        set
+        {
+            var settings = SHARD.Settings.AppSettings.Current;
+            if (settings.InferZeroedJournalHeader == value) return;
+            settings.InferZeroedJournalHeader = value;
+            try { settings.Save(); } catch { /* still applies for this session */ }
+            this.RaisePropertyChanged();
+            StatusText = value
+                ? "Reading journals with a zeroed header (experimental) — applies the next time a database or journal is opened"
+                : "No longer reading journals with a zeroed header — applies the next time a database or journal is opened";
+        }
+    }
+
     /// <summary><paramref name="preloaded"/>, if given, is used instead of re-parsing
     /// <paramref name="walPath"/> — the auto-detected-sibling load path in <see cref="LoadFile"/>
     /// already has it via <see cref="EvidenceSession.Wal"/>. The manual "Load WAL File…" action
@@ -1293,7 +1317,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             var journal = preloaded;
             if (journal is null)
             {
-                (journal, string? error) = EvidenceSession.LoadJournal(journalPath, Database);
+                (journal, string? error) = EvidenceSession.LoadJournal(journalPath, Database, InferZeroedJournalHeader);
                 if (journal is null)
                 {
                     StatusText = $"Journal file could not be loaded: {error}";
