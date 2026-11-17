@@ -140,7 +140,7 @@ public class ZeroedHeaderJournalTests : IDisposable
         Assert.Contains((20L, ShadowDatabaseBuilder.RecoveryMethodJournalPreviousVersion), recovered.Select(r => (r.Id, r.Method)));
         Assert.Contains((25L, ShadowDatabaseBuilder.RecoveryMethodJournalPage), recovered.Select(r => (r.Id, r.Method)));
         Assert.StartsWith("row20-", recovered.First(r => r.Id == 20).V);
-        Assert.Empty(Recovered(without).Where(r => r.Id is 20 or 25));
+        Assert.DoesNotContain(Recovered(without), r => r.Id is 20 or 25);
     }
 
     [Fact]

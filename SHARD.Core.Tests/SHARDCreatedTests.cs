@@ -164,7 +164,7 @@ public class SHARDCreatedTests(ITestOutputHelper output)
             {
                 // A row whose rowid doesn't survive (e.g. recovered from a freeblock, which overwrites
                 // it) is listed without its key column, and is matched on every field it does list.
-                Dictionary<string, string?>? actualRow;
+                Dictionary<string, string>? actualRow;
                 string description;
                 if (expectedRow.Fields.TryGetValue(pkCol, out string? expectedPk))
                 {

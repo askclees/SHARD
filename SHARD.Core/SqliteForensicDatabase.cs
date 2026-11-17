@@ -528,8 +528,8 @@ public sealed class SqliteForensicDatabase : IDisposable
         SqliteMasterRow retVal = new SqliteMasterRow()
         {
             ObjectType = objectType.Value,
-            Name = cell.FieldValues[1]?.TextValue,
-            TableName = cell.FieldValues[2]?.TextValue,
+            Name = cell.FieldValues[1]?.TextValue ?? "",
+            TableName = cell.FieldValues[2]?.TextValue ?? "",
             RootPage = (uint?)cell.FieldValues[3]?.IntegerValue,
             Sql = cell.FieldValues[4]?.TextValue,
             PageNumber = (uint)pageNum,
