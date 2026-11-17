@@ -6,6 +6,9 @@ namespace SHARD.Views;
 
 public partial class CorruptRecordAnnotationWindow : Window
 {
+    /// <summary>For the XAML loader and designer; the app uses the constructor below.</summary>
+    public CorruptRecordAnnotationWindow() => InitializeComponent();
+
     public CorruptRecordAnnotationWindow(CorruptRecordAnnotationViewModel vm)
     {
         InitializeComponent();

@@ -6,6 +6,9 @@ namespace SHARD.Views;
 
 public partial class RecoveryResultWindow : Window
 {
+    /// <summary>For the XAML loader and designer; the app uses the constructor below.</summary>
+    public RecoveryResultWindow() => InitializeComponent();
+
     public RecoveryResultWindow(RecoveryResultViewModel vm)
     {
         InitializeComponent();
