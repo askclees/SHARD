@@ -790,6 +790,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             new(PageType.Overflow,           RebuildFilteredPages),
             new(PageType.FreelistTrunk,      RebuildFilteredPages),
             new(PageType.FreelistLeaf,       RebuildFilteredPages),
+            new(PageType.PointerMap,         RebuildFilteredPages),
+            new(PageType.LockByte,           RebuildFilteredPages),
             new(PageType.Unknown,            RebuildFilteredPages),
         };
     }
@@ -1287,7 +1289,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (Database is null) return;
         try
         {
-            var wal = preloaded ?? new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
+            var wal = preloaded ?? new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage, Database.Layout);
             WalTab = new WalViewModel(walPath, wal, Database);
             JournalTab = null;
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";

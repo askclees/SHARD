@@ -35,7 +35,7 @@ public class RollbackJournalSegment
     /// reads the page and sector size from the first header and ignores them in later ones.
     /// </param>
     public RollbackJournalSegment(FileStream journalFile, long offset, TextEncoding encoding, int reservedBytes
-        , bool playbackEnded, RollbackJournalHeader? firstHeader = null)
+        , bool playbackEnded, RollbackJournalHeader? firstHeader = null, PageLayout? layout = null)
     {
         PlaybackEnded = playbackEnded;
         SegmentStart = offset;
@@ -77,7 +77,7 @@ public class RollbackJournalSegment
         while (pointer < dataSize + recordStart)
         {
             journalFile.ReadExactly(frameData, 0, (int)(entrySize));
-            RollbackJournalPageRecord record = new(frameData, (uint)pageSize, encoding, reservedBytes, Header.Nonce, pointer);
+            RollbackJournalPageRecord record = new(frameData, (uint)pageSize, encoding, reservedBytes, Header.Nonce, pointer, layout);
             record.Status = GetJournalRecordStatus(record);
             if (record.Status != JournalRecordStatus.Valid)
             {

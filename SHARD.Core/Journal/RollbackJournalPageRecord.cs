@@ -17,7 +17,8 @@ public class RollbackJournalPageRecord
     public long FileOffset { get; }
     public JournalRecordStatus Status { get; internal set; }
 
-    public RollbackJournalPageRecord(ReadOnlySpan<byte> data, uint pageSize, TextEncoding encoding, int reservedBytes, uint nonce, long fileOffset)
+    public RollbackJournalPageRecord(ReadOnlySpan<byte> data, uint pageSize, TextEncoding encoding, int reservedBytes, uint nonce, long fileOffset,
+        PageLayout? layout = null)
     {
         if (data.Length != pageSize + 8)
         {
@@ -27,7 +28,7 @@ public class RollbackJournalPageRecord
         PageNumber = BinaryPrimitives.ReadUInt32BigEndian(data[0..4]);
         int endOfData = (int)pageSize + 4;
         ReadOnlySpan<byte> pageData = data[4..endOfData];
-        Page = SqlitePage.FromBytes(PageNumber, (int)pageSize, pageData.ToArray(), encoding, reservedBytes);
+        Page = SqlitePage.FromBytes(PageNumber, (int)pageSize, pageData.ToArray(), encoding, reservedBytes, layout);
         Checksum = BinaryPrimitives.ReadUInt32BigEndian(data[endOfData..(endOfData + 4)]);
         ComputedChecksum = ComputeChecksum(pageData, nonce);
         ImpliedNonce = Checksum - (ComputedChecksum - nonce);

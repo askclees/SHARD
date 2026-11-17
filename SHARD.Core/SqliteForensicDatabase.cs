@@ -29,6 +29,10 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// <see cref="IncludesWal"/> and the WAL holds one).</summary>
     public DatabaseHeader Header { get; }
 
+    /// <summary>Which page numbers are pointer-map pages and the lock-byte page, from <see cref="Header"/>.</summary>
+    public PageLayout Layout => _layout ??= PageLayout.From(Header);
+    private PageLayout? _layout;
+
     /// <summary>Total number of pages: from the file size, or — when <see cref="IncludesWal"/> —
     /// the database size recorded in the WAL's last commit frame, as SQLite uses.</summary>
     public uint PageCount { get; }
@@ -243,7 +247,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     {
         if (pageNumber < 1 || pageNumber > PageCount)
             throw new ArgumentOutOfRangeException(nameof(pageNumber));
-        return SqlitePage.FromBytes(pageNumber, Header.PageSize, ReadPageBytes(pageNumber), Header.TextEncoding, Header.ReservedBytesPerPage);
+        return SqlitePage.FromBytes(pageNumber, Header.PageSize, ReadPageBytes(pageNumber), Header.TextEncoding, Header.ReservedBytesPerPage, Layout);
     }
 
     /// <summary>Enumerate all pages in page-number order.</summary>
@@ -706,7 +710,8 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// <summary>
     /// Returns every page number that isn't explained by anything this database knows about:
     /// not part of the sqlite_master tree, not part of any live table/index's tree, and not an
-    /// overflow page for a live row. This includes pages whose type byte is unrecognizable, freelist
+    /// overflow page for a live row, and not a pointer-map or lock-byte page (see <see cref="Layout"/>).
+    /// This includes pages whose type byte is unrecognizable, freelist
     /// leaf pages, and freelist <em>trunk</em> pages — SQLite doesn't zero freed pages, and a trunk
     /// page only has its first ~8-12 bytes overwritten with the trunk header/leaf-pointer array;
     /// the rest of the page (especially common when a whole small table's only page becomes the
@@ -768,9 +773,10 @@ public sealed class SqliteForensicDatabase : IDisposable
             }
         }
 
+        // Pointer-map and lock-byte pages are SQLite's own bookkeeping, never part of a table
         var unclaimed = new List<uint>();
         for (uint p = 1; p <= PageCount; p++)
-            if (!claimed.Contains(p)) unclaimed.Add(p);
+            if (!claimed.Contains(p) && !Layout.IsPointerMapPage(p) && !Layout.IsLockBytePage(p)) unclaimed.Add(p);
         return unclaimed;
     }
 

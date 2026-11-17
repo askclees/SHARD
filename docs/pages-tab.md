@@ -16,11 +16,21 @@ Click a page to load its detail in the centre and right panels.
 
 | Colour | Type |
 |---|---|
-| Green | B-tree leaf table page |
+| Light blue | B-tree leaf table page |
 | Blue | B-tree interior table page |
-| Purple | B-tree leaf index page |
+| Light green | B-tree leaf index page |
+| Green | B-tree interior index page |
+| Red | Freelist trunk page |
+| Dark red | Freelist leaf page |
 | Orange | Overflow page |
+| Violet | Pointer-map page (auto-vacuum databases) |
+| Dark grey | Lock-byte page (databases over 1 GiB) |
 | Grey | Unknown / unclassified |
+
+Pointer-map and lock-byte pages are identified by their page number, not their contents. A pointer-map page's first byte can be 0x02 or 0x05, the same as a B-tree interior page's type byte, so reading it by content alone would misclassify it.
+
+- **Pointer-map pages** exist only when auto-vacuum is on. Page 2 is the first, and each one is followed by the pages it describes: one 5-byte entry per page, giving the page's type (root, free, overflow or B-tree page) and the page that points to it.
+- **The lock-byte page** is the page holding file offset 1 GiB. SQLite uses it only for file locks and never writes to it.
 
 ## Filter bar
 
@@ -48,7 +58,7 @@ When a page is selected the detail panel shows four tabs.
 
 ### Page Information
 
-Displays parsed header fields for the selected page — page type, size, cell count, first freeblock offset, cell content area start, and fragmented free byte count. A collapsible **Cell Pointers** section lists the raw offset values from the pointer array.
+Displays parsed header fields for the selected page — page type, size, cell count, first freeblock offset, cell content area start, and fragmented free byte count. A collapsible **Cell Pointers** section lists the raw offset values from the pointer array. For a pointer-map page, the same section is titled **Pointer Map Entries** and lists each page the map describes, with its type and parent page.
 
 ### Cells
 

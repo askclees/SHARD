@@ -181,7 +181,7 @@ public sealed class EvidenceSession : IDisposable
     {
         try
         {
-            return (new WalFile(walPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage), null);
+            return (new WalFile(walPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage, database.Layout), null);
         }
         catch (Exception ex)
         {
@@ -203,7 +203,7 @@ public sealed class EvidenceSession : IDisposable
         string normalError;
         try
         {
-            var journal = new RollbackJournalFile(journalPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage);
+            var journal = new RollbackJournalFile(journalPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage, database.Layout);
             int journalPageSize = journal.Segments[0].Header.SizeOfJournalPages;
             if (journalPageSize != database.Header.PageSize)
                 return (null, $"its page size ({journalPageSize:N0}) does not match the database's ({database.Header.PageSize:N0})");
@@ -221,7 +221,7 @@ public sealed class EvidenceSession : IDisposable
                 : normalError);
 
         var inferred = ZeroedHeaderJournalReader.TryRead(journalPath, database.Header.PageSize, database.PageCount,
-            database.Header.TextEncoding, database.Header.ReservedBytesPerPage, out string? inferError);
+            database.Header.TextEncoding, database.Header.ReservedBytesPerPage, out string? inferError, database.Layout);
         return inferred is not null ? (inferred, null) : (null, $"{normalError} ({inferError})");
     }
 

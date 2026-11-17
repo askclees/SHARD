@@ -24,7 +24,9 @@ public class RollbackJournalFile
         StopReason = stopReason;
     }
 
-    public RollbackJournalFile(string path, TextEncoding encoding, int reservedBytes)
+    /// <param name="layout">The database's page layout, so records of pointer-map pages are recognised
+    /// (see <see cref="Pages.SqlitePage.FromBytes"/>).</param>
+    public RollbackJournalFile(string path, TextEncoding encoding, int reservedBytes, PageLayout? layout = null)
     {
         using FileStream journalFile = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         //file is truncated after commit
@@ -32,7 +34,7 @@ public class RollbackJournalFile
             throw new InvalidDataException("Journal file is too short to contain a header.");
 
         //the first segment must be valid - if it isn't, this isn't a (live) journal
-        RollbackJournalSegment first = new(journalFile, 0, encoding, reservedBytes, false);
+        RollbackJournalSegment first = new(journalFile, 0, encoding, reservedBytes, false, layout: layout);
         Segments.Add(first);
         long offset = first.SegmentEnd;
         bool playbackEnded = first.PlaybackEnded;
@@ -41,7 +43,7 @@ public class RollbackJournalFile
         {
             try
             {
-                RollbackJournalSegment segment = new(journalFile, offset, encoding, reservedBytes, playbackEnded, first.Header);
+                RollbackJournalSegment segment = new(journalFile, offset, encoding, reservedBytes, playbackEnded, first.Header, layout);
                 Segments.Add(segment);
                 offset = segment.SegmentEnd;
                 playbackEnded = segment.PlaybackEnded;
