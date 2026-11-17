@@ -159,6 +159,25 @@ public class RecoveryApiTests
     }
 
     [Fact]
+    public void GetPageResiduals_WithOrphanCarve_ReportsEachPage()
+    {
+        long handle = OpenHandle(OrphanLeafDb);
+        var doc = JsonDocument.Parse(RecoveryApi.GetPageResiduals(handle, "loose", null));
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+
+        var pages = doc.RootElement.GetProperty("data").EnumerateArray().ToList();
+        var page8 = pages.Single(p => p.GetProperty("pageNumber").GetUInt32() == 8);
+        Assert.Equal("page", page8.GetProperty("area").GetString());
+        Assert.Equal(78, page8.GetProperty("recoveredRecords").GetInt32());
+        Assert.Equal(0, page8.GetProperty("unexplainedNonZeroBytes").GetInt32());
+        Assert.True(page8.GetProperty("nonZeroBytes").GetInt32() > 0);
+
+        var withoutCarve = JsonDocument.Parse(RecoveryApi.GetPageResiduals(handle, null, null));
+        Assert.All(withoutCarve.RootElement.GetProperty("data").EnumerateArray(),
+            p => Assert.Equal("unallocated", p.GetProperty("area").GetString()));
+    }
+
+    [Fact]
     public void Carve_LooseMode_OrphanLeaf_FindsAllRows()
     {
         long handle = OpenHandle(OrphanLeafDb);

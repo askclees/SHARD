@@ -13,6 +13,13 @@ public sealed class PageListEntryViewModel
     public bool     HasDeletedRecords   { get; }
     public IReadOnlyList<(int Size, int NonZeroBytes)> UnallocatedRegions { get; }
 
+    /// <summary>
+    /// The same regions, each with the non-zero bytes recovery leaves unexplained; an unclaimed
+    /// page counts as one region covering the whole page. Null until counted, which the
+    /// "unexplained only" filter does on demand as it means running recovery on every page.
+    /// </summary>
+    public IReadOnlyList<(int Size, int NonZeroBytes)>? UnexplainedRegions { get; set; }
+
     public string TypeLabel => PageType.ToString();
     public IBrush TypeBrush => PageTypeBrushes.For(PageType);
 

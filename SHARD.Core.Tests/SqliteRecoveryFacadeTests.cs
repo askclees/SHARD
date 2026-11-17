@@ -59,6 +59,56 @@ public class SqliteRecoveryFacadeTests
     }
 
     [Fact]
+    public void GetPageResiduals_WithoutOrphanCarve_CountsOnlyTableLeafPages()
+    {
+        var residuals = SqliteRecoveryFacade.GetPageResiduals(Path.Combine(CarvingDir, "carving_orphan_leaf.db"));
+
+        Assert.NotEmpty(residuals);
+        Assert.All(residuals, r =>
+        {
+            Assert.Equal("unallocated", r.Area);
+            Assert.Equal("BTreeLeafTable", r.Type);
+            Assert.Equal("moz_places", r.TableName);
+            Assert.InRange(r.UnexplainedNonZeroBytes, 0, r.NonZeroBytes);
+        });
+    }
+
+    /// <summary>
+    /// Page 7 is the freelist trunk that replaced a leaf's header, page 8 an intact leaf cut from
+    /// the tree (see create_carving_orphan_leaf.py). Carving both explains every non-zero byte: the
+    /// 156 records, the trunk's header and leaf list, and the old leaf's surviving cell pointers.
+    /// </summary>
+    [Fact]
+    public void GetPageResiduals_WithOrphanCarve_ExplainsTheOrphanLeafFixtureCompletely()
+    {
+        var residuals = SqliteRecoveryFacade.GetPageResiduals(
+            Path.Combine(CarvingDir, "carving_orphan_leaf.db"), CarveMode.Loose);
+
+        var orphanPages = residuals.Where(r => r.Area == "page").ToList();
+        Assert.Equal([7u, 8u], orphanPages.Select(r => r.PageNumber));
+        Assert.Equal("FreelistTrunk", orphanPages[0].Type);
+        Assert.Equal(156, orphanPages.Sum(r => r.RecoveredRecords));
+        Assert.All(orphanPages, r => Assert.Equal("moz_places", r.TableName));
+        Assert.All(residuals, r => Assert.Equal(0, r.UnexplainedNonZeroBytes));
+    }
+
+    /// <summary>
+    /// Page 6 of the ambiguous-tables fixture holds row 352 with its first bytes overwritten, which
+    /// the orphan carver can't read: those bytes are what's left unexplained.
+    /// </summary>
+    [Fact]
+    public void GetPageResiduals_LeavesARecordTheCarverCannotRead_Unexplained()
+    {
+        var residuals = SqliteRecoveryFacade.GetPageResiduals(
+            Path.Combine(CarvingDir, "carving_ambiguous_tables.db"), CarveMode.Tight);
+
+        var page6 = Assert.Single(residuals, r => r.PageNumber == 6);
+        Assert.Equal("page", page6.Area);
+        Assert.Equal(23, page6.UnexplainedNonZeroBytes);
+        Assert.Equal(23, residuals.Sum(r => r.UnexplainedNonZeroBytes));
+    }
+
+    [Fact]
     public void Recover_WritesUsableDatabaseAndSummary()
     {
         string inputPath = Path.Combine(CarvingDir, "carving_orphan_leaf.db");

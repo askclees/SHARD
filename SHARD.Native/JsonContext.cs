@@ -40,6 +40,7 @@ public sealed record RecoverOptionsInput(bool ProcessWal = true, string? CarveMo
 [JsonSerializable(typeof(List<PageInfo>))]
 [JsonSerializable(typeof(List<RowInfo>))]
 [JsonSerializable(typeof(List<CarvedRowInfo>))]
+[JsonSerializable(typeof(List<PageResidualInfo>))]
 [JsonSerializable(typeof(List<EvidenceFileHash>))]
 [JsonSerializable(typeof(List<HashVerification>))]
 [JsonSerializable(typeof(IReadOnlyDictionary<string, object?>))]

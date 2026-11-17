@@ -53,6 +53,10 @@ public static unsafe class NativeExports
     public static byte* ShardCarve(long handle, byte* modeUtf8, byte* tableFilterJsonUtf8) =>
         Guard(() => RecoveryApi.Carve(handle, RequireString(modeUtf8, nameof(modeUtf8)), ToString(tableFilterJsonUtf8)));
 
+    [UnmanagedCallersOnly(EntryPoint = "shard_get_page_residuals")]
+    public static byte* ShardGetPageResiduals(long handle, byte* orphanCarveModeUtf8, byte* tableFilterJsonUtf8) =>
+        Guard(() => RecoveryApi.GetPageResiduals(handle, ToString(orphanCarveModeUtf8), ToString(tableFilterJsonUtf8)));
+
     [UnmanagedCallersOnly(EntryPoint = "shard_recover_to_file")]
     public static byte* ShardRecoverToFile(long handle, byte* outputPathUtf8, byte* optionsJsonUtf8) =>
         Guard(() => RecoveryApi.RecoverToFile(handle, RequireString(outputPathUtf8, nameof(outputPathUtf8)), ToString(optionsJsonUtf8)));

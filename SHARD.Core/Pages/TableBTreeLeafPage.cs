@@ -23,10 +23,14 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
 
     private readonly TextEncoding _encoding;
 
+    /// <summary>Bytes at the end of each page that SQLite reserves (database header offset 20).</summary>
+    public int ReservedBytes { get; }
+
     public TableBTreeLeafPage(uint pageNumber, int pageSize, byte[] data, TextEncoding encoding, int reservedBytes)
         : base(pageNumber, pageSize, data)
     {
         _encoding = encoding;
+        ReservedBytes = reservedBytes;
         foreach (int i in this.CellPointers)
         {
             var varintData = Varint.ReadAt(data, i);
@@ -263,6 +267,35 @@ public sealed class TableBTreeLeafPage : BTreeLeafPage
     private List<long> RecordDifference(List<long> list1, List<long> list2)
     {
         return list1.Where(x => !list2.Contains(x)).ToList();
+    }
+
+    /// <summary>
+    /// The byte ranges that account for data in this page's unallocated regions: every recovered
+    /// cell (deleted, carved, freeblock, annotated and carved-from-freed-page) and the page's own
+    /// structure (see <see cref="ResidualBytes.StructureRanges"/>). Read afresh on each call, so it
+    /// follows cells being added or removed.
+    /// </summary>
+    public IEnumerable<ByteRange> ExplainedRanges() =>
+        ResidualBytes.StructureRanges(this, ReservedBytes)
+            .Concat(DeletedCells.Concat(CarvedCells).Concat(FreeblockCells)
+                .Concat(AnnotatedCells).Concat(CarvedRecoveredCells)
+                .Select(ByteRange.Of));
+
+    /// <summary>
+    /// <paramref name="region"/>'s non-zero bytes, and how many of them no recovered cell or SQLite
+    /// structure accounts for. Reflects whatever recovery has run on this page so far.
+    /// </summary>
+    public ResidualCount Residual(PageUnallocatedRegion region) =>
+        ResidualBytes.Count(Data, region.Offset, region.End, ExplainedRanges().ToList());
+
+    /// <summary>The total of <see cref="Residual(PageUnallocatedRegion)"/> over every unallocated region.</summary>
+    public ResidualCount UnallocatedResidual()
+    {
+        var explained = ExplainedRanges().ToList();
+        var total = new ResidualCount(0, 0);
+        foreach (var region in UnallocatedRegions)
+            total += ResidualBytes.Count(Data, region.Offset, region.End, explained);
+        return total;
     }
 
     /// <summary>

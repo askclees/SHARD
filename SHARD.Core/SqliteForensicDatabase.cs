@@ -710,7 +710,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// <summary>
     /// Returns every page number that isn't explained by anything this database knows about:
     /// not part of the sqlite_master tree, not part of any live table/index's tree, and not an
-    /// overflow page for a live row, and not a pointer-map or lock-byte page (see <see cref="Layout"/>).
+    /// overflow page for a live row (including sqlite_master's own rows), and not a pointer-map or lock-byte page (see <see cref="Layout"/>).
     /// This includes pages whose type byte is unrecognizable, freelist
     /// leaf pages, and freelist <em>trunk</em> pages — SQLite doesn't zero freed pages, and a trunk
     /// page only has its first ~8-12 bytes overwritten with the trunk header/leaf-pointer array;
@@ -735,10 +735,16 @@ public sealed class SqliteForensicDatabase : IDisposable
         var claimed = new HashSet<uint>();
 
         foreach (uint p in GetTreePageNumbers(1)) claimed.Add(p); // sqlite_master
+        // ...and the overflow pages of its long CREATE statements
+        foreach (var masterRow in ReadTableRows(1))
+            foreach (var fragment in masterRow.OverflowFragments)
+                claimed.Add(fragment.PageNumber);
 
         foreach (var row in ReadSqliteMaster())
         {
-            if (!row.RootPage.HasValue) continue;
+            // Virtual tables (CREATE VIRTUAL TABLE, e.g. R-tree or FTS) have root page 0 and no
+            // B-tree of their own; their shadow tables are listed separately with real roots.
+            if (row.RootPage is not > 0) continue;
             foreach (uint p in GetTreePageNumbers(row.RootPage.Value)) claimed.Add(p);
 
             if (row.ObjectType == SqliteMasterObjectType.Table)
@@ -755,7 +761,7 @@ public sealed class SqliteForensicDatabase : IDisposable
             {
                 foreach (var deleted in ReadDeletedSqliteMaster())
                 {
-                    if (!deleted.Row.RootPage.HasValue) continue;
+                    if (deleted.Row.RootPage is not > 0) continue;
                     switch (deleted.RootPageStatus)
                     {
                         case RootPageStatus.Valid:
