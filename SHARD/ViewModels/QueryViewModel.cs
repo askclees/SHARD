@@ -103,28 +103,47 @@ public sealed class QueryViewModel : ViewModelBase
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name";
             using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                string name = reader.GetString(0);
-                if (!name.StartsWith(ShadowDatabaseBuilder.InternalTablePrefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    TableNames.Add(new QueryTableViewModel(name, name));
-                }
-                else if (name.StartsWith(ShadowDatabaseBuilder.DeletedTablePrefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    string bare = name[ShadowDatabaseBuilder.DeletedTablePrefix.Length..];
-                    TableNames.Add(new QueryTableViewModel(name, $"{bare} (deleted)"));
-                }
-                else if (name.StartsWith(ShadowDatabaseBuilder.RecoveredTablePrefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    string bare = name[ShadowDatabaseBuilder.RecoveredTablePrefix.Length..];
-                    TableNames.Add(new QueryTableViewModel(name, $"{bare} (recovered)"));
-                }
-            }
+            var names = new List<string>();
+            while (reader.Read()) names.Add(reader.GetString(0));
+            foreach (var table in ListedTables(names)) TableNames.Add(table);
         }
         catch
         {
             // Best-effort table list; any real query error is surfaced when the user runs a query.
+        }
+    }
+
+    /// <summary>
+    /// The tables the side panel lists, from the shadow database's table names: each live table
+    /// once, and each dropped table as "(deleted)". A live table's recovered rows aren't listed
+    /// separately, as the Live / Recovered / Live + recovered options choose them; a recovered
+    /// table is listed as "(recovered)" only when there's no live table to choose it through.
+    /// Other internal tables aren't listed.
+    /// </summary>
+    public static IEnumerable<QueryTableViewModel> ListedTables(IEnumerable<string> shadowTableNames)
+    {
+        var names = shadowTableNames.ToList();
+        var live = names
+            .Where(n => !n.StartsWith(ShadowDatabaseBuilder.InternalTablePrefix, StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string name in names)
+        {
+            if (live.Contains(name))
+            {
+                yield return new QueryTableViewModel(name, name);
+            }
+            else if (name.StartsWith(ShadowDatabaseBuilder.DeletedTablePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string bare = name[ShadowDatabaseBuilder.DeletedTablePrefix.Length..];
+                yield return new QueryTableViewModel(name, $"{bare} (deleted)");
+            }
+            else if (name.StartsWith(ShadowDatabaseBuilder.RecoveredTablePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string bare = name[ShadowDatabaseBuilder.RecoveredTablePrefix.Length..];
+                if (!live.Contains(bare))
+                    yield return new QueryTableViewModel(name, $"{bare} (recovered)");
+            }
         }
     }
 
