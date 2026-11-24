@@ -152,7 +152,7 @@
     </Window.DataTemplates>
 
     <Panel>
-    <DockPanel>
+    <DockPanel IsEnabled="{Binding !IsLoading}">
 
         <!-- ═══ Menu bar ═══════════════════════════════════════════════════ -->
         <Menu DockPanel.Dock="Top">
@@ -2590,7 +2590,9 @@
             <StackPanel HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         Spacing="14">
-                <ProgressBar IsIndeterminate="True" Width="240" />
+                <!-- No animated progress bar: redrawing it every frame competes with the work
+                     for CPU, which slowed a large load by a third where drawing is done in
+                     software (e.g. a VM). The text below changes as each step runs. -->
                 <TextBlock Text="{Binding LoadingStatusText}"
                            HorizontalAlignment="Center"
                            Foreground="White"
