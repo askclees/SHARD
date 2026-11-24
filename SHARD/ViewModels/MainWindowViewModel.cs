@@ -60,7 +60,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     // ── Page list (left panel) ────────────────────────────────────────────
     public ObservableCollection<PageListEntryViewModel> Pages         { get; } = [];
-    public ObservableCollection<PageListEntryViewModel> FilteredPages { get; } = [];
+    public BulkObservableCollection<PageListEntryViewModel> FilteredPages { get; } = [];
 
     // ── Page filters ──────────────────────────────────────────────────────
     private bool _filterHasUnallocated;
@@ -103,7 +103,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// Makes the unallocated filters count only the non-zero bytes recovery leaves unexplained,
     /// and count each page no B-tree uses as one region covering the whole page. Needs recovery run
     /// on every page, so the counts are taken the first time it's on and kept until the page list
-    /// is rebuilt (see <see cref="EnsureUnexplainedCounts"/>).
+    /// is rebuilt (see <see cref="CountUnexplainedThenRebuildAsync"/>).
     /// </summary>
     public bool FilterUnexplainedOnly
     {
@@ -158,15 +158,25 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private void RebuildFilteredPages()
     {
-        FilteredPages.Clear();
+        // The unexplained counts are made on a background thread the first time they're needed;
+        // the list is rebuilt once they're in, with whatever the filters are by then. While other
+        // work runs (e.g. a file loading), counting waits until it's done.
+        if (_countingUnexplained) return;
+        if (UnexplainedFilterActive && Database is not null && Pages.Any(p => p.UnexplainedRegions is null))
+        {
+            if (IsLoading) _rebuildWhenIdle = true;
+            else _ = CountUnexplainedThenRebuildAsync();
+            return;
+        }
+
         bool anyTypeSelected    = PageTypeFilters.Any(f => f.IsSelected);
         bool anyUnallocActive       = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
         bool deletedActive          = FilterHasDeletedPointers;
         bool deletedRecordsActive   = FilterHasDeletedRecords;
         bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
         bool unexplained        = anyUnallocActive && UnexplainedFilterActive;
-        if (unexplained) EnsureUnexplainedCounts();
 
+        var matches = new List<PageListEntryViewModel>();
         foreach (var page in Pages)
         {
             if (anyTypeSelected && !PageTypeFilters.Any(f => f.IsSelected && f.PageType == page.PageType))
@@ -180,8 +190,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                 continue;
             if (deletedRecordsActive && !page.HasDeletedRecords)
                 continue;
-            FilteredPages.Add(page);
+            matches.Add(page);
         }
+        FilteredPages.ReplaceAll(matches);
 
         FilterCountLabel = FilteredPages.Count == Pages.Count
             ? $"{Pages.Count} pages"
@@ -299,6 +310,19 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Finds the unclaimed pages and freelist trunks up front. Each means walking every B-tree,
+    /// which takes seconds on a large database, and would otherwise happen the first time a page
+    /// is selected, freezing the window on that click.
+    /// </summary>
+    private void FindUnclaimedPages()
+    {
+        if (Database is null) return;
+        IsUnclaimed(0);
+        try { _freelistTrunks ??= OrphanPageCarver.ReadFreelistTrunks(Database); }
+        catch { /* left unread; WholePageResidual reads it if a page needs it */ }
+    }
+
+    /// <summary>
     /// What recovery leaves unexplained over the whole of an unclaimed <paramref name="page"/>.
     /// Recovered and carved cells count as explained; cells that merely parse as live don't, as no
     /// table owns the page, so its rows aren't recovered until something carves them.
@@ -321,29 +345,63 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// the same recovery as selecting it does. Table leaf pages count per unallocated region;
     /// unclaimed pages count whole, as one region the size of the page.
     /// </summary>
-    private void EnsureUnexplainedCounts()
+    private async Task CountUnexplainedThenRebuildAsync()
     {
-        if (Database is null || Pages.All(p => p.UnexplainedRegions is not null)) return;
-
-        Dictionary<uint, List<int>> orphanOffsets = [];
-        if (Project is not null)
+        if (Database is null) return;
+        _countingUnexplained = true;
+        BeginBusy();
+        try
         {
-            try
-            {
-                orphanOffsets = Project.ReadAllOrphanCarvedCells()
-                    .GroupBy(c => c.PageNumber)
-                    .ToDictionary(g => g.Key, g => g.Select(c => c.CellOffset).ToList());
-            }
-            catch { /* nothing carved yet, or the project can't be read */ }
+            Report("Counting unexplained bytes…");
+            var orphanOffsets = ReadOrphanOffsets();
+            var entries = Pages.ToList();
+            var database = Database;
+            await InBackground(() => CountUnexplained(database, entries, orphanOffsets));
         }
-
-        int usableSize = Database.Layout.UsableSize;
-        foreach (var entry in Pages)
+        catch { /* uncounted pages fall back to their raw counts */ }
+        finally
         {
+            _countingUnexplained = false;
+            EndBusy();
+        }
+        RebuildFilteredPages();
+    }
+
+    private bool _countingUnexplained;
+    private bool _rebuildWhenIdle;
+
+    /// <summary>The offsets Carve Unknown Pages stored for each page, read from the project.</summary>
+    private Dictionary<uint, List<int>> ReadOrphanOffsets()
+    {
+        if (Project is null) return [];
+        try
+        {
+            return Project.ReadAllOrphanCarvedCells()
+                .GroupBy(c => c.PageNumber)
+                .ToDictionary(g => g.Key, g => g.Select(c => c.CellOffset).ToList());
+        }
+        catch { return []; } // nothing carved yet, or the project can't be read
+    }
+
+    /// <summary>
+    /// Sets <see cref="PageListEntryViewModel.UnexplainedRegions"/> on each of
+    /// <paramref name="entries"/> not yet counted. Runs on a background thread: it touches only
+    /// the entries, pages it reads itself, and caches filled in while loading.
+    /// </summary>
+    private void CountUnexplained(SqliteForensicDatabase database, List<PageListEntryViewModel> entries,
+        Dictionary<uint, List<int>> orphanOffsets)
+    {
+
+        int usableSize = database.Layout.UsableSize;
+        int done = 0;
+        foreach (var entry in entries)
+        {
+            if (++done % 2000 == 0)
+                Report($"Counting unexplained bytes… {done:N0}/{entries.Count:N0} pages");
             if (entry.UnexplainedRegions is not null) continue;
             try
             {
-                var page = Database.ReadPage(entry.PageNumber);
+                var page = database.ReadPage(entry.PageNumber);
                 RunPageRecovery(page, entry.TableName, orphanOffsets.GetValueOrDefault(entry.PageNumber) ?? []);
                 if (IsUnclaimed(entry.PageNumber))
                 {
@@ -952,19 +1010,32 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>
     /// Load a SQLite file by path.  Called from the view after the file picker resolves.
-    /// Populates <see cref="DatabaseInfoRows"/> and (once the forensic library is
-    /// implemented) <see cref="Pages"/>. Runs synchronously on the UI thread — there's no
-    /// background worker, so <see cref="Report"/> pumps the dispatcher after each stage
-    /// update so the window keeps repainting instead of appearing frozen on a large file.
+    /// Populates <see cref="DatabaseInfoRows"/> and <see cref="Pages"/>. Each slow step (hashing,
+    /// scanning pages, building the shadow database, recovery) runs on a background thread, with
+    /// progress in the loading overlay, so the window keeps responding on a large file. Does
+    /// nothing if other work is already running.
     /// <paramref name="projectFolder"/>, when given (e.g. for a large evidence file the user
     /// chose to build a project for up front), builds the shadow database directly there
     /// instead of a temp file, so the working data doesn't need to be re-saved later —
     /// and, on systems where the temp directory is RAM-backed (e.g. tmpfs on Linux), avoids
     /// implicitly consuming memory for a large database.
     /// </summary>
-    public void LoadFile(string path, string? projectFolder = null)
+    public async Task LoadFileAsync(string path, string? projectFolder = null)
     {
-        IsLoading = true;
+        if (IsLoading) return;
+        BeginBusy();
+        try
+        {
+            await LoadFileCoreAsync(path, projectFolder);
+        }
+        finally
+        {
+            EndBusy();
+        }
+    }
+
+    private async Task LoadFileCoreAsync(string path, string? projectFolder)
+    {
         try
         {
             CloseFile();
@@ -972,12 +1043,26 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             var info = new FileInfo(path);
 
-            _session = EvidenceSession.Open(path, ReportHashProgress(),
-                inferZeroedJournalHeader: InferZeroedJournalHeader);
-            var db = _session.Database;
+            bool inferZeroedHeader = InferZeroedJournalHeader;
+            var hashProgress = ReportHashProgress();
+            _session = await InBackground(() => EvidenceSession.Open(path, hashProgress,
+                inferZeroedJournalHeader: inferZeroedHeader));
+            var session = _session;
+            var db = session.Database;
+
+            // The Carve Unknown Pages tab builds its candidates from every table's live rows, which
+            // takes seconds on a large database, so it's built here rather than when Database's
+            // setter tells bindings it exists.
+            Report("Reading tables…");
+            (_pageTableMap, _carveTab) = await InBackground(() =>
+            {
+                CarveUnknownPagesViewModel? carveTab;
+                try { carveTab = new CarveUnknownPagesViewModel(db); }
+                catch { carveTab = null; } // left for CarveTab to build when first used, as before
+                return (db.BuildPageTableMap(), carveTab);
+            });
             Database = db;
             _currentFilePath = path;
-            _pageTableMap = db.BuildPageTableMap();
 
             var page1 = db.ReadPage(1);
             HeaderBytes      = page1.Data[..100];
@@ -1039,24 +1124,33 @@ public sealed class MainWindowViewModel : ViewModelBase
             DatabaseInfoRows.Add(new InfoRow("SQLite Version (96)",         $"{header.SqliteVersionNumber}  —  {FormatSqliteVersion(header.SqliteVersionNumber)}"));
 
             Report("Reading schema…");
-            foreach (var row in db.ReadSqliteMaster())
-                SchemaRows.Add(row);
-
-            try
+            var (schemaRows, deletedSchema) = await InBackground(() =>
             {
-                foreach (var deleted in db.ReadDeletedSqliteMaster())
-                    DeletedSchemaRows.Add(new DeletedSchemaRowViewModel(deleted));
-            }
-            catch { /* non-fatal — proceed without deleted table data */ }
+                var rows = db.ReadSqliteMaster().ToList();
+                List<DeletedSqliteMasterRow> deleted;
+                try { deleted = db.ReadDeletedSqliteMaster().ToList(); }
+                catch { deleted = []; } // non-fatal — proceed without deleted table data
+                return (rows, deleted);
+            });
+            foreach (var row in schemaRows)
+                SchemaRows.Add(row);
+            foreach (var deleted in deletedSchema)
+                DeletedSchemaRows.Add(new DeletedSchemaRowViewModel(deleted));
             this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
             this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
 
             Report($"Scanning pages… 0/{db.PageCount:N0}");
-            foreach (var page in db.ReadAllPages())
+            var scanned = await InBackground(() =>
             {
-                Pages.Add(MakePageListEntry(page));
-                if (Pages.Count % 2000 == 0) Report($"Scanning pages… {Pages.Count:N0}/{db.PageCount:N0}");
-            }
+                var entries = new List<PageListEntryViewModel>();
+                foreach (var page in db.ReadAllPages())
+                {
+                    entries.Add(MakePageListEntry(page));
+                    if (entries.Count % 2000 == 0) Report($"Scanning pages… {entries.Count:N0}/{db.PageCount:N0}");
+                }
+                return entries;
+            });
+            foreach (var entry in scanned) Pages.Add(entry);
             RefreshAvailableTableNames();
             RebuildFilteredPages();
 
@@ -1067,11 +1161,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             try
             {
                 Report("Building shadow database…");
-                var (project, warnings) = projectFolder is null
-                    ? ShadowProject.CreateTemporary(_currentFilePath!, _session.ShadowSource(), reportProgress: msg => Report(msg),
-                                                    evidenceHashes: _session.Hashes, layoutDatabase: Database)
-                    : ShadowProject.Create(_currentFilePath!, _session.ShadowSource(), projectFolder, reportProgress: msg => Report(msg),
-                                           evidenceHashes: _session.Hashes, layoutDatabase: Database);
+                var (project, warnings) = await InBackground(() => projectFolder is null
+                    ? ShadowProject.CreateTemporary(path, session.ShadowSource(), reportProgress: Report,
+                                                    evidenceHashes: session.Hashes, layoutDatabase: db)
+                    : ShadowProject.Create(path, session.ShadowSource(), projectFolder, reportProgress: Report,
+                                           evidenceHashes: session.Hashes, layoutDatabase: db));
                 Project = project;
 
                 Report("Recovering deleted records…");
@@ -1082,14 +1176,14 @@ public sealed class MainWindowViewModel : ViewModelBase
                     .Select(t => (t.Schema!, t.RootPage, t.RootPageStatus))
                     .ToList();
 
-                var recoveredDropped = _session.RecoverDroppedTables(project, droppedTables);
+                var recoveredDropped = await InBackground(() => session.RecoverDroppedTables(project, droppedTables));
                 foreach (var entry in recoveredDropped.Where(e => e.Status == RootPageStatus.Freed))
                     // Register schema so navigating to the page triggers lazy carving for highlights.
                     _freedPageSchemas[entry.RootPage] = entry.Schema;
 
                 Report("Refreshing page list…");
-                QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
-                RefreshPagesFromShadowDatabase();
+                QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
+                await RefreshPagesFromShadowDatabaseAsync();
                 if (warnings.Count > 0)
                 {
                     string logPath = path + ".warnings.log";
@@ -1107,7 +1201,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (_session.HasWal)
             {
                 Report("Loading WAL file…");
-                LoadWalFile(_session.WalPath, _session.Wal);
+                await LoadWalFileCoreAsync(_session.WalPath, _session.Wal);
             }
             else if (_session.WalError is not null)
             {
@@ -1116,7 +1210,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             else if (_session.HasJournal)
             {
                 Report("Loading journal file…");
-                LoadJournalFile(_session.JournalPath, _session.Journal);
+                await LoadJournalFileCoreAsync(_session.JournalPath, _session.Journal);
             }
             else if (_session.JournalError is not null)
             {
@@ -1130,11 +1224,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (AutoCarveUnknownPagesOnOpen)
             {
                 Report("Carving unknown pages…");
-                CarveUnknownPages(OrphanPageCarver.BuildCandidates(Database, CarveMode.Loose));
+                var candidates = await InBackground(() => OrphanPageCarver.BuildCandidates(db, CarveMode.Loose));
+                await CarveUnknownPagesCoreAsync(candidates);
             }
 
+            Report("Finding pages no table uses…");
+            await InBackground(FindUnclaimedPages);
+
             Report("Labelling row states…");
-            UpdateRowStates();
+            await UpdateRowStatesAsync();
         }
         catch (InvalidDataException ex)
         {
@@ -1144,23 +1242,46 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             StatusText = $"Error: {ex.Message}";
         }
-        finally
-        {
-            IsLoading = false;
-            LoadingStatusText = "";
-        }
     }
 
     /// <summary>
-    /// Updates <see cref="LoadingStatusText"/> and pumps the Avalonia dispatcher so the
-    /// window repaints immediately — <see cref="LoadFile"/> has no background worker, so
-    /// without this the UI would otherwise only redraw once the whole synchronous load finishes.
+    /// Shows <paramref name="message"/> in the loading overlay. Safe to call from the background
+    /// work loading runs: off the UI thread the update is posted to it.
     /// </summary>
     private void Report(string message)
     {
-        LoadingStatusText = message;
-        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+            LoadingStatusText = message;
+        else
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => { if (IsLoading) LoadingStatusText = message; });
     }
+
+    // Long-running work runs on a background thread so the window keeps responding (a window
+    // that stops handling messages for a few seconds is marked as not responding, even if it
+    // still repaints). While any runs, the loading overlay shows and the window's content is
+    // disabled; the count lets one step run others without hiding the overlay early.
+    private int _busyCount;
+
+    private void BeginBusy()
+    {
+        if (_busyCount++ == 0) IsLoading = true;
+    }
+
+    private void EndBusy()
+    {
+        if (--_busyCount > 0) return;
+        IsLoading = false;
+        LoadingStatusText = "";
+        if (_rebuildWhenIdle)
+        {
+            _rebuildWhenIdle = false;
+            RebuildFilteredPages();
+        }
+    }
+
+    /// <summary>Runs <paramref name="work"/> on a background thread.</summary>
+    private static Task<T> InBackground<T>(Func<T> work) => Task.Run(work);
+    private static Task InBackground(Action work) => Task.Run(work);
 
     /// <summary>
     /// Returns a hashing progress callback for <see cref="EvidenceSession.Open"/> that reports at
@@ -1223,13 +1344,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Re-hashes the evidence files and reports whether any changed since they were opened.</summary>
-    public void VerifyEvidenceHashes()
+    public async Task VerifyEvidenceHashesAsync()
     {
-        if (_session is null) return;
-        IsLoading = true;
+        if (_session is null || IsLoading) return;
+        var session = _session;
+        BeginBusy();
         try
         {
-            var results = _session.VerifyHashes(ReportHashProgress());
+            var hashProgress = ReportHashProgress();
+            var results = await InBackground(() => session.VerifyHashes(hashProgress));
             if (results.All(r => r.Status == HashVerificationStatus.Match))
             {
                 IntegrityWarning = null;
@@ -1246,8 +1369,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         finally
         {
-            IsLoading = false;
-            LoadingStatusText = "";
+            EndBusy();
         }
     }
 
@@ -1304,12 +1426,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// Save the current temporary project to <paramref name="folderPath"/> on disk,
     /// writing the manifest and persisting the shadow database.
     /// </summary>
-    public void SaveProject(string folderPath)
+    public async Task SaveProjectAsync(string folderPath)
     {
-        if (Project is null) return;
+        if (Project is null || IsLoading) return;
+        var project = Project;
+        BeginBusy();
         try
         {
-            Project.SaveTo(folderPath);
+            Report("Saving project…");
+            await InBackground(() => project.SaveTo(folderPath));
             this.RaisePropertyChanged(nameof(ProjectFolderPath));
             StatusText = $"Project saved to {folderPath}";
         }
@@ -1317,19 +1442,25 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             StatusText = $"Error saving project: {ex.Message}";
         }
+        finally
+        {
+            EndBusy();
+        }
     }
 
     /// <summary>
     /// Open an existing project folder: loads its evidence file (re-parsing it byte-level,
-    /// same as <see cref="LoadFile"/>) and points the Query tab at the already-built shadow
+    /// same as <see cref="LoadFileAsync"/>) and points the Query tab at the already-built shadow
     /// database, without rebuilding it.
     /// </summary>
-    public void OpenProject(string projectFolder)
+    public async Task OpenProjectAsync(string projectFolder)
     {
+        if (IsLoading) return;
+        BeginBusy();
         try
         {
             var project = ShadowProject.Open(projectFolder);
-            LoadFile(project.EvidenceFilePath);
+            await LoadFileCoreAsync(project.EvidenceFilePath, null);
 
             if (Database is null)
             {
@@ -1341,15 +1472,20 @@ public sealed class MainWindowViewModel : ViewModelBase
             _project?.Dispose();
             Project = project;
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
-            RefreshPagesFromShadowDatabase();
+            Report("Refreshing page list…");
+            await RefreshPagesFromShadowDatabaseAsync();
             StatusText = $"Project opened from {projectFolder}";
             CheckProjectHashes(project);
-            SyncWalToProject();
-            SyncJournalToProject();
+            await SyncWalToProjectAsync();
+            await SyncJournalToProjectAsync();
         }
         catch (Exception ex)
         {
             StatusText = $"Error opening project: {ex.Message}";
+        }
+        finally
+        {
+            EndBusy();
         }
     }
 
@@ -1357,22 +1493,25 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// Replace the live-swept <see cref="Pages"/> list with the persisted, potentially more
     /// accurate classifications (e.g. overflow/freelist) recorded in the shadow database.
     /// </summary>
-    private void RefreshPagesFromShadowDatabase()
+    private async Task RefreshPagesFromShadowDatabaseAsync()
     {
         if (Project is null) return;
+        var project = Project;
+        var db = Database;
 
         try
         {
-            var pageTypes = Project.ReadPageTypes();
+            var entries = await InBackground(() => project.ReadPageTypes()
+                .Select(t =>
+                {
+                    var page = db?.ReadPage(t.PageNumber);
+                    return page is not null
+                        ? MakePageListEntry(page, t.TableName)
+                        : new PageListEntryViewModel(t.PageNumber, t.Type, t.TableName);
+                })
+                .ToList());
             Pages.Clear();
-            foreach (var (pageNumber, type, tableName) in pageTypes)
-            {
-                var page = Database?.ReadPage(pageNumber);
-                var entry = page is not null
-                    ? MakePageListEntry(page, tableName)
-                    : new PageListEntryViewModel(pageNumber, type, tableName);
-                Pages.Add(entry);
-            }
+            foreach (var entry in entries) Pages.Add(entry);
             RefreshAvailableTableNames();
             RebuildFilteredPages();
         }
@@ -1384,24 +1523,47 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>
     /// Explicit, user-triggered scan of pages with no known owning table (see
-    /// <see cref="ShadowProject.CarveUnknownPages"/>). Not part of <see cref="LoadFile"/> —
+    /// <see cref="ShadowProject.CarveUnknownPages"/>). Not part of <see cref="LoadFileAsync"/> —
     /// invoked on demand from the UI (via the Carve Unknown Pages dialog, see
     /// <see cref="CarveUnknownPagesViewModel"/>) or, when <see cref="AutoCarveUnknownPagesOnOpen"/>
     /// is checked, automatically in Standard mode right after a file finishes loading.
     /// </summary>
-    public void CarveUnknownPages(IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> candidates)
+    public async Task CarveUnknownPagesAsync(IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> candidates)
     {
-        if (Database is null || Project is null) return;
+        if (IsLoading) return;
+        BeginBusy();
         try
         {
-            int carved = Project.CarveUnknownPages(Database, candidates, out int ambiguousSkipped);
+            Report("Carving unknown pages…");
+            await CarveUnknownPagesCoreAsync(candidates);
+        }
+        finally
+        {
+            EndBusy();
+        }
+    }
+
+    private async Task CarveUnknownPagesCoreAsync(IReadOnlyList<(TableSchema Schema, RecordStructure Structure)> candidates)
+    {
+        if (Database is null || Project is null) return;
+        var db = Database;
+        var project = Project;
+        try
+        {
+            var (carved, ambiguousSkipped) = await InBackground(() =>
+            {
+                int n = project.CarveUnknownPages(db, candidates, out int skipped);
+                return (n, skipped);
+            });
             StatusText = carved > 0
                 ? $"Carved {carved} record{(carved == 1 ? "" : "s")} from unknown pages" +
                   (ambiguousSkipped > 0 ? $"  ·  {ambiguousSkipped} ambiguous byte range{(ambiguousSkipped == 1 ? "" : "s")} skipped" : "")
                 : "Carve unknown pages: nothing recovered" +
                   (ambiguousSkipped > 0 ? $"  ·  {ambiguousSkipped} ambiguous byte range{(ambiguousSkipped == 1 ? "" : "s")} skipped" : "");
-            RefreshPagesFromShadowDatabase();
-            UpdateRowStates();
+            Report("Refreshing page list…");
+            await RefreshPagesFromShadowDatabaseAsync();
+            Report("Labelling row states…");
+            await UpdateRowStatesAsync();
         }
         catch (Exception ex)
         {
@@ -1409,7 +1571,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary>When true, <see cref="LoadFile"/> automatically runs <see cref="CarveUnknownPages"/> in loose mode right after a file finishes loading.</summary>
+    /// <summary>When true, <see cref="LoadFileAsync"/> automatically runs <see cref="CarveUnknownPagesAsync"/> in loose mode right after a file finishes loading.</summary>
     public bool AutoCarveUnknownPagesOnOpen { get; set; }
 
     /// <summary>
@@ -1433,17 +1595,34 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary><paramref name="preloaded"/>, if given, is used instead of re-parsing
-    /// <paramref name="walPath"/> — the auto-detected-sibling load path in <see cref="LoadFile"/>
-    /// already has it via <see cref="EvidenceSession.Wal"/>. The manual "Load WAL File…" action
-    /// always omits it, since that can point at an arbitrary path unrelated to the open evidence
-    /// file's own sibling.</summary>
-    public void LoadWalFile(string walPath, WalFile? preloaded = null)
+    /// <summary>Loads a WAL file chosen from the "Load WAL File…" menu, which can be any path, not
+    /// only the open evidence file's own sibling.</summary>
+    public async Task LoadWalFileAsync(string walPath)
     {
-        if (Database is null) return;
+        if (IsLoading) return;
+        BeginBusy();
         try
         {
-            var wal = preloaded ?? new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage, Database.Layout);
+            Report("Loading WAL file…");
+            await LoadWalFileCoreAsync(walPath, null);
+        }
+        finally
+        {
+            EndBusy();
+        }
+    }
+
+    /// <summary><paramref name="preloaded"/>, if given, is used instead of re-parsing
+    /// <paramref name="walPath"/>: loading a file passes the sibling WAL
+    /// <see cref="EvidenceSession.Wal"/> already parsed.</summary>
+    private async Task LoadWalFileCoreAsync(string walPath, WalFile? preloaded)
+    {
+        if (Database is null) return;
+        var db = Database;
+        try
+        {
+            var wal = preloaded ?? await InBackground(() =>
+                new WalFile(walPath, db.Header.TextEncoding, db.Header.ReservedBytesPerPage, db.Layout));
             WalTab = new WalViewModel(walPath, wal, Database);
             JournalTab = null;
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
@@ -1452,9 +1631,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                 StatusText += $"  ·  WAL: {problem}";
 
             // If a project is already open sync immediately; if not, CreateProject/OpenProject
-            // will call SyncWalToProject once the project is set (WAL loads before the project
+            // will call SyncWalToProjectAsync once the project is set (WAL loads before the project
             // is created/opened in both flows).
-            SyncWalToProject();
+            await SyncWalToProjectAsync();
         }
         catch (Exception ex)
         {
@@ -1462,18 +1641,36 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Loads a rollback journal into the Journal tab. <paramref name="preloaded"/> is
-    /// passed by the auto-detect path, where <see cref="EvidenceSession"/> has already parsed and
-    /// validated it; the manual "Load Journal File…" action omits it.</summary>
-    public void LoadJournalFile(string journalPath, RollbackJournalFile? preloaded = null)
+    /// <summary>Loads a rollback journal chosen from the "Load Journal File…" menu into the
+    /// Journal tab.</summary>
+    public async Task LoadJournalFileAsync(string journalPath)
+    {
+        if (IsLoading) return;
+        BeginBusy();
+        try
+        {
+            Report("Loading journal file…");
+            await LoadJournalFileCoreAsync(journalPath, null);
+        }
+        finally
+        {
+            EndBusy();
+        }
+    }
+
+    /// <summary><paramref name="preloaded"/> is passed when loading a file, where
+    /// <see cref="EvidenceSession"/> has already parsed and validated the sibling journal.</summary>
+    private async Task LoadJournalFileCoreAsync(string journalPath, RollbackJournalFile? preloaded)
     {
         if (Database is null) return;
+        var db = Database;
         try
         {
             var journal = preloaded;
             if (journal is null)
             {
-                (journal, string? error) = EvidenceSession.LoadJournal(journalPath, Database, InferZeroedJournalHeader);
+                bool inferZeroedHeader = InferZeroedJournalHeader;
+                (journal, string? error) = await InBackground(() => EvidenceSession.LoadJournal(journalPath, db, inferZeroedHeader));
                 if (journal is null)
                 {
                     StatusText = $"Journal file could not be loaded: {error}";
@@ -1491,7 +1688,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             // Same as the WAL: a project exists by now in both LoadFile and the manual menu
             // action; OpenProject calls this again once the saved project replaces it.
-            SyncJournalToProject();
+            await SyncJournalToProjectAsync();
         }
         catch (Exception ex)
         {
@@ -1499,25 +1696,28 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private void SyncJournalToProject()
+    private async Task SyncJournalToProjectAsync()
     {
         if (Project is null || JournalTab is null || _session is null) return;
-        var (recovered, error) = _session.RecoverJournal(Project, JournalTab.JournalFile);
+        var (session, project, journal) = (_session, Project, JournalTab.JournalFile);
+        Report("Recovering journal records…");
+        var (recovered, error) = await InBackground(() => session.RecoverJournal(project, journal));
         if (recovered > 0)
             StatusText += $"  ·  {recovered} deleted journal record{(recovered == 1 ? "" : "s")} recovered";
         if (error is not null)
             StatusText += $"  ·  Journal recovery failed: {error}";
-        UpdateRowStates();
+        await UpdateRowStatesAsync();
     }
 
     /// <summary>Recomputes the shadow database's row-state columns (_db_state, _log_state,
     /// _is_current) after a recovery step, against whichever WAL or journal its tab shows.</summary>
-    private void UpdateRowStates()
+    private async Task UpdateRowStatesAsync()
     {
         if (Project is null || _session is null) return;
+        var (session, shadowPath, wal, journal) = (_session, Project.ShadowDatabasePath, WalTab?.WalFile, JournalTab?.JournalFile);
         try
         {
-            _session.UpdateRowStates(Project.ShadowDatabasePath, wal: WalTab?.WalFile, journal: JournalTab?.JournalFile);
+            await InBackground(() => session.UpdateRowStates(shadowPath, wal: wal, journal: journal));
         }
         catch (Exception ex)
         {
@@ -1525,10 +1725,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private void SyncWalToProject()
+    private async Task SyncWalToProjectAsync()
     {
         if (Project is null || WalTab is null || _session is null) return;
-        var result = _session.SyncAndRecoverWal(Project, WalTab.WalFile);
+        var (session, project, walFile) = (_session, Project, WalTab.WalFile);
+        Report("Syncing WAL records…");
+        var result = await InBackground(() => session.SyncAndRecoverWal(project, walFile));
         if (result.Synced > 0)
             StatusText += $"  ·  {result.Synced} WAL record{(result.Synced == 1 ? "" : "s")} synced";
         if (result.SyncError is not null)
@@ -1537,7 +1739,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             StatusText += $"  ·  {result.Recovered} deleted WAL record{(result.Recovered == 1 ? "" : "s")} recovered";
         if (result.RecoveryError is not null)
             StatusText += $"  ·  WAL deleted recovery failed: {result.RecoveryError}";
-        UpdateRowStates();
+        await UpdateRowStatesAsync();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

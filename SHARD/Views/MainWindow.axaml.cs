@@ -53,7 +53,7 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
         this.FindControl<MenuItem>("MenuLoadJournal")!.Click   += OnLoadJournalClick;
-        this.FindControl<MenuItem>("MenuVerifyHashes")!.Click  += (_, _) => Vm.VerifyEvidenceHashes();
+        this.FindControl<MenuItem>("MenuVerifyHashes")!.Click  += async (_, _) => await Vm.VerifyEvidenceHashesAsync();
         this.FindControl<MenuItem>("MenuSettings")!.Click      += (_, _) => new SettingsWindow().ShowDialog(this);
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
@@ -379,7 +379,7 @@ public partial class MainWindow : Window
         }
         catch { /* size check is best-effort — fall through to a normal open */ }
 
-        Vm.LoadFile(path, projectFolder);
+        await Vm.LoadFileAsync(path, projectFolder);
     }
 
     private void OnCloseClick(object? sender, RoutedEventArgs e) =>
@@ -395,7 +395,7 @@ public partial class MainWindow : Window
         });
 
         if (files is [var file])
-            Vm.LoadWalFile(file.Path.LocalPath);
+            await Vm.LoadWalFileAsync(file.Path.LocalPath);
     }
 
     private async void OnLoadJournalClick(object? sender, RoutedEventArgs e)
@@ -408,7 +408,7 @@ public partial class MainWindow : Window
         });
 
         if (files is [var file])
-            Vm.LoadJournalFile(file.Path.LocalPath);
+            await Vm.LoadJournalFileAsync(file.Path.LocalPath);
     }
 
     private async void OnSaveProjectClick(object? sender, RoutedEventArgs e)
@@ -420,7 +420,7 @@ public partial class MainWindow : Window
         });
 
         if (folders is [var folder])
-            Vm.SaveProject(folder.Path.LocalPath);
+            await Vm.SaveProjectAsync(folder.Path.LocalPath);
     }
 
     private async void OnOpenProjectClick(object? sender, RoutedEventArgs e)
@@ -432,21 +432,21 @@ public partial class MainWindow : Window
         });
 
         if (folders is [var folder])
-            Vm.OpenProject(folder.Path.LocalPath);
+            await Vm.OpenProjectAsync(folder.Path.LocalPath);
     }
 
     // ── Recovery ─────────────────────────────────────────────────────────────
 
-    private void OnRunStandardCarveClicked(object? sender, RoutedEventArgs e)
+    private async void OnRunStandardCarveClicked(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel { CarveTab: { } carveTab } vm) return;
-        vm.CarveUnknownPages(carveTab.RunStandardCandidates());
+        await vm.CarveUnknownPagesAsync(carveTab.RunStandardCandidates());
     }
 
-    private void OnRunFocusedCarveClicked(object? sender, RoutedEventArgs e)
+    private async void OnRunFocusedCarveClicked(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel { CarveTab: { } carveTab } vm) return;
-        vm.CarveUnknownPages(carveTab.RunFocusedCandidates());
+        await vm.CarveUnknownPagesAsync(carveTab.RunFocusedCandidates());
     }
 
     private static readonly FilePickerFileType CarvingProfileFilter = new("Carving Profile")
