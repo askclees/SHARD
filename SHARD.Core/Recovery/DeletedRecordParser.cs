@@ -69,9 +69,20 @@ public static class DeletedRecordParser
             return false;
         }
         Varint headerSize = Varint.ReadAt(data, currentOffset);
+        // The header and its columns' content make up the payload, so a header bigger than the
+        // payload, or columns that already add up to more, can't match it. Rejecting as soon as
+        // that happens matters when scanning unallocated space byte by byte: a random byte read as
+        // the header size can claim most of a page, and decoding all of it at every offset made
+        // carving a page take milliseconds.
+        if (headerSize.Value > payloadSize.Value)
+        {
+            rejectionReason = PayloadHeaderMismatch;
+            return false;
+        }
         //Need to decode header size, includes varint of size in length
         List<HeaderEntry> HeaderEntries = new();
         var headerOffset = headerSize.Length;
+        var recordLength = headerSize.Value;
         while (headerOffset < headerSize.Value)
         {
             if (currentOffset + headerOffset >= data.Length)
@@ -80,15 +91,18 @@ public static class DeletedRecordParser
                 return false;
             }
             Varint temp = Varint.ReadAt(data, currentOffset + headerOffset);
-            HeaderEntries.Add(new HeaderEntry(temp));
+            var entry = new HeaderEntry(temp);
+            // A serial type too large for an int gives a negative length, which no real column has.
+            recordLength += entry.ContentLength;
+            if (entry.ContentLength < 0 || recordLength > payloadSize.Value)
+            {
+                rejectionReason = PayloadHeaderMismatch;
+                return false;
+            }
+            HeaderEntries.Add(entry);
             headerOffset += temp.Length;
         }
         //verify size against values
-        var recordLength = headerSize.Value;
-        foreach (HeaderEntry entry in HeaderEntries)
-        {
-            recordLength += entry.ContentLength;
-        }
         if (recordLength != payloadSize.Value)
         {
             rejectionReason = PayloadHeaderMismatch;

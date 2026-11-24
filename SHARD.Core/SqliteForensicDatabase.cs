@@ -215,9 +215,16 @@ public sealed class SqliteForensicDatabase : IDisposable
         if (offset + pageSize > _stream.Length)
             throw new InvalidDataException($"Page {pageNumber} is beyond the end of the file and not in the WAL or journal.");
 
+        // A positional read, not Seek then Read on the shared stream, so pages can be read from
+        // more than one thread at once (the GUI reads pages while background work does too).
         var data = new byte[pageSize];
-        _stream.Position = offset;
-        _stream.ReadExactly(data);
+        int read = 0;
+        while (read < pageSize)
+        {
+            int n = RandomAccess.Read(_stream.SafeFileHandle, data.AsSpan(read), offset + read);
+            if (n == 0) throw new EndOfStreamException($"Page {pageNumber} is cut short by the end of the file.");
+            read += n;
+        }
         return data;
     }
 
