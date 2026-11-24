@@ -13,13 +13,11 @@ public sealed class Varint
             throw new InvalidDataException("Data must be 9 bytes or less long");
         }
 
-        byte[] paddedData = new byte[MAX_VARINT_LENGTH];
-        Array.Copy(data.ToArray(),0,paddedData, 0, data.Length);
-
+        // Bytes past the end of data read as zero, so a truncated varint ends there.
         long tempValue = 0;
         for (int i = 0; i < MAX_VARINT_LENGTH; i++)
         {
-            long current = paddedData[i];
+            long current = i < data.Length ? data[i] : 0;
             //if greater than or equal to, more bytes to come
             if (current >= 128)
             {

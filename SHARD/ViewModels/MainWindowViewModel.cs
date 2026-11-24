@@ -60,7 +60,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     // ── Page list (left panel) ────────────────────────────────────────────
     public ObservableCollection<PageListEntryViewModel> Pages         { get; } = [];
-    public ObservableCollection<PageListEntryViewModel> FilteredPages { get; } = [];
+    public BulkObservableCollection<PageListEntryViewModel> FilteredPages { get; } = [];
 
     // ── Page filters ──────────────────────────────────────────────────────
     private bool _filterHasUnallocated;
@@ -158,15 +158,20 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private void RebuildFilteredPages()
     {
-        FilteredPages.Clear();
+        // Counting unexplained bytes reports progress, which lets the window handle input, so a
+        // filter can change while it runs. The rebuild that started the count runs once it's
+        // done, with whatever the filters are by then, so a nested one has nothing to do.
+        if (_countingUnexplained) return;
+        if (UnexplainedFilterActive) EnsureUnexplainedCounts();
+
         bool anyTypeSelected    = PageTypeFilters.Any(f => f.IsSelected);
         bool anyUnallocActive       = FilterHasUnallocated || FilterMinSizeEnabled || FilterMinNonZeroEnabled;
         bool deletedActive          = FilterHasDeletedPointers;
         bool deletedRecordsActive   = FilterHasDeletedRecords;
         bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
         bool unexplained        = anyUnallocActive && UnexplainedFilterActive;
-        if (unexplained) EnsureUnexplainedCounts();
 
+        var matches = new List<PageListEntryViewModel>();
         foreach (var page in Pages)
         {
             if (anyTypeSelected && !PageTypeFilters.Any(f => f.IsSelected && f.PageType == page.PageType))
@@ -180,8 +185,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                 continue;
             if (deletedRecordsActive && !page.HasDeletedRecords)
                 continue;
-            FilteredPages.Add(page);
+            matches.Add(page);
         }
+        FilteredPages.ReplaceAll(matches);
 
         FilterCountLabel = FilteredPages.Count == Pages.Count
             ? $"{Pages.Count} pages"
@@ -299,6 +305,19 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Finds the unclaimed pages and freelist trunks up front. Each means walking every B-tree,
+    /// which takes seconds on a large database, and would otherwise happen the first time a page
+    /// is selected, freezing the window on that click.
+    /// </summary>
+    private void FindUnclaimedPages()
+    {
+        if (Database is null) return;
+        IsUnclaimed(0);
+        try { _freelistTrunks ??= OrphanPageCarver.ReadFreelistTrunks(Database); }
+        catch { /* left unread; WholePageResidual reads it if a page needs it */ }
+    }
+
+    /// <summary>
     /// What recovery leaves unexplained over the whole of an unclaimed <paramref name="page"/>.
     /// Recovered and carved cells count as explained; cells that merely parse as live don't, as no
     /// table owns the page, so its rows aren't recovered until something carves them.
@@ -324,6 +343,24 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void EnsureUnexplainedCounts()
     {
         if (Database is null || Pages.All(p => p.UnexplainedRegions is not null)) return;
+        _countingUnexplained = true;
+        bool wasLoading = IsLoading;
+        IsLoading = true;
+        try { CountUnexplained(); }
+        finally
+        {
+            _countingUnexplained = false;
+            IsLoading = wasLoading;
+            if (!wasLoading) LoadingStatusText = "";
+        }
+    }
+
+    private bool _countingUnexplained;
+
+    private void CountUnexplained()
+    {
+        if (Database is null) return;
+        Report("Counting unexplained bytes…");
 
         Dictionary<uint, List<int>> orphanOffsets = [];
         if (Project is not null)
@@ -338,12 +375,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         int usableSize = Database.Layout.UsableSize;
-        foreach (var entry in Pages)
+        // A snapshot, as reporting progress runs other UI work that could change the list.
+        var entries = Pages.ToList();
+        var database = Database;
+        int done = 0;
+        foreach (var entry in entries)
         {
+            if (++done % 2000 == 0)
+            {
+                Report($"Counting unexplained bytes… {done:N0}/{entries.Count:N0} pages");
+                if (Database != database) return; // the file was closed or another opened
+            }
             if (entry.UnexplainedRegions is not null) continue;
             try
             {
-                var page = Database.ReadPage(entry.PageNumber);
+                var page = database.ReadPage(entry.PageNumber);
                 RunPageRecovery(page, entry.TableName, orphanOffsets.GetValueOrDefault(entry.PageNumber) ?? []);
                 if (IsUnclaimed(entry.PageNumber))
                 {
@@ -1132,6 +1178,9 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Report("Carving unknown pages…");
                 CarveUnknownPages(OrphanPageCarver.BuildCandidates(Database, CarveMode.Loose));
             }
+
+            Report("Finding pages no table uses…");
+            FindUnclaimedPages();
 
             Report("Labelling row states…");
             UpdateRowStates();
