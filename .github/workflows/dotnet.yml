@@ -6,8 +6,9 @@ on:
       - 'refs/tags/*'
   pull_request:
 
+# Releases are made by release.yml when a v* tag is pushed.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -43,93 +44,3 @@ jobs:
         name: corpus-recovery-report
         path: corpus-recovery-report.md
         if-no-files-found: ignore
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 10.0.x
-        include-prerelease: true
-
-    - name: Get version
-      id: version
-      run: |
-        VERSION=$(grep -oP '(?<=<Version>)[^<]+' SHARD/SHARD.csproj || true)
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-    - name: Check if release exists
-      id: check
-      run: |
-        if gh release view "v${{ steps.version.outputs.version }}" &>/dev/null; then
-          echo "exists=true" >> $GITHUB_OUTPUT
-        else
-          echo "exists=false" >> $GITHUB_OUTPUT
-        fi
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Download corpus report
-      uses: actions/download-artifact@v4
-      with:
-        name: corpus-recovery-report
-      continue-on-error: true
-
-    - name: Publish Windows
-      if: steps.check.outputs.exists == 'false'
-      run: dotnet publish SHARD/SHARD.csproj -c Release -r win-x64 --no-self-contained -o ./publish/win-x64
-
-    - name: Publish Linux
-      if: steps.check.outputs.exists == 'false'
-      run: dotnet publish SHARD/SHARD.csproj -c Release -r linux-x64 --no-self-contained -o ./publish/linux-x64
-
-    - name: Publish macOS x64
-      if: steps.check.outputs.exists == 'false'
-      run: dotnet publish SHARD/SHARD.csproj -c Release -r osx-x64 --no-self-contained -o ./publish/osx-x64
-
-    - name: Publish macOS ARM64
-      if: steps.check.outputs.exists == 'false'
-      run: dotnet publish SHARD/SHARD.csproj -c Release -r osx-arm64 --no-self-contained -o ./publish/osx-arm64
-
-    - name: Zip artifacts
-      if: steps.check.outputs.exists == 'false'
-      run: |
-        cd publish
-        zip -r ../SHARD-win-x64.zip win-x64/
-        zip -r ../SHARD-linux-x64.zip linux-x64/
-        zip -r ../SHARD-osx-x64.zip osx-x64/
-        zip -r ../SHARD-osx-arm64.zip osx-arm64/
-
-    - name: Create release
-      if: steps.check.outputs.exists == 'false'
-      run: |
-        REPORT_ARG=""
-        if [ -f corpus-recovery-report.md ]; then
-          REPORT_ARG="corpus-recovery-report.md"
-        fi
-        gh release create "v${{ steps.version.outputs.version }}" \
-          SHARD-win-x64.zip \
-          SHARD-linux-x64.zip \
-          SHARD-osx-x64.zip \
-          SHARD-osx-arm64.zip \
-          $REPORT_ARG \
-          --title "SHARD v${{ steps.version.outputs.version }}" \
-          --prerelease \
-          --generate-notes
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Attach corpus report to release
-      if: steps.version.outputs.version != ''
-      continue-on-error: true
-      run: |
-        if [ -f corpus-recovery-report.md ]; then
-          gh release upload "v${{ steps.version.outputs.version }}" corpus-recovery-report.md --clobber
-        fi
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
