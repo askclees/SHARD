@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SHARD WAL test expectations for places_wal_freeblocks.db: deleted rows that survive as freed
+  space inside WAL frames. Built with secure_delete OFF, unlike the other WAL fixtures.
+
+  Live rows (main DB raw, bypassing WAL):  5  (ids 1-5)
+  WAL-recovered deleted rows:              2  (the file-only recovery path these fixture tests use)
+    row 30 - wal_frame: a live cell in committed frames that a later committed frame replaced
+    row 50 - inserted and deleted in one transaction, so never live anywhere; recovered from a
+             freeblock inside a WAL frame (its rowid is overwritten, so it comes back as -1)
+
+  Row 2 (live in the file, deleted by the WAL) is still live as far as the file-only path is
+  concerned, so it isn't counted here; recovery with the WAL applied
+  (EvidenceSession.BuildShadowDatabase) reports it as db_file_deleted_in_wal - see WalHistoryTests.
+-->
+<database>
+    <element>
+        <meta>
+            <type>table</type>
+            <name>moz_places</name>
+            <deleted>False</deleted>
+            <rowsAlive>5</rowsAlive>
+            <rowsDeleted>2</rowsDeleted>
+        </meta>
+        <rows>
+            <row deleted="1">
+                <column><name>id</name><content>30</content></column>
+                <column><name>url</name><content>https://example30.com/</content></column>
+                <column><name>title</name><content>Title 30 - long page title long page title long page title long page title long page title long page title long page title long page title </content></column>
+                <column><name>visit_count</name><content>30</content></column>
+                <column><name>last_visit_date</name><content>1700000030</content></column>
+                <column><name>frecency</name><content>300</content></column>
+            </row>
+            <row deleted="1">
+                <!-- no id: the freeblock overwrote the rowid, so it can't be recovered -->
+                <column><name>url</name><content>https://example50.com/</content></column>
+                <column><name>title</name><content>Title 50 - long page title long page title long page title long page title long page title long page title long page title long page title </content></column>
+                <column><name>visit_count</name><content>50</content></column>
+                <column><name>last_visit_date</name><content>1700000050</content></column>
+                <column><name>frecency</name><content>500</content></column>
+            </row>
+        </rows>
+    </element>
+</database>

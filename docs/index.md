@@ -12,6 +12,7 @@
 | [Search Tab](search-tab.md) | Regex search across all page data |
 | [Projects & Query](projects-and-query.md) | Creating a project and running SQL queries |
 | [WAL Tab](wal-tab.md) | Inspecting Write-Ahead Log files |
+| [Carve Unknown Pages](carve-unknown-pages.md) | Recovering records from pages with no known owner, and reusing tuned carving parameters |
 
 ## Quick start
 

@@ -192,6 +192,79 @@ class CorpusReplicationTests(unittest.TestCase):
                             f"shard_native recovered {deleted_count}",
                         )
 
+    def test_table_rows_live_only_matches_rows(self) -> None:
+        """table_rows(include_deleted=False) must return exactly what rows() returns, for
+        every live table across the whole corpus — not just one hand-picked fixture."""
+        for entry in _CORPUS_ENTRIES:
+            with self.ShardDatabase(str(entry.db_path)) as db:
+                live_tables = {
+                    e["name"]: e
+                    for e in db.schema
+                    if e["type"] == "table" and e.get("rootPage")
+                }
+                for expected in entry.tables:
+                    if expected.is_deleted:
+                        continue
+                    if expected.name not in live_tables:
+                        continue
+
+                    with self.subTest(section=entry.section, file=entry.file_name, table=expected.name):
+                        try:
+                            expected_count = len(db.rows(expected.name))
+                            actual = db.table_rows(expected.name, include_deleted=False)
+                        except Exception as exc:
+                            self.fail(
+                                f"{entry.section}/{entry.file_name} table '{expected.name}': "
+                                f"shard_native raised {type(exc).__name__} — {exc}"
+                            )
+                            continue
+
+                        self.assertEqual(
+                            len(actual), expected_count,
+                            f"{entry.section}/{entry.file_name} table '{expected.name}': "
+                            f"rows() found {expected_count} live rows, "
+                            f"table_rows(include_deleted=False) found {len(actual)}",
+                        )
+
+    def test_table_rows_include_deleted_matches_rows_plus_deleted_rows(self) -> None:
+        """table_rows(include_deleted=True) must return exactly rows()+deleted_rows()'s
+        combined count, for every table with recoverable deleted records across the corpus."""
+        for entry in _CORPUS_ENTRIES:
+            if not any(not t.is_deleted and t.rows_deleted > 0 for t in entry.tables):
+                continue
+
+            with self.ShardDatabase(str(entry.db_path)) as db:
+                live_tables = {
+                    e["name"]: e
+                    for e in db.schema
+                    if e["type"] == "table" and e.get("rootPage")
+                }
+                for expected in entry.tables:
+                    if expected.is_deleted or expected.rows_deleted == 0:
+                        continue
+                    if expected.name not in live_tables:
+                        continue
+
+                    with self.subTest(section=entry.section, file=entry.file_name, table=expected.name):
+                        try:
+                            live_count = len(db.rows(expected.name))
+                            deleted_count = len(db.deleted_rows(expected.name))
+                            combined = db.table_rows(expected.name, include_deleted=True)
+                        except Exception as exc:
+                            self.fail(
+                                f"{entry.section}/{entry.file_name} table '{expected.name}': "
+                                f"shard_native raised {type(exc).__name__} — {exc}"
+                            )
+                            continue
+
+                        expected_total = live_count + deleted_count
+                        self.assertEqual(
+                            len(combined), expected_total,
+                            f"{entry.section}/{entry.file_name} table '{expected.name}': "
+                            f"rows()+deleted_rows() = {live_count}+{deleted_count} = {expected_total}, "
+                            f"table_rows(include_deleted=True) found {len(combined)}",
+                        )
+
 
 if __name__ == "__main__":
     unittest.main()

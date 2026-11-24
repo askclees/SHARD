@@ -8,6 +8,9 @@ public partial class DataInspectorWindow : Window
 {
     public DataInspectorControl Inspector => InspectorControl;
 
+    /// <summary>For the XAML loader and designer; the app uses the constructor below.</summary>
+    public DataInspectorWindow() => InitializeComponent();
+
     public DataInspectorWindow(string title)
     {
         InitializeComponent();

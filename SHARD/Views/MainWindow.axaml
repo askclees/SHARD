@@ -7,13 +7,151 @@
         xmlns:dg="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.DataGrid"
         x:Class="SHARD.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="SHARD — SQLite Forensic Analyser"
         Icon="avares://SHARD/Assets/shard-icon.png"
         Width="1050" Height="720"
         MinWidth="800" MinHeight="500"
         WindowState="Maximized"
         DragDrop.AllowDrop="True">
 
+    <Window.Resources>
+        <DataTemplate x:Key="InteriorComparisonInfoRowTemplate" x:DataType="vm:InfoRow">
+            <Grid ColumnDefinitions="150,*" Margin="0,2">
+                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" FontFamily="Courier New" TextWrapping="Wrap" />
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <!-- Type-matched templates (no x:Key — Avalonia selects between them by the bound object's
+         runtime type; this must be DataTemplates, not Resources, for that automatic selection
+         to happen) for the WAL Changes tab's single-frame view and its whole-transaction view
+         (one instance per page touched by the transaction). Adding comparison support for
+         another page type (see issue #23) just means adding another *ComparisonViewModel
+         implementing IPageComparisonViewModel and a matching template here — no changes
+         needed at either call site. -->
+    <Window.DataTemplates>
+        <DataTemplate x:DataType="vm:PageComparisonViewModel">
+            <StackPanel Spacing="4">
+                <TextBlock Text="{Binding ComparedAgainst}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Opacity="0.6" />
+                <TextBlock Text="No changes detected"
+                           IsVisible="{Binding HasAnyChanges,
+                                       Converter={x:Static conv:BoolConverters.Not}}"
+                           FontSize="12"
+                           Opacity="0.45"
+                           Margin="4,4,0,0" />
+                <Expander Header="{Binding AddedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasAdded}">
+                    <ItemsControl ItemsSource="{Binding AddedRows}"
+                                  Margin="8,4,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:InfoRow">
+                                <TextBlock Text="{Binding Value}"
+                                           FontSize="12"
+                                           FontFamily="Courier New"
+                                           Margin="0,2" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+                <Expander Header="{Binding RemovedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasRemoved}">
+                    <ItemsControl ItemsSource="{Binding RemovedRows}"
+                                  Margin="8,4,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:InfoRow">
+                                <TextBlock Text="{Binding Value}"
+                                           FontSize="12"
+                                           FontFamily="Courier New"
+                                           Margin="0,2" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+                <Expander Header="{Binding UpdatedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasUpdated}">
+                    <ItemsControl ItemsSource="{Binding UpdatedSections}"
+                                  Margin="4,4,0,4">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:UpdatedRecordSectionViewModel">
+                                <Expander Header="{Binding Header}"
+                                          IsExpanded="False"
+                                          Margin="0,2,0,0">
+                                    <ItemsControl ItemsSource="{Binding Changes}" Margin="8,4,0,4">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:FieldChangeViewModel">
+                                                <StackPanel Margin="0,2,0,6" Spacing="2">
+                                                    <TextBlock Text="{Binding Column}" FontSize="12" FontWeight="SemiBold" />
+                                                    <Grid ColumnDefinitions="56,*" RowDefinitions="Auto,Auto" Margin="8,0,0,0">
+                                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Before" FontSize="11" Opacity="0.55" />
+                                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Before}"
+                                                                   ToolTip.Tip="{Binding BeforeFull}"
+                                                                   FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
+                                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="After" FontSize="11" Opacity="0.55" />
+                                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding After}"
+                                                                   ToolTip.Tip="{Binding AfterFull}"
+                                                                   FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
+                                                    </Grid>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Expander>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Expander>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:DataType="vm:InteriorPageComparisonViewModel">
+            <StackPanel Spacing="4">
+                <TextBlock Text="{Binding ComparedAgainst}"
+                           FontSize="11"
+                           FontWeight="SemiBold"
+                           Opacity="0.6" />
+                <TextBlock Text="No changes detected"
+                           IsVisible="{Binding HasAnyChanges,
+                                       Converter={x:Static conv:BoolConverters.Not}}"
+                           FontSize="12"
+                           Opacity="0.45"
+                           Margin="4,4,0,0" />
+                <Expander Header="{Binding AddedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasAdded}">
+                    <ItemsControl ItemsSource="{Binding AddedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <Expander Header="{Binding RemovedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasRemoved}">
+                    <ItemsControl ItemsSource="{Binding RemovedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <Expander Header="{Binding UpdatedHeader}"
+                          IsExpanded="True"
+                          IsVisible="{Binding HasUpdated}">
+                    <ItemsControl ItemsSource="{Binding UpdatedRows}"
+                                  ItemTemplate="{StaticResource InteriorComparisonInfoRowTemplate}"
+                                  Margin="8,4,0,4" />
+                </Expander>
+                <TextBlock Text="{Binding RightPointerChangeText, StringFormat='Rightmost pointer: {0}'}"
+                           IsVisible="{Binding HasRightPointerChange}"
+                           FontSize="12"
+                           FontFamily="Courier New"
+                           Margin="4,6,0,0" />
+            </StackPanel>
+        </DataTemplate>
+    </Window.DataTemplates>
+
+    <Panel>
     <DockPanel>
 
         <!-- ═══ Menu bar ═══════════════════════════════════════════════════ -->
@@ -36,6 +174,16 @@
                 <MenuItem Header="Load _WAL File…"
                           Name="MenuLoadWal"
                           IsEnabled="{Binding HasDatabase}" />
+                <MenuItem Header="Load _Journal File…"
+                          Name="MenuLoadJournal"
+                          IsEnabled="{Binding HasDatabase}" />
+                <MenuItem Header="_Verify Evidence Hashes"
+                          Name="MenuVerifyHashes"
+                          IsEnabled="{Binding HasDatabase}"
+                          ToolTip.Tip="Re-hash the database and its -wal/-journal/-shm files and check none changed since they were opened." />
+                <Separator />
+                <MenuItem Header="_Settings…"
+                          Name="MenuSettings" />
                 <Separator />
                 <MenuItem Header="E_xit"
                           Name="MenuExit" />
@@ -46,8 +194,26 @@
                           ToggleType="CheckBox"
                           IsChecked="{Binding AutoCarveUnknownPagesOnOpen}"
                           ToolTip.Tip="Automatically run Carve Unknown Pages in Standard mode right after opening a database." />
+                <MenuItem Header="Read Journals with a Zeroed Header (Experimental)"
+                          Name="MenuInferZeroedJournalHeader"
+                          ToggleType="CheckBox"
+                          IsChecked="{Binding InferZeroedJournalHeader}"
+                          ToolTip.Tip="In journal_mode=PERSIST, SQLite zeroes a journal's header when each transaction commits but leaves its records. When this is on, SHARD reads such a journal by inferring the header's values (page size from the database, sector size from the journal's length, transactions from the record checksums). Off by default; applies the next time a database or journal is opened." />
             </MenuItem>
         </Menu>
+
+        <!-- ═══ Evidence integrity warning ═══════════════════════════════════ -->
+        <Border DockPanel.Dock="Bottom"
+                IsVisible="{Binding HasIntegrityWarning}"
+                Background="#33E5484D"
+                BorderBrush="#E5484D"
+                BorderThickness="0,1,0,0"
+                Padding="10,6">
+            <TextBlock Text="{Binding IntegrityWarning}"
+                       FontSize="12"
+                       FontWeight="SemiBold"
+                       TextWrapping="Wrap" />
+        </Border>
 
         <!-- ═══ Status bar ══════════════════════════════════════════════════ -->
         <Border DockPanel.Dock="Bottom"
@@ -156,6 +322,16 @@
                                                       IsChecked="True"
                                                       Padding="8,2"
                                                       FontSize="11" />
+                                        <TextBox x:Name="HdrGoToOffsetBox"
+                                                 Width="80"
+                                                 FontSize="11"
+                                                 PlaceholderText="Offset"
+                                                 ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
+                                                 KeyDown="OnHdrGoToOffsetKeyDown" />
+                                        <Button Content="Go"
+                                                Padding="8,2"
+                                                FontSize="11"
+                                                Click="OnHdrGoToOffsetClick" />
                                         <TextBlock x:Name="HdrFieldLabel"
                                                    Text="{Binding #HdrHexView.HoveredLabel}"
                                                    IsVisible="{Binding #HdrHexView.HoveredLabel,
@@ -288,6 +464,11 @@
                                                          IsEnabled="{Binding FilterMinNonZeroEnabled}"
                                                          Width="50" FontSize="11" Padding="4,2"/>
                                                 <TextBlock Text="bytes" FontSize="11" VerticalAlignment="Center"/>
+                                                <CheckBox IsChecked="{Binding FilterUnexplainedOnly}"
+                                                          IsEnabled="{Binding FilterMinNonZeroEnabled}"
+                                                          Content="unexplained only"
+                                                          FontSize="11"
+                                                          ToolTip.Tip="Count only the non-zero bytes recovery leaves unexplained, and include pages no B-tree uses (counted whole). Runs recovery on every page the first time it's turned on."/>
                                             </StackPanel>
                                         </StackPanel>
 
@@ -649,6 +830,49 @@
                                                             </ItemsControl.ItemTemplate>
                                                         </ItemsControl>
 
+                                                        <!-- Cells carved from the whole page (orphan-page carve, or a dropped table's freed root page) -->
+                                                        <TextBlock IsVisible="{Binding SelectedPageDetail.PageCarvedCellSections.Count}"
+                                                                   Text="Carved (from the whole page)"
+                                                                   FontSize="11"
+                                                                   FontWeight="SemiBold"
+                                                                   Opacity="0.5"
+                                                                   Margin="0,0,0,2" />
+                                                        <ItemsControl ItemsSource="{Binding SelectedPageDetail.PageCarvedCellSections}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:RemovableCellSectionViewModel">
+                                                                    <Expander IsExpanded="False"
+                                                                              Expanded="OnCellSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <Expander.Header>
+                                                                            <Grid ColumnDefinitions="*,Auto">
+                                                                                <TextBlock Grid.Column="0"
+                                                                                           Text="{Binding Header}"
+                                                                                           VerticalAlignment="Center" />
+                                                                                <Button Grid.Column="1"
+                                                                                        Content="✕"
+                                                                                        Command="{Binding RemoveCommand}"
+                                                                                        Padding="5,1"
+                                                                                        FontSize="10"
+                                                                                        Margin="8,0,0,0"
+                                                                                        VerticalAlignment="Center" />
+                                                                            </Grid>
+                                                                        </Expander.Header>
+                                                                        <ItemsControl ItemsSource="{Binding Rows}"
+                                                                                      Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+
                                                         <!-- Freeblock cells -->
                                                         <TextBlock IsVisible="{Binding SelectedPageDetail.FreeblockCellSections.Count}"
                                                                    Text="Freeblock (recovered from freed space)"
@@ -813,6 +1037,16 @@
                                                               IsChecked="True"
                                                               Padding="8,2"
                                                               FontSize="11" />
+                                                <TextBox x:Name="PageGoToOffsetBox"
+                                                         Width="80"
+                                                         FontSize="11"
+                                                         PlaceholderText="Offset"
+                                                         ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
+                                                         KeyDown="OnPageGoToOffsetKeyDown" />
+                                                <Button Content="Go"
+                                                        Padding="8,2"
+                                                        FontSize="11"
+                                                        Click="OnPageGoToOffsetClick" />
                                                 <TextBlock Text="{Binding #PageHexView.HoveredLabel}"
                                                            IsVisible="{Binding #PageHexView.HoveredLabel,
                                                                        Converter={x:Static conv:ObjectConverters.IsNotNull}}"
@@ -1020,6 +1254,16 @@
                                                                   IsChecked="True"
                                                                   Padding="8,2"
                                                                   FontSize="11" />
+                                                    <TextBox x:Name="SchemaGoToOffsetBox"
+                                                             Width="80"
+                                                             FontSize="11"
+                                                             PlaceholderText="Offset"
+                                                             ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
+                                                             KeyDown="OnSchemaGoToOffsetKeyDown" />
+                                                    <Button Content="Go"
+                                                            Padding="8,2"
+                                                            FontSize="11"
+                                                            Click="OnSchemaGoToOffsetClick" />
                                                     <TextBlock Text="{Binding #SchemaHexView.HoveredLabel}"
                                                                IsVisible="{Binding #SchemaHexView.HoveredLabel,
                                                                            Converter={x:Static conv:ObjectConverters.IsNotNull}}"
@@ -1120,7 +1364,7 @@
                                 <Grid ColumnDefinitions="*,Auto">
                                     <TextBox Grid.Column="0"
                                              Text="{Binding SearchTab.Pattern}"
-                                             Watermark="Regular expression  (e.g.  CREATE TABLE|\x00\xFF)"
+                                             PlaceholderText="Regular expression  (e.g.  CREATE TABLE|\x00\xFF)"
                                              FontFamily="Courier New"
                                              FontSize="12"
                                              KeyDown="OnSearchBoxKeyDown" />
@@ -1222,6 +1466,16 @@
                                                           IsChecked="True"
                                                           Padding="8,2"
                                                           FontSize="11" />
+                                            <TextBox x:Name="SearchGoToOffsetBox"
+                                                     Width="80"
+                                                     FontSize="11"
+                                                     PlaceholderText="Offset"
+                                                     ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
+                                                     KeyDown="OnSearchGoToOffsetKeyDown" />
+                                            <Button Content="Go"
+                                                    Padding="8,2"
+                                                    FontSize="11"
+                                                    Click="OnSearchGoToOffsetClick" />
                                             <TextBlock Text="{Binding #SearchHexView.HoveredLabel}"
                                                        IsVisible="{Binding #SearchHexView.HoveredLabel,
                                                                    Converter={x:Static conv:ObjectConverters.IsNotNull}}"
@@ -1324,7 +1578,7 @@
                                         <Grid ColumnDefinitions="*,Auto">
                                             <TextBox Grid.Column="0"
                                                      Text="{Binding QueryTab.QueryText}"
-                                                     Watermark="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
+                                                     PlaceholderText="SELECT * FROM table_name  (Enter to run, Shift+Enter for new line)"
                                                      FontFamily="Courier New"
                                                      FontSize="12"
                                                      AcceptsReturn="False"
@@ -1341,13 +1595,38 @@
                                         </Grid>
                                     </Border>
 
-                                    <!-- Include recovered records toggle -->
+                                    <!-- Record scope: live / recovered / both -->
                                     <Border Grid.Row="1"
                                             Padding="10,4"
                                             BorderThickness="0,0,0,1">
-                                        <CheckBox Content="Include recovered records"
-                                                  IsChecked="{Binding QueryTab.IncludeDeletedRecords}"
-                                                  FontSize="11" />
+                                        <StackPanel Orientation="Horizontal" Spacing="14">
+                                            <RadioButton GroupName="RecordScope"
+                                                         Content="Live only"
+                                                         IsChecked="{Binding QueryTab.IsLiveOnly}"
+                                                         FontSize="11" />
+                                            <RadioButton GroupName="RecordScope"
+                                                         Content="Recovered only"
+                                                         IsChecked="{Binding QueryTab.IsRecoveredOnly}"
+                                                         FontSize="11"
+                                                         ToolTip.Tip="Query the _shard_recovered_* table instead of the live table — includes _page_number/_cell_offset/_recovery_method so double-clicking a row jumps to where it was recovered from." />
+                                            <RadioButton GroupName="RecordScope"
+                                                         Content="Live + Recovered"
+                                                         IsChecked="{Binding QueryTab.IsLiveAndRecovered}"
+                                                         FontSize="11"
+                                                         ToolTip.Tip="Union both, tagged with an _is_recovered column." />
+                                            <TextBlock Text="Row state:" FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0" Opacity="0.7" />
+                                            <ComboBox ItemsSource="{Binding QueryTab.RowStateFilters}"
+                                                      SelectedItem="{Binding QueryTab.SelectedRowStateFilter}"
+                                                      FontSize="11"
+                                                      MinWidth="200"
+                                                      ToolTip.Tip="{Binding QueryTab.SelectedRowStateFilter.Tip}">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:RowStateFilter">
+                                                        <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Tip}" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                        </StackPanel>
                                     </Border>
 
                                     <!-- Error / summary row -->
@@ -1395,7 +1674,8 @@
                     </TabItem>
 
                     <!-- ── Tab 6: WAL ── -->
-                    <TabItem Header="{Binding WalTab.TabHeader}"
+                    <TabItem x:Name="WalTabItem"
+                             Header="{Binding WalTab.TabHeader}"
                              IsVisible="{Binding HasWal}">
                         <Grid RowDefinitions="Auto,*">
 
@@ -1404,11 +1684,13 @@
                                       Header="WAL Header"
                                       IsExpanded="False"
                                       Padding="8,4">
-                                <ScrollViewer MaxHeight="200"
-                                              Padding="16,8"
+                                <!-- spacing is a Margin on the content, not ScrollViewer Padding: the ScrollViewer leaves
+                                     its own Padding out of its desired size, which cut off the last row -->
+                                <ScrollViewer MaxHeight="320"
                                               VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled">
-                                    <ItemsControl ItemsSource="{Binding WalTab.HeaderRows}">
+                                    <ItemsControl ItemsSource="{Binding WalTab.HeaderRows}"
+                                                  Margin="16,8">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="vm:InfoRow">
                                                 <Grid ColumnDefinitions="180,*" Margin="0,4">
@@ -1420,7 +1702,8 @@
                                                     <TextBlock Grid.Column="1"
                                                                Text="{Binding Value}"
                                                                FontFamily="Courier New"
-                                                               FontSize="12" />
+                                                               FontSize="12"
+                                                               TextWrapping="Wrap" />
                                                 </Grid>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
@@ -1437,7 +1720,9 @@
                                          SelectedItem="{Binding WalTab.SelectedFrame}">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate x:DataType="vm:WalFrameEntryViewModel">
-                                            <Grid ColumnDefinitions="5,36,44,Auto,*,Auto" Height="26">
+                                            <Grid ColumnDefinitions="5,36,44,Auto,*,Auto" Height="26"
+                                                  Opacity="{Binding RowOpacity}"
+                                                  ToolTip.Tip="{Binding StatusTip}">
                                                 <Border Grid.Column="0"
                                                         Background="{Binding TypeBrush}"
                                                         CornerRadius="2,0,0,2" />
@@ -1467,13 +1752,21 @@
                                                            Opacity="0.6"
                                                            Padding="8,0,0,0"
                                                            TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Grid.Column="5"
-                                                           Text="COMMIT"
-                                                           IsVisible="{Binding IsCommit}"
-                                                           VerticalAlignment="Center"
-                                                           FontSize="10"
-                                                           Opacity="0.55"
-                                                           Padding="6,0,8,0" />
+                                                <StackPanel Grid.Column="5"
+                                                            Orientation="Horizontal"
+                                                            VerticalAlignment="Center"
+                                                            Spacing="6"
+                                                            Margin="6,0,8,0">
+                                                    <TextBlock Text="COMMIT"
+                                                               IsVisible="{Binding IsCommit}"
+                                                               FontSize="10"
+                                                               Opacity="0.55" />
+                                                    <TextBlock Text="{Binding StatusLabel}"
+                                                               IsVisible="{Binding HasStatusLabel}"
+                                                               ToolTip.Tip="{Binding StatusTip}"
+                                                               FontSize="10"
+                                                               FontWeight="SemiBold" />
+                                                </StackPanel>
                                             </Grid>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
@@ -1617,86 +1910,65 @@
 
                                             <!-- Tab: Changes -->
                                             <TabItem Header="Changes">
-                                                <Grid>
-                                                    <TextBlock IsVisible="{Binding WalTab.HasComparison,
-                                                                           Converter={x:Static conv:BoolConverters.Not}}"
-                                                               Text="No comparison available for this page type"
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center"
-                                                               Opacity="0.35"
-                                                               FontSize="13" />
-                                                    <ScrollViewer IsVisible="{Binding WalTab.HasComparison}"
-                                                                  VerticalScrollBarVisibility="Auto"
-                                                                  HorizontalScrollBarVisibility="Disabled">
-                                                        <StackPanel Margin="14,10" Spacing="4">
-                                                            <TextBlock Text="{Binding WalTab.SelectedFrameComparison.ComparedAgainst}"
-                                                                       FontSize="11"
-                                                                       FontWeight="SemiBold"
-                                                                       Opacity="0.6" />
-                                                            <TextBlock Text="No changes detected"
-                                                                       IsVisible="{Binding WalTab.SelectedFrameComparison.HasAnyChanges,
-                                                                                   Converter={x:Static conv:BoolConverters.Not}}"
-                                                                       FontSize="12"
-                                                                       Opacity="0.45"
-                                                                       Margin="4,4,0,0" />
-                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.AddedHeader}"
-                                                                      IsExpanded="True"
-                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasAdded}">
-                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.AddedRows}"
-                                                                              Margin="8,4,0,4">
+                                                <DockPanel>
+                                                    <CheckBox DockPanel.Dock="Top"
+                                                              Content="Show whole transaction"
+                                                              IsChecked="{Binding WalTab.ShowWholeTransaction}"
+                                                              IsVisible="{Binding WalTab.SelectedFrame,
+                                                                          Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                              FontSize="12"
+                                                              Margin="14,8,14,0" />
+                                                    <Grid>
+                                                        <TextBlock IsVisible="{Binding WalTab.ShowNoComparisonPlaceholder}"
+                                                                   Text="No comparison available for this page type"
+                                                                   HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"
+                                                                   Opacity="0.35"
+                                                                   FontSize="13" />
+
+                                                        <!-- Single-frame view: this page's changes vs. its previous WAL frame or the database page. -->
+                                                        <ScrollViewer IsVisible="{Binding WalTab.ShowSingleFrameView}"
+                                                                      VerticalScrollBarVisibility="Auto"
+                                                                      HorizontalScrollBarVisibility="Disabled">
+                                                            <ContentControl Margin="14,10"
+                                                                            Content="{Binding WalTab.SelectedFrameComparison}" />
+                                                        </ScrollViewer>
+
+                                                        <!-- Whole-transaction view: every page touched between the previous commit and this one. -->
+                                                        <ScrollViewer IsVisible="{Binding WalTab.ShowWholeTransaction}"
+                                                                      VerticalScrollBarVisibility="Auto"
+                                                                      HorizontalScrollBarVisibility="Disabled">
+                                                            <StackPanel Margin="14,10" Spacing="4">
+                                                                <TextBlock Text="No changes detected in this transaction"
+                                                                           IsVisible="{Binding WalTab.HasAnyTransactionChanges,
+                                                                                       Converter={x:Static conv:BoolConverters.Not}}"
+                                                                           FontSize="12"
+                                                                           Opacity="0.45"
+                                                                           Margin="4,4,0,0" />
+                                                                <ItemsControl ItemsSource="{Binding WalTab.TransactionPages}">
                                                                     <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:InfoRow">
-                                                                            <TextBlock Text="{Binding Value}"
-                                                                                       FontSize="12"
-                                                                                       FontFamily="Courier New"
-                                                                                       Margin="0,2" />
-                                                                        </DataTemplate>
-                                                                    </ItemsControl.ItemTemplate>
-                                                                </ItemsControl>
-                                                            </Expander>
-                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.RemovedHeader}"
-                                                                      IsExpanded="True"
-                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasRemoved}">
-                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.RemovedRows}"
-                                                                              Margin="8,4,0,4">
-                                                                    <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:InfoRow">
-                                                                            <TextBlock Text="{Binding Value}"
-                                                                                       FontSize="12"
-                                                                                       FontFamily="Courier New"
-                                                                                       Margin="0,2" />
-                                                                        </DataTemplate>
-                                                                    </ItemsControl.ItemTemplate>
-                                                                </ItemsControl>
-                                                            </Expander>
-                                                            <Expander Header="{Binding WalTab.SelectedFrameComparison.UpdatedHeader}"
-                                                                      IsExpanded="True"
-                                                                      IsVisible="{Binding WalTab.SelectedFrameComparison.HasUpdated}">
-                                                                <ItemsControl ItemsSource="{Binding WalTab.SelectedFrameComparison.UpdatedSections}"
-                                                                              Margin="4,4,0,4">
-                                                                    <ItemsControl.ItemTemplate>
-                                                                        <DataTemplate x:DataType="vm:UpdatedRecordSectionViewModel">
+                                                                        <DataTemplate x:DataType="vm:WalTransactionPageEntryViewModel">
                                                                             <Expander Header="{Binding Header}"
-                                                                                      IsExpanded="False"
-                                                                                      Margin="0,2,0,0">
-                                                                                <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
-                                                                                    <ItemsControl.ItemTemplate>
-                                                                                        <DataTemplate x:DataType="vm:InfoRow">
-                                                                                            <Grid ColumnDefinitions="80,*" Margin="0,2">
-                                                                                                <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
-                                                                                                <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
-                                                                                            </Grid>
-                                                                                        </DataTemplate>
-                                                                                    </ItemsControl.ItemTemplate>
-                                                                                </ItemsControl>
+                                                                                      IsExpanded="True"
+                                                                                      Margin="0,4">
+                                                                                <StackPanel>
+                                                                                    <TextBlock Text="No comparison available for this page type"
+                                                                                               IsVisible="{Binding HasComparison,
+                                                                                                           Converter={x:Static conv:BoolConverters.Not}}"
+                                                                                               Opacity="0.35"
+                                                                                               FontSize="12"
+                                                                                               Margin="8,4" />
+                                                                                    <ContentControl Margin="8,4"
+                                                                                                    Content="{Binding Comparison}" />
+                                                                                </StackPanel>
                                                                             </Expander>
                                                                         </DataTemplate>
                                                                     </ItemsControl.ItemTemplate>
                                                                 </ItemsControl>
-                                                            </Expander>
-                                                        </StackPanel>
-                                                    </ScrollViewer>
-                                                </Grid>
+                                                            </StackPanel>
+                                                        </ScrollViewer>
+                                                    </Grid>
+                                                </DockPanel>
                                             </TabItem>
 
                                         </TabControl>
@@ -1719,6 +1991,16 @@
                                                                   IsChecked="True"
                                                                   Padding="8,2"
                                                                   FontSize="11" />
+                                                    <TextBox x:Name="WalGoToOffsetBox"
+                                                             Width="80"
+                                                             FontSize="11"
+                                                             PlaceholderText="Offset"
+                                                             ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
+                                                             KeyDown="OnWalGoToOffsetKeyDown" />
+                                                    <Button Content="Go"
+                                                            Padding="8,2"
+                                                            FontSize="11"
+                                                            Click="OnWalGoToOffsetClick" />
                                                     <TextBlock Text="{Binding #WalHexView.HoveredLabel}"
                                                                IsVisible="{Binding #WalHexView.HoveredLabel,
                                                                            Converter={x:Static conv:ObjectConverters.IsNotNull}}"
@@ -1760,18 +2042,443 @@
                         </Grid>
                     </TabItem>
 
+                    <!-- ── Tab 7: Rollback journal (shown instead of the WAL tab) ── -->
+                    <TabItem x:Name="JournalTabItem"
+                             Header="{Binding JournalTab.TabHeader}"
+                             IsVisible="{Binding HasJournal}">
+                        <Grid RowDefinitions="Auto,*">
+
+                            <!-- Journal header (collapsible) -->
+                            <Expander Grid.Row="0"
+                                      Header="Journal Header"
+                                      IsExpanded="False"
+                                      Padding="8,4">
+                                <!-- spacing is a Margin on the content, not ScrollViewer Padding: the ScrollViewer leaves
+                                     its own Padding out of its desired size, which cut off the last row -->
+                                <ScrollViewer MaxHeight="320"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding JournalTab.HeaderRows}"
+                                                  Margin="16,8">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:InfoRow">
+                                                <Grid ColumnDefinitions="180,*" Margin="0,4">
+                                                    <TextBlock Grid.Column="0"
+                                                               Text="{Binding Label}"
+                                                               FontWeight="SemiBold"
+                                                               Opacity="0.6"
+                                                               FontSize="12" />
+                                                    <TextBlock Grid.Column="1"
+                                                               Text="{Binding Value}"
+                                                               FontFamily="Courier New"
+                                                               FontSize="12"
+                                                               TextWrapping="Wrap" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Expander>
+
+                            <!-- Main area: record list | tabbed detail | hex -->
+                            <Grid Grid.Row="1" ColumnDefinitions="320,4,*">
+
+                                <!-- Record list -->
+                                <ListBox Grid.Column="0"
+                                         ItemsSource="{Binding JournalTab.Records}"
+                                         SelectedItem="{Binding JournalTab.SelectedRecord}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:JournalRecordEntryViewModel">
+                                            <Grid ColumnDefinitions="5,36,26,44,Auto,*,Auto" Height="26"
+                                                  Opacity="{Binding RowOpacity}">
+                                                <Border Grid.Column="0"
+                                                        Background="{Binding TypeBrush}"
+                                                        CornerRadius="2,0,0,2" />
+                                                <TextBlock Grid.Column="1"
+                                                           Text="{Binding RecordIndex}"
+                                                           VerticalAlignment="Center"
+                                                           TextAlignment="Right"
+                                                           Padding="0,0,6,0"
+                                                           FontSize="11"
+                                                           Opacity="0.4" />
+                                                <TextBlock Grid.Column="2"
+                                                           Text="{Binding SegmentIndex, StringFormat='S{0}'}"
+                                                           ToolTip.Tip="Journal segment"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="10"
+                                                           Opacity="0.4" />
+                                                <TextBlock Grid.Column="3"
+                                                           Text="{Binding PageNumber}"
+                                                           VerticalAlignment="Center"
+                                                           TextAlignment="Right"
+                                                           Padding="0,0,8,0"
+                                                           FontSize="11"
+                                                           Opacity="0.55" />
+                                                <TextBlock Grid.Column="4"
+                                                           Text="{Binding TypeLabel}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="12" />
+                                                <TextBlock Grid.Column="5"
+                                                           Text="{Binding TableName}"
+                                                           IsVisible="{Binding HasTable}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="11"
+                                                           Opacity="0.6"
+                                                           Padding="8,0,0,0"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="6"
+                                                           Text="{Binding StatusLabel}"
+                                                           IsVisible="{Binding HasStatusLabel}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Padding="6,0,8,0" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                                <!-- Record detail area -->
+                                <Grid Grid.Column="2">
+
+                                    <TextBlock IsVisible="{Binding JournalTab.SelectedRecordDetail,
+                                                           Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                               Text="← Select a record from the list"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Opacity="0.35"
+                                               FontSize="13" />
+
+                                    <Grid x:Name="JournalContentGrid"
+                                          IsVisible="{Binding JournalTab.SelectedRecordDetail,
+                                                      Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                          ColumnDefinitions="*,4,*">
+
+                                        <!-- Left: tabbed detail -->
+                                        <TabControl Grid.Column="0" Padding="0">
+
+                                            <!-- Tab: Page Data -->
+                                            <TabItem Header="Page Data">
+                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Disabled">
+                                                    <StackPanel Margin="14,10" Spacing="6">
+                                                        <Expander Header="Journal Record"
+                                                                  IsExpanded="True">
+                                                            <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordRows}"
+                                                                          Margin="8,4,0,4">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                        <Grid ColumnDefinitions="140,*" Margin="0,2">
+                                                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </Expander>
+                                                        <TextBlock Text="{Binding JournalTab.SelectedRecordDetail.Summary}"
+                                                                   FontFamily="Courier New"
+                                                                   FontSize="12"
+                                                                   TextWrapping="Wrap" />
+                                                        <Expander Header="{Binding JournalTab.SelectedRecordDetail.CellPointerHeader}"
+                                                                  IsExpanded="False"
+                                                                  IsVisible="{Binding JournalTab.SelectedRecordDetail.HasCellPointers}">
+                                                            <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordDetail.CellPointerRows}"
+                                                                          Margin="8,4,0,4">
+                                                                <ItemsControl.ItemTemplate>
+                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                        <Grid ColumnDefinitions="52,*" Margin="0,2">
+                                                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontFamily="Courier New" FontSize="11" Opacity="0.55" />
+                                                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontFamily="Courier New" FontSize="11" />
+                                                                        </Grid>
+                                                                    </DataTemplate>
+                                                                </ItemsControl.ItemTemplate>
+                                                            </ItemsControl>
+                                                        </Expander>
+                                                        <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordDetail.CellSections}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:CellSectionViewModel">
+                                                                    <Expander Header="{Binding Header}"
+                                                                              IsExpanded="False"
+                                                                              Expanded="OnJournalCellSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                        <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordDetail.FreeBlockSections}"
+                                                                      IsVisible="{Binding JournalTab.SelectedRecordDetail.HasFreeBlocks}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:FreeBlockSectionViewModel">
+                                                                    <Expander Header="{Binding Header}"
+                                                                              IsExpanded="False"
+                                                                              Expanded="OnJournalFreeBlockSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <StackPanel>
+                                                                            <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                                <ItemsControl.ItemTemplate>
+                                                                                    <DataTemplate x:DataType="vm:InfoRow">
+                                                                                        <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                            <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                            <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                        </Grid>
+                                                                                    </DataTemplate>
+                                                                                </ItemsControl.ItemTemplate>
+                                                                            </ItemsControl>
+                                                                            <StackPanel IsVisible="{Binding HasRecoveredRecords}"
+                                                                                        Margin="8,2,0,4">
+                                                                                <TextBlock Text="Recovered Records"
+                                                                                           FontSize="11"
+                                                                                           FontWeight="SemiBold"
+                                                                                           Opacity="0.6"
+                                                                                           Margin="0,4,0,4" />
+                                                                                <ItemsControl ItemsSource="{Binding RecoveredRecords}">
+                                                                                    <ItemsControl.ItemTemplate>
+                                                                                        <DataTemplate x:DataType="vm:FreeBlockRecordEntry">
+                                                                                            <Button Content="{Binding Label}"
+                                                                                                    Click="OnJournalFreeBlockRecordClick"
+                                                                                                    Padding="4,2"
+                                                                                                    Margin="0,1"
+                                                                                                    FontSize="11"
+                                                                                                    HorizontalAlignment="Left" />
+                                                                                        </DataTemplate>
+                                                                                    </ItemsControl.ItemTemplate>
+                                                                                </ItemsControl>
+                                                                            </StackPanel>
+                                                                        </StackPanel>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                        <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordDetail.UnallocatedRegionSections}"
+                                                                      IsVisible="{Binding JournalTab.SelectedRecordDetail.HasUnallocatedRegions}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:UnallocatedRegionSectionViewModel">
+                                                                    <Expander Header="{Binding Header}"
+                                                                              IsExpanded="False"
+                                                                              Expanded="OnJournalUnallocatedRegionSectionExpanded"
+                                                                              Margin="0,2,0,0">
+                                                                        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,4,0,4">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:InfoRow">
+                                                                                    <Grid ColumnDefinitions="120,*" Margin="0,2">
+                                                                                        <TextBlock Grid.Column="0" Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Opacity="0.6" />
+                                                                                        <TextBlock Grid.Column="1" Text="{Binding Value}" FontSize="12" TextWrapping="Wrap" />
+                                                                                    </Grid>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </Expander>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+                                                </ScrollViewer>
+                                            </TabItem>
+
+                                            <!-- Tab: Changes -->
+                                            <TabItem Header="Changes">
+                                                <Grid>
+                                                    <TextBlock IsVisible="{Binding JournalTab.HasComparison,
+                                                                           Converter={x:Static conv:BoolConverters.Not}}"
+                                                               Text="No comparison available for this page type"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"
+                                                               Opacity="0.35"
+                                                               FontSize="13" />
+                                                    <ScrollViewer IsVisible="{Binding JournalTab.HasComparison}"
+                                                                  VerticalScrollBarVisibility="Auto"
+                                                                  HorizontalScrollBarVisibility="Disabled">
+                                                        <StackPanel Margin="14,10" Spacing="4">
+                                                            <TextBlock Text="{Binding JournalTab.SelectedRecordComparison.ComparedAgainst}"
+                                                                       FontSize="11"
+                                                                       FontWeight="SemiBold"
+                                                                       Opacity="0.6" />
+                                                            <TextBlock Text="No changes detected"
+                                                                       IsVisible="{Binding JournalTab.SelectedRecordComparison.HasAnyChanges,
+                                                                                   Converter={x:Static conv:BoolConverters.Not}}"
+                                                                       FontSize="12"
+                                                                       Opacity="0.45"
+                                                                       Margin="4,4,0,0" />
+                                                            <Expander Header="{Binding JournalTab.SelectedRecordComparison.AddedHeader}"
+                                                                      IsExpanded="True"
+                                                                      IsVisible="{Binding JournalTab.SelectedRecordComparison.HasAdded}">
+                                                                <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordComparison.AddedRows}"
+                                                                              Margin="8,4,0,4">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                                            <TextBlock Text="{Binding Value}"
+                                                                                       FontSize="12"
+                                                                                       FontFamily="Courier New"
+                                                                                       Margin="0,2" />
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Expander>
+                                                            <Expander Header="{Binding JournalTab.SelectedRecordComparison.RemovedHeader}"
+                                                                      IsExpanded="True"
+                                                                      IsVisible="{Binding JournalTab.SelectedRecordComparison.HasRemoved}">
+                                                                <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordComparison.RemovedRows}"
+                                                                              Margin="8,4,0,4">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:InfoRow">
+                                                                            <TextBlock Text="{Binding Value}"
+                                                                                       FontSize="12"
+                                                                                       FontFamily="Courier New"
+                                                                                       Margin="0,2" />
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Expander>
+                                                            <Expander Header="{Binding JournalTab.SelectedRecordComparison.UpdatedHeader}"
+                                                                      IsExpanded="True"
+                                                                      IsVisible="{Binding JournalTab.SelectedRecordComparison.HasUpdated}">
+                                                                <ItemsControl ItemsSource="{Binding JournalTab.SelectedRecordComparison.UpdatedSections}"
+                                                                              Margin="4,4,0,4">
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate x:DataType="vm:UpdatedRecordSectionViewModel">
+                                                                            <Expander Header="{Binding Header}"
+                                                                                      IsExpanded="False"
+                                                                                      Margin="0,2,0,0">
+                                                                                <ItemsControl ItemsSource="{Binding Changes}" Margin="8,4,0,4">
+                                                                                    <ItemsControl.ItemTemplate>
+                                                                                        <DataTemplate x:DataType="vm:FieldChangeViewModel">
+                                                                                            <StackPanel Margin="0,2,0,6" Spacing="2">
+                                                                                                <TextBlock Text="{Binding Column}" FontSize="12" FontWeight="SemiBold" />
+                                                                                                <Grid ColumnDefinitions="56,*" RowDefinitions="Auto,Auto" Margin="8,0,0,0">
+                                                                                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Before" FontSize="11" Opacity="0.55" />
+                                                                                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Before}"
+                                                                                                               ToolTip.Tip="{Binding BeforeFull}"
+                                                                                                               FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
+                                                                                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="After" FontSize="11" Opacity="0.55" />
+                                                                                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding After}"
+                                                                                                               ToolTip.Tip="{Binding AfterFull}"
+                                                                                                               FontFamily="Courier New" FontSize="12" TextWrapping="Wrap" />
+                                                                                                </Grid>
+                                                                                            </StackPanel>
+                                                                                        </DataTemplate>
+                                                                                    </ItemsControl.ItemTemplate>
+                                                                                </ItemsControl>
+                                                                            </Expander>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                </ItemsControl>
+                                                            </Expander>
+                                                        </StackPanel>
+                                                    </ScrollViewer>
+                                                </Grid>
+                                            </TabItem>
+
+                                        </TabControl>
+
+                                        <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                                        <!-- Hex view -->
+                                        <Grid Grid.Column="2" RowDefinitions="Auto,*">
+                                            <Border Grid.Row="0"
+                                                    Padding="8,4"
+                                                    BorderThickness="0,0,0,1">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <ToggleButton x:Name="JournalOffsetToggle"
+                                                                  Content="Dec Offsets"
+                                                                  IsChecked="False"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <ToggleButton x:Name="JournalHighlightToggle"
+                                                                  Content="Highlights"
+                                                                  IsChecked="True"
+                                                                  Padding="8,2"
+                                                                  FontSize="11" />
+                                                    <TextBox x:Name="JournalGoToOffsetBox"
+                                                             Width="80"
+                                                             FontSize="11"
+                                                             PlaceholderText="Offset"
+                                                             ToolTip.Tip="Jump to a byte offset (decimal, or 0x-prefixed hex)"
+                                                             KeyDown="OnJournalGoToOffsetKeyDown" />
+                                                    <Button Content="Go"
+                                                            Padding="8,2"
+                                                            FontSize="11"
+                                                            Click="OnJournalGoToOffsetClick" />
+                                                    <TextBlock Text="{Binding #JournalHexView.HoveredLabel}"
+                                                               IsVisible="{Binding #JournalHexView.HoveredLabel,
+                                                                           Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                                                               VerticalAlignment="Center"
+                                                               FontSize="11"
+                                                               Opacity="0.75"
+                                                               Margin="8,0,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Grid Grid.Row="1" ColumnDefinitions="Auto,4,165"
+                                                  x:Name="JournalHexGrid">
+                                                <ScrollViewer Grid.Column="0"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <controls:HexView x:Name="JournalHexView"
+                                                                      Margin="14,8,14,16"
+                                                                      HorizontalAlignment="Left"
+                                                                      Data="{Binding JournalTab.SelectedRecordDetail.PageBytes}"
+                                                                      Highlights="{Binding JournalTab.SelectedRecordDetail.PageHighlights}"
+                                                                      UseDecimalOffsets="{Binding #JournalOffsetToggle.IsChecked}"
+                                                                      ShowHighlights="{Binding #JournalHighlightToggle.IsChecked}" />
+                                                </ScrollViewer>
+                                                <GridSplitter Grid.Column="1" ResizeDirection="Columns"
+                                                              x:Name="JournalInspectorSplitter" />
+                                                <controls:DataInspectorControl Grid.Column="2"
+                                                                               x:Name="JournalDataInspector"
+                                                                               MinWidth="100"
+                                                                               Data="{Binding #JournalHexView.Data}"
+                                                                               Offset="{Binding #JournalHexView.CursorOffset}"
+                                                                               SelectionLength="{Binding #JournalHexView.SelectionLength}"
+                                                                               PopOutRequested="OnJournalInspectorPopOut" />
+                                            </Grid>
+                                        </Grid>
+
+                                    </Grid>
+                                </Grid>
+
+                            </Grid>
+                        </Grid>
+                    </TabItem>
+
                     <TabItem Header="Carve Unknown Pages">
                         <Grid IsEnabled="{Binding HasDatabase}" Margin="10" RowDefinitions="Auto,*">
 
-                            <StackPanel Grid.Row="0" Spacing="3" Margin="0,0,0,10">
-                                <TextBlock Text="Carve Unknown Pages"
-                                           FontWeight="SemiBold"
-                                           FontSize="13" />
-                                <TextBlock Text="Tries every candidate table's schema (live tables, plus any dropped-table schemas recovered from sqlite_master history) against pages with no known owner."
-                                           FontSize="11"
-                                           Opacity="0.6"
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
+                            <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,10">
+                                <StackPanel Grid.Column="0" Spacing="3">
+                                    <TextBlock Text="Carve Unknown Pages"
+                                               FontWeight="SemiBold"
+                                               FontSize="13" />
+                                    <TextBlock Text="Tries every candidate table's schema (live tables, plus any dropped-table schemas recovered from sqlite_master history) against pages with no known owner."
+                                               FontSize="11"
+                                               Opacity="0.6"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="1"
+                                        Content="Export Parameters…"
+                                        Click="OnExportCarvingParametersClicked"
+                                        Padding="14,6"
+                                        Margin="0,0,8,0"
+                                        VerticalAlignment="Top"
+                                        ToolTip.Tip="Save every table's include/exclude state and Focused byte-length ranges to a JSON file for reuse on another database." />
+                                <Button Grid.Column="2"
+                                        Content="Load Parameters…"
+                                        Click="OnLoadCarvingParametersClicked"
+                                        Padding="14,6"
+                                        VerticalAlignment="Top"
+                                        ToolTip.Tip="Load a previously-exported carving profile and apply it to this database's candidate tables." />
+                            </Grid>
 
                             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                                 <StackPanel Spacing="16">
@@ -1876,4 +2583,19 @@
         </Grid>
 
     </DockPanel>
+
+        <Border Background="#CC141414"
+                IsVisible="{Binding IsLoading}"
+                IsHitTestVisible="{Binding IsLoading}">
+            <StackPanel HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="14">
+                <ProgressBar IsIndeterminate="True" Width="240" />
+                <TextBlock Text="{Binding LoadingStatusText}"
+                           HorizontalAlignment="Center"
+                           Foreground="White"
+                           FontSize="13" />
+            </StackPanel>
+        </Border>
+    </Panel>
 </Window>

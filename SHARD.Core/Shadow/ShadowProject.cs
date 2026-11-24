@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Comparison;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
@@ -28,6 +30,10 @@ public sealed class ShadowProject : IDisposable
     public string  ShadowDatabasePath => _shadowDatabasePath;
     public string  EvidenceFilePath   => _manifest.EvidenceFilePath;
     public DateTime CreatedUtc        => _manifest.CreatedUtc;
+
+    /// <summary>Evidence hashes recorded when the project was created; null for a project
+    /// created before hashing existed.</summary>
+    public IReadOnlyList<EvidenceFileHash>? EvidenceHashes => _manifest.EvidenceHashes;
     public bool    IsUnsaved          => _tempDbPath is not null;
 
     private ShadowProject(string? projectFolder, ProjectManifest manifest, string shadowDatabasePath, string? tempDbPath)
@@ -41,9 +47,15 @@ public sealed class ShadowProject : IDisposable
     /// <summary>
     /// Create a temporary project backed by a temp file, immediately usable for
     /// queries and record recovery. Call <see cref="SaveTo"/> to persist to disk.
+    /// Note: the temp file lands wherever <see cref="Path.GetTempPath"/> resolves to —
+    /// on some systems (e.g. a tmpfs-mounted /tmp on Linux) that's RAM-backed, so for a
+    /// large evidence file prefer <see cref="Create"/> with a folder on real disk instead.
     /// </summary>
     public static (ShadowProject Project, IReadOnlyList<string> Warnings) CreateTemporary(
-        string evidenceFilePath, SqliteForensicDatabase database)
+        string evidenceFilePath, SqliteForensicDatabase database,
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null,
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null,
+        SqliteForensicDatabase? layoutDatabase = null)
     {
         // GetTempFileName creates a zero-byte file; rename with .db so SQLite is happy.
         string tempBase = Path.GetTempFileName();
@@ -52,12 +64,49 @@ public sealed class ShadowProject : IDisposable
 
         var manifest = new ProjectManifest
         {
+            ManifestVersion  = ProjectManifest.CurrentVersion,
             EvidenceFilePath = evidenceFilePath,
             CreatedUtc       = DateTime.UtcNow,
+            EvidenceHashes   = evidenceHashes?.ToList(),
         };
 
-        var warnings = ShadowDatabaseBuilder.Create(tempPath, database);
+        var warnings = ShadowDatabaseBuilder.Create(tempPath, database, flags, reportProgress, evidenceHashes, layoutDatabase);
         return (new ShadowProject(null, manifest, tempPath, tempPath), warnings);
+    }
+
+    /// <summary>
+    /// Create a project whose shadow database is built directly in <paramref name="projectFolder"/>
+    /// on disk — never touching temp storage — and is already "saved" (<see cref="IsUnsaved"/> is
+    /// false). Intended for a large evidence file where the caller wants to avoid the temp file that
+    /// <see cref="CreateTemporary"/> would otherwise use (see its remarks).
+    /// </summary>
+    public static (ShadowProject Project, IReadOnlyList<string> Warnings) Create(
+        string evidenceFilePath, SqliteForensicDatabase database, string projectFolder,
+        RecoveryFlags? flags = null, Action<string>? reportProgress = null,
+        IReadOnlyList<EvidenceFileHash>? evidenceHashes = null,
+        SqliteForensicDatabase? layoutDatabase = null)
+    {
+        Directory.CreateDirectory(projectFolder);
+
+        var manifest = new ProjectManifest
+        {
+            ManifestVersion  = ProjectManifest.CurrentVersion,
+            EvidenceFilePath = evidenceFilePath,
+            CreatedUtc       = DateTime.UtcNow,
+            EvidenceHashes   = evidenceHashes?.ToList(),
+        };
+
+        string shadowDbPath = Path.Combine(projectFolder, manifest.ShadowDatabaseFileName);
+        if (File.Exists(shadowDbPath))
+            throw new InvalidOperationException($"A shadow database already exists at '{shadowDbPath}'.");
+
+        var warnings = ShadowDatabaseBuilder.Create(shadowDbPath, database, flags, reportProgress, evidenceHashes, layoutDatabase);
+
+        File.WriteAllText(
+            Path.Combine(projectFolder, "project.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+
+        return (new ShadowProject(projectFolder, manifest, shadowDbPath, null), warnings);
     }
 
     /// <summary>
@@ -81,6 +130,7 @@ public sealed class ShadowProject : IDisposable
 
         if (_tempDbPath is not null)
         {
+            ReleasePooledConnections();
             try { File.Delete(_tempDbPath); } catch { }
             _tempDbPath = null;
         }
@@ -186,9 +236,52 @@ public sealed class ShadowProject : IDisposable
         return ShadowDatabaseBuilder.InsertWalDeletedRows(connection, database, walFile);
     }
 
+    /// <summary>True when this project's live tables were built from the database with its WAL's
+    /// committed frames applied, so they already hold what SQLite returns.</summary>
+    public bool LiveTablesIncludeWal => LiveTablesSource == ShadowDatabaseBuilder.LiveSourceCommittedWal;
+
+    /// <summary>True when this project's live tables were built from the database with its hot
+    /// journal rolled back, so they already hold what SQLite returns.</summary>
+    public bool LiveTablesIncludeJournal => LiveTablesSource == ShadowDatabaseBuilder.LiveSourceRolledBackJournal;
+
+    private string? LiveTablesSource
+    {
+        get
+        {
+            using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath};Mode=ReadOnly");
+            connection.Open();
+            return ShadowDatabaseBuilder.ReadInfo(connection, ShadowDatabaseBuilder.InfoKeyLiveTablesSource);
+        }
+    }
+
     /// <summary>
-    /// Compares each WAL frame against the current database page and inserts any
-    /// records that are new in the WAL into the corresponding live shadow table.
+    /// Recovers rows the WAL's committed frames deleted or changed from the database file's own
+    /// version of those pages — see <see cref="ShadowDatabaseBuilder.InsertSupersededFilePageRows"/>.
+    /// </summary>
+    public int RecoverSupersededFileRows(SqliteForensicDatabase committed, SqliteForensicDatabase file)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        return ShadowDatabaseBuilder.InsertSupersededFilePageRows(connection, committed, file);
+    }
+
+    /// <summary>
+    /// Inserts records from <paramref name="journal"/>'s page images that were deleted or changed
+    /// by the journalled transaction — see <see cref="ShadowDatabaseBuilder.InsertJournalDeletedRows"/>.
+    /// Returns the number of records inserted.
+    /// </summary>
+    public int RecoverJournalDeletedRows(RollbackJournalFile journal, SqliteForensicDatabase database, RecoveryFlags? flags = null)
+    {
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
+        connection.Open();
+        return ShadowDatabaseBuilder.InsertJournalDeletedRows(connection, database, journal, flags);
+    }
+
+    /// <summary>
+    /// Compares each page's latest committed WAL frame against the current database page and
+    /// inserts any records that are new in the WAL into the corresponding live shadow table.
+    /// Only <see cref="WalFrameStatus.Committed"/> frames count: SQLite ignores uncommitted,
+    /// invalid and old-generation frames, so their rows aren't live.
     /// Returns the number of records inserted.
     /// </summary>
     public int SyncWalFramesToShadow(WalFile walFile, SqliteForensicDatabase database)
@@ -196,7 +289,7 @@ public sealed class ShadowProject : IDisposable
         using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath}");
         connection.Open();
 
-        var latestFrames = walFile.Frames
+        var latestFrames = walFile.CommittedFrames
             .GroupBy(f => f.Header.PageNumber)
             .Select(g => g.Last())
             .ToList();
@@ -246,6 +339,54 @@ public sealed class ShadowProject : IDisposable
         return command.ExecuteScalar() as string;
     }
 
+    /// <summary>
+    /// The records <see cref="CarveUnknownPages"/> carved from <paramref name="pageNumber"/>, as the
+    /// table each matched and the cell's offset on the page. Read from the shadow database, so it
+    /// includes carves from earlier sessions of a saved project.
+    /// </summary>
+    public IReadOnlyList<(string TableName, int CellOffset)> ReadOrphanCarvedCells(uint pageNumber) =>
+        ReadOrphanCarvedCells((uint?)pageNumber).Select(c => (c.TableName, c.CellOffset)).ToList();
+
+    /// <summary>Every page's records <see cref="CarveUnknownPages"/> carved, read in one pass.</summary>
+    public IReadOnlyList<(uint PageNumber, string TableName, int CellOffset)> ReadAllOrphanCarvedCells() =>
+        ReadOrphanCarvedCells(null);
+
+    private List<(uint PageNumber, string TableName, int CellOffset)> ReadOrphanCarvedCells(uint? pageNumber)
+    {
+        var result = new List<(uint PageNumber, string TableName, int CellOffset)>();
+
+        using var connection = new SqliteConnection($"Data Source={_shadowDatabasePath};Mode=ReadOnly");
+        connection.Open();
+
+        var recoveredTables = new List<string>();
+        using (var list = connection.CreateCommand())
+        {
+            list.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, length(@prefix)) = @prefix";
+            list.Parameters.AddWithValue("@prefix", ShadowDatabaseBuilder.RecoveredTablePrefix);
+            using var reader = list.ExecuteReader();
+            while (reader.Read()) recoveredTables.Add(reader.GetString(0));
+        }
+
+        foreach (string table in recoveredTables)
+        {
+            using var command = connection.CreateCommand();
+            string pageColumn = ShadowDatabaseBuilder.QuoteIdentifier(ShadowDatabaseBuilder.PageNumberColumn);
+            command.CommandText = $"""
+                SELECT DISTINCT {pageColumn}, {ShadowDatabaseBuilder.QuoteIdentifier(ShadowDatabaseBuilder.CellOffsetColumn)}
+                FROM {ShadowDatabaseBuilder.QuoteIdentifier(table)}
+                WHERE {ShadowDatabaseBuilder.QuoteIdentifier(ShadowDatabaseBuilder.RecoveryMethodColumn)} = @m
+                  AND (@p IS NULL OR {pageColumn} = @p)
+                """;
+            command.Parameters.AddWithValue("@p", pageNumber is { } n ? (long)n : DBNull.Value);
+            command.Parameters.AddWithValue("@m", ShadowDatabaseBuilder.RecoveryMethodOrphanCarving);
+            using var reader = command.ExecuteReader();
+            string tableName = table[ShadowDatabaseBuilder.RecoveredTablePrefix.Length..];
+            while (reader.Read()) result.Add(((uint)reader.GetInt64(0), tableName, (int)reader.GetInt32(1)));
+        }
+
+        return result;
+    }
+
     /// <summary>Read the persisted page classifications from this project's shadow database.</summary>
     public IReadOnlyList<(uint PageNumber, PageType Type, string? TableName)> ReadPageTypes()
     {
@@ -271,7 +412,29 @@ public sealed class ShadowProject : IDisposable
 
     public void Dispose()
     {
+        ReleasePooledConnections();
         if (_tempDbPath is not null && File.Exists(_tempDbPath))
+        {
             try { File.Delete(_tempDbPath); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Microsoft.Data.Sqlite pools connections, so a disposed connection still holds its file open.
+    /// Windows refuses to delete an open file, which left the temp shadow database behind; closing
+    /// this project's idle pooled connections first lets the delete succeed. Only this database's
+    /// pools are cleared, so other open databases keep theirs.
+    /// </summary>
+    private void ReleasePooledConnections()
+    {
+        foreach (string connectionString in new[]
+                 {
+                     $"Data Source={_shadowDatabasePath}",
+                     $"Data Source={_shadowDatabasePath};Mode=ReadOnly",
+                 })
+        {
+            using var connection = new SqliteConnection(connectionString);
+            SqliteConnection.ClearPool(connection);
+        }
     }
 }

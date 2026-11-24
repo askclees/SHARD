@@ -51,6 +51,16 @@ public abstract class BTreePage : SqlitePage
 
     public List<ushort> DeletedCellPointers { get; } = new();
 
+    /// <summary>Offset of the first cell pointer.</summary>
+    public int CellPointerArrayStart { get; }
+
+    /// <summary>
+    /// End (exclusive) of the stale cell-pointer slots that follow the live pointer array, up to
+    /// the first zero slot. These slots are what <see cref="DeletedCellPointers"/> was read from.
+    /// Equals the end of the live array when there are none.
+    /// </summary>
+    public int StaleCellPointerArrayEnd { get; }
+
     // ── Constructor ──────────────────────────────────────────────────────────
     /// <param name="cellPointerStart">
     /// Byte offset within <paramref name="data"/> where the cell pointer array begins.
@@ -72,8 +82,10 @@ public abstract class BTreePage : SqlitePage
         for (int i = 0; i < CellCount; i++)
             CellPointers[i] = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(cellPointerStart + i * 2, 2));
 
+        CellPointerArrayStart = cellPointerStart;
         bool foundZeroBytes = false;
         int pointer = cellPointerStart + (CellCount * 2);
+        int staleEnd = pointer;
         int cellEnd = CellContentAreaStart == 0 ? 65536 : CellContentAreaStart;
         while (!foundZeroBytes && pointer < cellEnd)
         {
@@ -86,8 +98,10 @@ public abstract class BTreePage : SqlitePage
             {
                 if (!CellPointers.Contains(deletedPointer) && !DeletedCellPointers.Contains(deletedPointer))
                     DeletedCellPointers.Add(deletedPointer);
+                staleEnd = pointer + 2;
             }
             pointer += 2;
         }
+        StaleCellPointerArrayEnd = Math.Min(staleEnd, data.Length);
     }
 }

@@ -1,10 +1,12 @@
 using System.Collections.Generic;
 using System.IO;
 using SHARD.Core.Enums;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Core.WAL;
 
 namespace SHARD.Core;
 
@@ -16,17 +18,207 @@ public sealed class SqliteForensicDatabase : IDisposable
 {
     private readonly FileStream _stream;
 
-    /// <summary>Parsed 100-byte database header.</summary>
+    // Page images laid over the file (null when reading the file alone): the latest committed WAL
+    // image of each page, or the image a hot rollback journal would restore.
+    private readonly IReadOnlyDictionary<uint, byte[]>? _overlayPages;
+    // 1-based WAL frame number, or 1-based journal record number, each of those images came from.
+    private readonly IReadOnlyDictionary<uint, int>? _overlaySources;
+    private readonly bool _overlayIsJournal;
+
+    /// <summary>Parsed 100-byte database header (from the WAL's latest image of page 1, when
+    /// <see cref="IncludesWal"/> and the WAL holds one).</summary>
     public DatabaseHeader Header { get; }
 
-    /// <summary>Total number of pages derived from file size and page size.</summary>
+    /// <summary>Which page numbers are pointer-map pages and the lock-byte page, from <see cref="Header"/>.</summary>
+    public PageLayout Layout => _layout ??= PageLayout.From(Header);
+    private PageLayout? _layout;
+
+    /// <summary>Total number of pages: from the file size, or — when <see cref="IncludesWal"/> —
+    /// the database size recorded in the WAL's last commit frame, as SQLite uses.</summary>
     public uint PageCount { get; }
 
-    private SqliteForensicDatabase(FileStream stream, DatabaseHeader header)
+    /// <summary>True when this reads the database as SQLite sees it: the file with every
+    /// committed WAL frame applied (see <see cref="OpenCommittedState"/>).</summary>
+    public bool IncludesWal => _overlayPages is not null && !_overlayIsJournal;
+
+    /// <summary>True when this reads the database as SQLite would after rolling back a hot journal:
+    /// the file with the journal's original page images restored (see <see cref="OpenRolledBackState"/>).</summary>
+    public bool IncludesJournal => _overlayPages is not null && _overlayIsJournal;
+
+    /// <summary>Pages whose content comes from the WAL rather than the file.</summary>
+    public IReadOnlyCollection<uint> WalPageNumbers => IncludesWal ? (IReadOnlyCollection<uint>)_overlayPages!.Keys : [];
+
+    /// <summary>Pages whose content comes from the rollback journal rather than the file.</summary>
+    public IReadOnlyCollection<uint> JournalPageNumbers => IncludesJournal ? (IReadOnlyCollection<uint>)_overlayPages!.Keys : [];
+
+    /// <summary>Pages whose content comes from the WAL or the journal rather than the file.</summary>
+    public IReadOnlyCollection<uint> OverlayPageNumbers => (IReadOnlyCollection<uint>?)_overlayPages?.Keys ?? [];
+
+    /// <summary>The 1-based WAL frame page <paramref name="pageNumber"/> is read from, or null when
+    /// it's read from the file.</summary>
+    public int? WalFrameNumberFor(uint pageNumber) =>
+        IncludesWal && _overlaySources!.TryGetValue(pageNumber, out int frame) ? frame : null;
+
+    /// <summary>The 1-based journal record page <paramref name="pageNumber"/> is read from, or null
+    /// when it's read from the file.</summary>
+    public int? JournalRecordNumberFor(uint pageNumber) =>
+        IncludesJournal && _overlaySources!.TryGetValue(pageNumber, out int record) ? record : null;
+
+    private SqliteForensicDatabase(FileStream stream, DatabaseHeader header,
+        IReadOnlyDictionary<uint, byte[]>? overlayPages = null, uint? pageCount = null,
+        IReadOnlyDictionary<uint, int>? overlaySources = null, bool overlayIsJournal = false)
     {
         _stream   = stream;
         Header    = header;
-        PageCount = (uint)(stream.Length / header.PageSize);
+        _overlayPages = overlayPages;
+        _overlaySources = overlaySources;
+        _overlayIsJournal = overlayIsJournal;
+        PageCount = pageCount ?? (uint)(stream.Length / header.PageSize);
+    }
+
+    /// <summary>
+    /// Opens the database as SQLite would see it with <paramref name="wal"/> applied: each page is
+    /// read from its latest <see cref="WalFrameStatus.Committed"/> frame if it has one, otherwise
+    /// from the file, and the page count is the database size in the last commit frame (a commit
+    /// can grow or shrink the database). Frames SQLite ignores — uncommitted, invalid or
+    /// old-generation — play no part. With no committed frames this is the same as <see cref="Open"/>.
+    /// </summary>
+    public static SqliteForensicDatabase OpenCommittedState(string filePath, WalFile wal)
+    {
+        if (wal.CommittedFrameCount == 0) return Open(filePath);
+
+        var walPages = new Dictionary<uint, byte[]>();
+        var walFrameNumbers = new Dictionary<uint, int>();
+        for (int i = 0; i < wal.CommittedFrameCount; i++)
+        {
+            var frame = wal.Frames[i];
+            walPages[frame.Header.PageNumber] = frame.PageData;
+            walFrameNumbers[frame.Header.PageNumber] = i + 1;
+        }
+        uint pageCount = wal.Frames[wal.CommittedFrameCount - 1].Header.SizeOfDatabaseInPages;
+
+        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            byte[] headerBytes;
+            if (walPages.TryGetValue(1, out var page1))
+            {
+                headerBytes = page1[..100];
+            }
+            else
+            {
+                headerBytes = new byte[100];
+                stream.ReadExactly(headerBytes);
+            }
+            var header = new DatabaseHeader(headerBytes);
+            if (header.PageSize != wal.Header.DatabasePageSize)
+                throw new InvalidDataException(
+                    $"The WAL's page size ({wal.Header.DatabasePageSize:N0}) doesn't match the database's ({header.PageSize:N0}).");
+
+            return new SqliteForensicDatabase(stream, header, walPages, pageCount, walFrameNumbers);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The records of <paramref name="journal"/> SQLite would play back when it next opens the
+    /// database (pager_playback in pager.c): <see cref="JournalRecordStatus.Valid"/> records of
+    /// segments whose header gives a record count. A hot journal's header count is 0 only when
+    /// the journal was never synced, and SQLite then restores nothing from that segment. A journal
+    /// with an inferred header (zeroed: its transaction committed) is never played back. Each
+    /// record is paired with its 1-based number in the file.
+    /// </summary>
+    public static IReadOnlyList<(RollbackJournalPageRecord Record, int Number, RollbackJournalSegment Segment)>
+        RecordsPlayedBack(RollbackJournalFile journal)
+    {
+        var played = new List<(RollbackJournalPageRecord, int, RollbackJournalSegment)>();
+        if (journal.HeaderInferred) return played;
+        int number = 0;
+        foreach (var segment in journal.Segments)
+        {
+            foreach (var record in segment.PageRecords)
+            {
+                number++;
+                if (segment.Header.PageCount != 0 && record.Status == JournalRecordStatus.Valid)
+                    played.Add((record, number, segment));
+            }
+        }
+        return played;
+    }
+
+    /// <summary>
+    /// Opens the database as SQLite would see it after rolling back <paramref name="journal"/>, as
+    /// it does on opening a database with a hot journal (one left by a transaction that never
+    /// committed): each page a played-back record holds (see <see cref="RecordsPlayedBack"/>) is
+    /// read from the journal, in file order so a later record wins as it does in SQLite, and the
+    /// page count is the database size in the last played segment's header (SQLite truncates the
+    /// file to it). With nothing to play back this is the same as <see cref="Open"/>.
+    /// </summary>
+    public static SqliteForensicDatabase OpenRolledBackState(string filePath, RollbackJournalFile journal)
+    {
+        var played = RecordsPlayedBack(journal);
+        if (played.Count == 0) return Open(filePath);
+
+        var pages = new Dictionary<uint, byte[]>();
+        var numbers = new Dictionary<uint, int>();
+        foreach (var (record, number, _) in played)
+        {
+            pages[record.PageNumber] = record.Page.Data;
+            numbers[record.PageNumber] = number;
+        }
+        int originalSize = played[^1].Segment.Header.DatabaseSize;
+
+        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try
+        {
+            byte[] headerBytes;
+            if (pages.TryGetValue(1, out var page1))
+            {
+                headerBytes = page1[..100];
+            }
+            else
+            {
+                headerBytes = new byte[100];
+                stream.ReadExactly(headerBytes);
+            }
+            var header = new DatabaseHeader(headerBytes);
+            int journalPageSize = journal.Segments[0].Header.SizeOfJournalPages;
+            if (header.PageSize != journalPageSize)
+                throw new InvalidDataException(
+                    $"The journal's page size ({journalPageSize:N0}) doesn't match the database's ({header.PageSize:N0}).");
+
+            // 0 would mean the transaction created the database; keep the file's size rather than
+            // describing an empty database.
+            uint? pageCount = originalSize > 0 ? (uint)originalSize : null;
+            return new SqliteForensicDatabase(stream, header, pages, pageCount, numbers, overlayIsJournal: true);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>A copy of page <paramref name="pageNumber"/>'s bytes, from the WAL or journal if it
+    /// holds the page's image, otherwise from the file.</summary>
+    private byte[] ReadPageBytes(uint pageNumber)
+    {
+        if (_overlayPages is not null && _overlayPages.TryGetValue(pageNumber, out var overlayData))
+            return (byte[])overlayData.Clone();
+
+        int pageSize = Header.PageSize;
+        long offset = (long)(pageNumber - 1) * pageSize;
+        if (offset + pageSize > _stream.Length)
+            throw new InvalidDataException($"Page {pageNumber} is beyond the end of the file and not in the WAL or journal.");
+
+        var data = new byte[pageSize];
+        _stream.Position = offset;
+        _stream.ReadExactly(data);
+        return data;
     }
 
     /// <summary>Open a SQLite file and parse its header.</summary>
@@ -55,7 +247,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     {
         if (pageNumber < 1 || pageNumber > PageCount)
             throw new ArgumentOutOfRangeException(nameof(pageNumber));
-        return SqlitePage.Read(_stream, pageNumber, Header.PageSize, Header.TextEncoding, Header.ReservedBytesPerPage);
+        return SqlitePage.FromBytes(pageNumber, Header.PageSize, ReadPageBytes(pageNumber), Header.TextEncoding, Header.ReservedBytesPerPage, Layout);
     }
 
     /// <summary>Enumerate all pages in page-number order.</summary>
@@ -73,7 +265,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     {
         if (pageNumber < 1 || pageNumber > PageCount)
             throw new ArgumentOutOfRangeException(nameof(pageNumber));
-        return SqlitePage.ReadOverflowPage(_stream, pageNumber, Header.PageSize);
+        return new OverflowPage(pageNumber, Header.PageSize, ReadPageBytes(pageNumber));
     }
 
     /// <summary>
@@ -340,8 +532,8 @@ public sealed class SqliteForensicDatabase : IDisposable
         SqliteMasterRow retVal = new SqliteMasterRow()
         {
             ObjectType = objectType.Value,
-            Name = cell.FieldValues[1]?.TextValue,
-            TableName = cell.FieldValues[2]?.TextValue,
+            Name = cell.FieldValues[1]?.TextValue ?? "",
+            TableName = cell.FieldValues[2]?.TextValue ?? "",
             RootPage = (uint?)cell.FieldValues[3]?.IntegerValue,
             Sql = cell.FieldValues[4]?.TextValue,
             PageNumber = (uint)pageNum,
@@ -505,9 +697,7 @@ public sealed class SqliteForensicDatabase : IDisposable
     private IEnumerable<FreelistTrunkPage> GetFreelistPageNumbersFromTrunkPage(uint pageNum, int pageSize)
     {
         List<FreelistTrunkPage> retVal = new();
-        var data = new byte[pageSize];
-        _stream.Position = (long)(pageNum - 1) * pageSize;
-        _stream.ReadExactly(data);
+        var data = ReadPageBytes(pageNum);
         FreelistTrunkPage trunk = new FreelistTrunkPage(pageNum, pageSize, data);
         retVal.Add(trunk);
         if (trunk.NextTrunkPageNumber != 0)
@@ -520,7 +710,8 @@ public sealed class SqliteForensicDatabase : IDisposable
     /// <summary>
     /// Returns every page number that isn't explained by anything this database knows about:
     /// not part of the sqlite_master tree, not part of any live table/index's tree, and not an
-    /// overflow page for a live row. This includes pages whose type byte is unrecognizable, freelist
+    /// overflow page for a live row (including sqlite_master's own rows), and not a pointer-map or lock-byte page (see <see cref="Layout"/>).
+    /// This includes pages whose type byte is unrecognizable, freelist
     /// leaf pages, and freelist <em>trunk</em> pages — SQLite doesn't zero freed pages, and a trunk
     /// page only has its first ~8-12 bytes overwritten with the trunk header/leaf-pointer array;
     /// the rest of the page (especially common when a whole small table's only page becomes the
@@ -544,10 +735,16 @@ public sealed class SqliteForensicDatabase : IDisposable
         var claimed = new HashSet<uint>();
 
         foreach (uint p in GetTreePageNumbers(1)) claimed.Add(p); // sqlite_master
+        // ...and the overflow pages of its long CREATE statements
+        foreach (var masterRow in ReadTableRows(1))
+            foreach (var fragment in masterRow.OverflowFragments)
+                claimed.Add(fragment.PageNumber);
 
         foreach (var row in ReadSqliteMaster())
         {
-            if (!row.RootPage.HasValue) continue;
+            // Virtual tables (CREATE VIRTUAL TABLE, e.g. R-tree or FTS) have root page 0 and no
+            // B-tree of their own; their shadow tables are listed separately with real roots.
+            if (row.RootPage is not > 0) continue;
             foreach (uint p in GetTreePageNumbers(row.RootPage.Value)) claimed.Add(p);
 
             if (row.ObjectType == SqliteMasterObjectType.Table)
@@ -564,7 +761,7 @@ public sealed class SqliteForensicDatabase : IDisposable
             {
                 foreach (var deleted in ReadDeletedSqliteMaster())
                 {
-                    if (!deleted.Row.RootPage.HasValue) continue;
+                    if (deleted.Row.RootPage is not > 0) continue;
                     switch (deleted.RootPageStatus)
                     {
                         case RootPageStatus.Valid:
@@ -582,9 +779,10 @@ public sealed class SqliteForensicDatabase : IDisposable
             }
         }
 
+        // Pointer-map and lock-byte pages are SQLite's own bookkeeping, never part of a table
         var unclaimed = new List<uint>();
         for (uint p = 1; p <= PageCount; p++)
-            if (!claimed.Contains(p)) unclaimed.Add(p);
+            if (!claimed.Contains(p) && !Layout.IsPointerMapPage(p) && !Layout.IsLockBytePage(p)) unclaimed.Add(p);
         return unclaimed;
     }
 

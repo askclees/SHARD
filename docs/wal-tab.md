@@ -21,6 +21,10 @@ A collapsible section at the top of the tab shows the parsed WAL file header:
 | Salt-1 / Salt-2 | Salts used for checksum verification |
 | Checksum-1 / Checksum-2 | Cumulative checksums for the WAL header |
 | Frame Count | Total number of frames in the file |
+| Header Checksum | Whether the header's checksum is correct. If it isn't, SQLite ignores every frame. |
+| Committed Frames | How many frames SQLite actually reads: those up to the last commit frame before the first invalid frame. |
+| SQLite Stops | Shown when SQLite would stop reading before the last frame, and why (a bad checksum, page number 0, or frames from an earlier generation of the WAL). |
+| Trailing Bytes | Shown only when the file ends partway through a frame (typically a copy taken while the frame was being written). SQLite ignores these bytes, and so does SHARD: every whole frame before them is still read and used for recovery. The status bar and the recovery warnings note how many bytes were ignored. |
 
 ## Frame list (left panel)
 
@@ -29,6 +33,22 @@ Lists every frame in the WAL. Each entry shows:
 - Page type (where parseable).
 - The name of the table or index that owns the page (e.g. `messages`, `sqlite_master`). Pages not reachable from any known B-tree root show no label.
 - A **COMMIT** label on frames that carry a non-zero database size in their header, indicating a transaction boundary.
+- A status label on every frame SQLite would not read, with the reason in its tooltip. These frames are dimmed:
+  - **UNCOMMITTED**: valid, but no commit frame follows it, so its transaction never committed.
+  - **BAD CHECKSUM**: its checksum doesn't continue the chain from the previous frame. SQLite stops reading the WAL here.
+  - **BAD PAGE**: page number 0. SQLite stops reading here.
+  - **IGNORED**: after the point where SQLite stopped reading.
+  - **OLD**: from an earlier generation of the WAL (before it was last reset after a checkpoint). This is normal history.
+
+Only committed frames are treated as live data: the shadow database's live tables are the database file with each page's latest committed frame applied, which is what SQLite returns.
+
+Every frame is searched for history, including committed frames that a later committed frame replaced. A row inserted and then deleted within the WAL may survive only there. From each frame SHARD recovers into `_shard_recovered_<table>`:
+- records that are no longer live (`wal_frame`), or older versions of rows that are (`wal_previous_version`);
+- deleted data inside the frame's page image: deleted cells, unallocated space and freeblocks (`deleted_cell`, `carving`, `freeblock`).
+
+Rows the committed frames deleted or changed are also recovered from the database file's own version of the page (`db_file_deleted_in_wal`, `db_file_previous_version`), along with that page's deleted data.
+
+The `_wal_frame` column says which frame a recovered record came from (NULL when it came from the database file). Each record is listed once: copies of a live row are skipped, and a copy that kept its rowid replaces copies of the same record that didn't.
 
 Select a frame to view its contents on the right.
 
@@ -44,9 +64,19 @@ Compares the selected frame's page against a baseline:
 - If an earlier frame in the WAL covers the same page number, the comparison is against that frame.
 - Otherwise, the comparison is against the corresponding page in the main database.
 
-Changes are grouped into **Added records**, **Removed records**, and **Updated records**. Updated records show a field-by-field diff.
+For table leaf pages, changes are grouped into **Added records**, **Removed records**, and **Updated records** (with a field-by-field diff). For table interior pages, changes are grouped into **Added/removed child pointers** and **key range changes** (a child pointer whose divider key changed), plus a note if the page's rightmost pointer changed.
 
-If the page type does not support comparison (e.g. overflow or interior pages), a placeholder message is shown.
+If the page type does not support comparison (index leaf/interior, overflow, or freelist pages), a placeholder message is shown.
+
+#### Show whole transaction
+
+By default the Changes tab shows only the selected frame's own page. Checking **Show whole
+transaction** instead shows every page touched between the previous COMMIT frame (exclusive)
+and the selected frame's own transaction's COMMIT frame (inclusive) — one expandable section
+per page, each showing the same Added/Removed/Updated breakdown. This gives a single view of
+everything one transaction changed, rather than clicking through its frames one page at a time.
+Each page's baseline is the state immediately before the transaction began, even if that page
+happens to have been written more than once within the same transaction.
 
 ## Hex view (right panel)
 

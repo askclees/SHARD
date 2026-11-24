@@ -45,6 +45,7 @@ for path in (DB_PATH, WAL_PATH, DB_PATH + '-shm'):
 conn = sqlite3.connect(DB_PATH, isolation_level=None)
 conn.execute('PRAGMA journal_mode=WAL')
 conn.execute('PRAGMA wal_autocheckpoint=0')
+conn.execute('PRAGMA secure_delete=ON')  # explicit: the default depends on how SQLite was compiled
 
 conn.execute('''
     CREATE TABLE moz_places (

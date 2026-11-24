@@ -15,10 +15,19 @@ public partial class CreateProjectWindow : Window
 {
     private readonly string? _detectedWalPath;
 
-    public CreateProjectWindow(string? detectedWalPath = null)
+    /// <summary>For the XAML loader and designer, and a plain "create project" prompt.</summary>
+    public CreateProjectWindow() : this(null, null, null) { }
+
+    public CreateProjectWindow(string? detectedWalPath = null, string? promptMessage = null, string? skipButtonText = null)
     {
         InitializeComponent();
         _detectedWalPath = detectedWalPath;
+
+        if (promptMessage is not null)
+            this.FindControl<TextBlock>("DescriptionText")!.Text = promptMessage;
+
+        if (skipButtonText is not null)
+            this.FindControl<Button>("CancelButton")!.Content = skipButtonText;
 
         if (detectedWalPath is not null)
         {

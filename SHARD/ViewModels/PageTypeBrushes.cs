@@ -15,6 +15,8 @@ public static class PageTypeBrushes
         PageType.FreelistTrunk      => new SolidColorBrush(Color.Parse("#E05C5C")),
         PageType.FreelistLeaf       => new SolidColorBrush(Color.Parse("#C0392B")),
         PageType.Overflow           => new SolidColorBrush(Color.Parse("#E0924A")),
+        PageType.PointerMap         => new SolidColorBrush(Color.Parse("#8E6CC9")),
+        PageType.LockByte           => new SolidColorBrush(Color.Parse("#5A5A5A")),
         _                           => new SolidColorBrush(Color.Parse("#888888")),
     };
 }

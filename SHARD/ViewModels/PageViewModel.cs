@@ -4,6 +4,7 @@ using System.Text;
 using Avalonia.Media;
 using ReactiveUI;
 using SHARD.Controls;
+using SHARD.Core.Analysis;
 using SHARD.Core.Decoding;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
@@ -16,6 +17,14 @@ public sealed class PageViewModel : ViewModelBase
 {
     public SqlitePage Page { get; }
 
+    /// <summary>Reserved bytes at the end of each page (database header offset 20), counted as
+    /// explained when counting what recovery leaves unexplained on a whole page.</summary>
+    private readonly int _reservedBytes;
+
+    /// <summary>For a page no B-tree claims, counts what recovery leaves unexplained over the whole
+    /// page (see <c>OrphanPageCarver.WholePageResidual</c>); null for other pages.</summary>
+    private readonly Func<ResidualCount>? _wholePageResidual;
+
     // ── List display ──────────────────────────────────────────────────────
     public uint   PageNumber => Page.PageNumber;
     public string TypeLabel  => Page.PageType.ToString();
@@ -24,14 +33,22 @@ public sealed class PageViewModel : ViewModelBase
     public IBrush TypeBrush => PageTypeBrushes.For(Page.PageType);
 
     // ── Detail panel ──────────────────────────────────────────────────────
-    public string Summary => BuildSummary(Page);
+    public string Summary => BuildSummary(Page, _reservedBytes, _wholePageResidual);
 
     public byte[] PageBytes => Page.Data;
 
     public IReadOnlyList<HexHighlight> PageHighlights => BuildPageHighlights(Page);
 
-    /// <summary>Raise PropertyChanged for PageHighlights so the hex view re-renders after annotations are added.</summary>
-    public void RefreshHighlights() => this.RaisePropertyChanged(nameof(PageHighlights));
+    /// <summary>
+    /// Re-render after recovered cells were added or removed: the hex view's highlights, and the
+    /// unexplained-byte counts in the summary and unallocated regions.
+    /// </summary>
+    public void RefreshHighlights()
+    {
+        this.RaisePropertyChanged(nameof(PageHighlights));
+        this.RaisePropertyChanged(nameof(Summary));
+        foreach (var section in UnallocatedRegionSections) section.Refresh();
+    }
 
     /// <summary>
     /// Adds a newly annotated cell to the Recovered tab after the page was already loaded.
@@ -50,12 +67,15 @@ public sealed class PageViewModel : ViewModelBase
         AnnotatedCellSections.Add(vm);
     }
 
-    // ── Cell pointers expander ────────────────────────────────────────────
-    public bool HasCellPointers => Page is BTreePage bp && bp.CellPointers.Length > 0;
+    // ── Cell pointers expander (a pointer-map page's entries use it too) ───
+    public bool HasCellPointers => CellPointerRows.Count > 0;
 
-    public string CellPointerHeader => Page is BTreePage bpH
-        ? $"Cell Pointers ({bpH.CellPointers.Length})"
-        : "Cell Pointers";
+    public string CellPointerHeader => Page switch
+    {
+        BTreePage bpH       => $"Cell Pointers ({bpH.CellPointers.Length})",
+        PointerMapPage map  => $"Pointer Map Entries ({map.Entries.Count})",
+        _                   => "Cell Pointers",
+    };
 
     public IReadOnlyList<InfoRow> CellPointerRows { get; }
 
@@ -75,9 +95,12 @@ public sealed class PageViewModel : ViewModelBase
     public ObservableCollection<RemovableCellSectionViewModel> CarvedCellSections      { get; } = [];
     public ObservableCollection<RemovableCellSectionViewModel> FreeblockCellSections   { get; } = [];
     public ObservableCollection<RemovableCellSectionViewModel> AnnotatedCellSections   { get; } = [];
+    /// <summary>Cells carved from the whole page: by the orphan-page carver, or from a dropped table's freed root page.</summary>
+    public ObservableCollection<RemovableCellSectionViewModel> PageCarvedCellSections  { get; } = [];
 
     public bool HasRecoveredSections =>
-        CarvedCellSections.Count > 0 || FreeblockCellSections.Count > 0 || AnnotatedCellSections.Count > 0;
+        CarvedCellSections.Count > 0 || FreeblockCellSections.Count > 0 || AnnotatedCellSections.Count > 0
+        || PageCarvedCellSections.Count > 0;
 
     // ── Tab headers with counts ───────────────────────────────────────────
     public string CellsTabHeader         => CellSections.Count > 0        ? $"Cells ({CellSections.Count})"               : "Cells";
@@ -91,14 +114,19 @@ public sealed class PageViewModel : ViewModelBase
     {
         get
         {
-            int total = CarvedCellSections.Count + FreeblockCellSections.Count + AnnotatedCellSections.Count;
+            int total = CarvedCellSections.Count + FreeblockCellSections.Count + AnnotatedCellSections.Count
+                        + PageCarvedCellSections.Count;
             return total > 0 ? $"Recovered ({total})" : "Recovered";
         }
     }
 
-    public PageViewModel(SqlitePage page)
+    /// <param name="wholePageResidual">For a page no B-tree claims: counts the whole page's
+    /// unexplained bytes, which the summary then shows instead of the unallocated-space count.</param>
+    public PageViewModel(SqlitePage page, int reservedBytes = 0, Func<ResidualCount>? wholePageResidual = null)
     {
         Page = page;
+        _wholePageResidual = wholePageResidual;
+        _reservedBytes = page is TableBTreeLeafPage leaf ? leaf.ReservedBytes : reservedBytes;
 
         if (page is BTreePage bp)
         {
@@ -106,6 +134,12 @@ public sealed class PageViewModel : ViewModelBase
             for (int i = 0; i < bp.CellPointers.Length; i++)
                 rows.Add(new InfoRow($"[{i}]", $"0x{bp.CellPointers[i]:X4}  ({bp.CellPointers[i]})"));
             CellPointerRows = rows;
+        }
+        else if (page is PointerMapPage map)
+        {
+            CellPointerRows = map.Entries
+                .Select(e => new InfoRow($"{e.PageNumber}", DescribeEntry(e)))
+                .ToList();
         }
         else
         {
@@ -131,7 +165,7 @@ public sealed class PageViewModel : ViewModelBase
 
             var urSections = new List<UnallocatedRegionSectionViewModel>(tlp.UnallocatedRegions.Count);
             for (int i = 0; i < tlp.UnallocatedRegions.Count; i++)
-                urSections.Add(new UnallocatedRegionSectionViewModel(tlp.UnallocatedRegions[i], i));
+                urSections.Add(new UnallocatedRegionSectionViewModel(tlp.UnallocatedRegions[i], i, tlp.Residual));
             UnallocatedRegionSections = urSections;
 
             PopulateRecoveredSections(tlp);
@@ -153,6 +187,20 @@ public sealed class PageViewModel : ViewModelBase
             FreeBlockSections         = [];
             UnallocatedRegionSections = [];
         }
+
+        for (int i = 0; i < page.CarvedRecoveredCells.Count; i++)
+        {
+            var cell = page.CarvedRecoveredCells[i];
+            RemovableCellSectionViewModel? vm = null;
+            vm = new RemovableCellSectionViewModel(cell, i, cell.PageOffset, () =>
+            {
+                page.CarvedRecoveredCells.Remove(cell);
+                PageCarvedCellSections.Remove(vm!);
+                RefreshHighlights();
+            });
+            PageCarvedCellSections.Add(vm);
+        }
+        PageCarvedCellSections.CollectionChanged += (_, _) => this.RaisePropertyChanged(nameof(RecoveredTabHeader));
     }
 
     private void PopulateRecoveredSections(TableBTreeLeafPage tlp)
@@ -201,7 +249,51 @@ public sealed class PageViewModel : ViewModelBase
         AnnotatedCellSections.CollectionChanged += (_, _) => this.RaisePropertyChanged(nameof(RecoveredTabHeader));
     }
 
-    private static string BuildSummary(SqlitePage page)
+    private static string BuildSummary(SqlitePage page, int reservedBytes, Func<ResidualCount>? wholePageResidual)
+    {
+        string summary = BuildPageSummary(page);
+        string residual = BuildResidualSummary(page, reservedBytes, wholePageResidual);
+        return residual.Length == 0 ? summary : summary + Environment.NewLine + residual;
+    }
+
+    /// <summary>
+    /// How many non-zero bytes recovery has explained: in a table leaf page's unallocated space,
+    /// or over the whole page when cells were carved from it as a whole. Empty when there is
+    /// nothing to report.
+    /// </summary>
+    private static string BuildResidualSummary(SqlitePage page, int reservedBytes, Func<ResidualCount>? wholePageResidual)
+    {
+        var sb = new StringBuilder();
+        if (wholePageResidual is not null)
+        {
+            var count = wholePageResidual();
+            if (count.NonZeroBytes == 0) return "";
+            sb.AppendLine("Whole page (no B-tree uses it) after recovery:");
+            sb.AppendLine($"Non-zero bytes   : {count.NonZeroBytes}");
+            sb.AppendLine($"Explained        : {count.ExplainedNonZeroBytes}");
+            sb.AppendLine($"Unexplained      : {count.UnexplainedNonZeroBytes}");
+        }
+        else if (page is TableBTreeLeafPage tlp)
+        {
+            var count = tlp.UnallocatedResidual();
+            if (count.NonZeroBytes == 0) return "";
+            sb.AppendLine("Unallocated space after recovery:");
+            sb.AppendLine($"Non-zero bytes   : {count.NonZeroBytes}");
+            sb.AppendLine($"Explained        : {count.ExplainedNonZeroBytes}");
+            sb.AppendLine($"Unexplained      : {count.UnexplainedNonZeroBytes}");
+        }
+        else if (page.CarvedRecoveredCells.Count > 0)
+        {
+            var count = ResidualBytes.ForWholePage(page, reservedBytes, page.CarvedRecoveredCells);
+            sb.AppendLine("Whole page after carving:");
+            sb.AppendLine($"Non-zero bytes   : {count.NonZeroBytes}");
+            sb.AppendLine($"Explained        : {count.ExplainedNonZeroBytes}");
+            sb.AppendLine($"Unexplained      : {count.UnexplainedNonZeroBytes}");
+        }
+        return sb.ToString();
+    }
+
+    private static string BuildPageSummary(SqlitePage page)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Page       : {page.PageNumber}");
@@ -214,6 +306,25 @@ public sealed class PageViewModel : ViewModelBase
                 sb.AppendLine($"Type byte  : 0x{(byte)unknown.DeclaredTypeByte:X2} ({unknown.DeclaredTypeByte}) — parse failed");
             if (unknown.ParseError is not null)
                 sb.AppendLine($"Parse error: {unknown.ParseError.GetType().Name}: {unknown.ParseError.Message}");
+            return sb.ToString();
+        }
+
+        if (page is PointerMapPage map)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Pointer map of an auto-vacuum database: what each following page is, and its parent.");
+            if (map.Entries.Count > 0)
+                sb.AppendLine($"Covers pages     : {map.Entries[0].PageNumber}–{map.Entries[^1].PageNumber}");
+            foreach (var group in map.Entries.GroupBy(e => e.Type))
+                sb.AppendLine($"{EntryTypeLabel(group.Key),-17}: {group.Count()}");
+            return sb.ToString();
+        }
+
+        if (page is LockBytePage)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Holds file offset 1 GiB, which SQLite uses only for file locks.");
+            sb.AppendLine("SQLite never writes to this page, so nothing in it came from SQLite.");
             return sb.ToString();
         }
 
@@ -233,6 +344,27 @@ public sealed class PageViewModel : ViewModelBase
 
         return sb.ToString();
     }
+
+    private static string EntryTypeLabel(PointerMapEntryType? type) => type switch
+    {
+        PointerMapEntryType.RootPage  => "Root pages",
+        PointerMapEntryType.FreePage  => "Free pages",
+        PointerMapEntryType.Overflow1 => "Overflow (first)",
+        PointerMapEntryType.Overflow2 => "Overflow (later)",
+        PointerMapEntryType.BTree     => "B-tree pages",
+        _                             => "Invalid type",
+    };
+
+    private static string DescribeEntry(PointerMapEntry e) => e.Type switch
+    {
+        PointerMapEntryType.RootPage  => "root page",
+        PointerMapEntryType.FreePage  => "free page",
+        PointerMapEntryType.Overflow1 => $"overflow, first page; cell on page {e.ParentPage}",
+        PointerMapEntryType.Overflow2 => $"overflow; follows page {e.ParentPage}",
+        PointerMapEntryType.BTree     => $"B-tree page; parent {e.ParentPage}",
+        _                             => $"invalid type 0x{e.TypeByte:X2}; parent {e.ParentPage}",
+    } + (e.ParentPage != 0 && e.Type is PointerMapEntryType.RootPage or PointerMapEntryType.FreePage
+        ? $" (parent {e.ParentPage}, normally 0)" : "");
 
     private static IReadOnlyList<HexHighlight> BuildPageHighlights(SqlitePage page)
     {

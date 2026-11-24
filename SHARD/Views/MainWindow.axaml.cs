@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
@@ -6,11 +8,13 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using ReactiveUI.Primitives;
 using SHARD.Controls;
 using SHARD.Core.Enums;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Settings;
 using SHARD.ViewModels;
 
 namespace SHARD.Views;
@@ -30,9 +34,17 @@ public partial class MainWindow : Window
         Patterns = ["*.db-wal", "*.sqlite-wal", "*.wal"],
     };
 
+    private static readonly FilePickerFileType JournalFilter = new("SQLite Rollback Journal")
+    {
+        Patterns = ["*-journal"],
+    };
+
     public MainWindow()
     {
         InitializeComponent();
+
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        Title = $"SHARD — SQLite Forensic Analyser v{version?.Major}.{version?.Minor}.{version?.Build}";
 
         // Wire up named controls
         this.FindControl<MenuItem>("MenuOpen")!.Click          += OnOpenClick;
@@ -40,6 +52,9 @@ public partial class MainWindow : Window
         this.FindControl<MenuItem>("MenuSaveProject")!.Click   += OnSaveProjectClick;
         this.FindControl<MenuItem>("MenuOpenProject")!.Click   += OnOpenProjectClick;
         this.FindControl<MenuItem>("MenuLoadWal")!.Click       += OnLoadWalClick;
+        this.FindControl<MenuItem>("MenuLoadJournal")!.Click   += OnLoadJournalClick;
+        this.FindControl<MenuItem>("MenuVerifyHashes")!.Click  += (_, _) => Vm.VerifyEvidenceHashes();
+        this.FindControl<MenuItem>("MenuSettings")!.Click      += (_, _) => new SettingsWindow().ShowDialog(this);
         this.FindControl<MenuItem>("MenuExit")!.Click          += (_, _) => Close();
         this.FindControl<Button>("BtnOpen")!.Click             += OnOpenClick;
 
@@ -54,6 +69,15 @@ public partial class MainWindow : Window
         AddHandler(DragDrop.DropEvent,     OnDrop);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
 
+        // Clean up the open file's temp shadow database (if any — CloseFile no-ops otherwise)
+        // however the window closes: the X button, Alt+F4, or Exit (which just calls Close()
+        // too, so this covers it as well) — without this, an unsaved project's temp .db is
+        // orphaned on disk, since nothing else in the app ever deletes it on a normal quit.
+        Closing += (_, _) =>
+        {
+            if (DataContext is MainWindowViewModel vm) vm.CloseFile();
+        };
+
         // Scroll hex view to selected schema row after bindings settle
         DataContextChanged += (_, _) =>
         {
@@ -64,12 +88,28 @@ public partial class MainWindow : Window
                     if (e.PropertyName == nameof(MainWindowViewModel.SelectedSchemaRow) && vm.SelectedSchemaRow is { } row)
                         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                             this.FindControl<HexView>("SchemaHexView")?.ScrollToByteOffset(row.CellOffset));
+
+                    if (e.PropertyName is nameof(MainWindowViewModel.HasWal) or nameof(MainWindowViewModel.HasJournal))
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() => KeepSelectedTabVisible(vm));
                 };
 
                 vm.QueryTab.ResultsUpdated    += (_, _) => RebuildQueryResultColumns(vm.QueryTab);
                 vm.QueryTab.NavigationRequested += OnQueryNavigation;
             }
         };
+    }
+
+    // The WAL and Journal tabs replace each other (and both hide on close). A hidden TabItem stays
+    // selected and keeps showing its now-empty content, so move to whichever tab took its place.
+    private void KeepSelectedTabVisible(MainWindowViewModel vm)
+    {
+        var tabs = this.FindControl<TabControl>("MainTabControl");
+        if (tabs?.SelectedItem is not TabItem { IsVisible: false }) return;
+
+        TabItem? replacement = vm.HasWal     ? this.FindControl<TabItem>("WalTabItem")
+                             : vm.HasJournal ? this.FindControl<TabItem>("JournalTabItem")
+                             : null;
+        tabs.SelectedIndex = replacement is not null ? tabs.Items.IndexOf(replacement) : 0;
     }
 
     // ── Query ────────────────────────────────────────────────────────────────
@@ -189,6 +229,7 @@ public partial class MainWindow : Window
     private DataInspectorWindow? _pageInspectorWindow;
     private DataInspectorWindow? _searchInspectorWindow;
     private DataInspectorWindow? _walInspectorWindow;
+    private DataInspectorWindow? _journalInspectorWindow;
 
     private void OnPageInspectorPopOut(object? sender, RoutedEventArgs e) =>
         OpenInspectorPopOut(
@@ -218,6 +259,16 @@ public partial class MainWindow : Window
             this.FindControl<GridSplitter>("WalInspectorSplitter")!,
             this.FindControl<DataInspectorControl>("WalDataInspector")!,
             this.FindControl<Grid>("WalContentGrid")!);
+
+    private void OnJournalInspectorPopOut(object? sender, RoutedEventArgs e) =>
+        OpenInspectorPopOut(
+            w => _journalInspectorWindow = w, () => _journalInspectorWindow,
+            "Data Inspector — Journal",
+            this.FindControl<HexView>("JournalHexView")!,
+            this.FindControl<Grid>("JournalHexGrid")!,
+            this.FindControl<GridSplitter>("JournalInspectorSplitter")!,
+            this.FindControl<DataInspectorControl>("JournalDataInspector")!,
+            this.FindControl<Grid>("JournalContentGrid")!);
 
     private void OpenInspectorPopOut(
         Action<DataInspectorWindow?> setField,
@@ -297,7 +348,38 @@ public partial class MainWindow : Window
         });
 
         if (files is [var file])
-            Vm.LoadFile(file.Path.LocalPath);
+            await OpenDatabaseFileAsync(file.Path.LocalPath);
+    }
+
+    /// <summary>
+    /// Opens an evidence file, first prompting for a project folder if it's large enough
+    /// that building its shadow database as a temp file is worth avoiding (see
+    /// <see cref="AppSettings.LargeDatabaseThresholdBytes"/>, configurable via the
+    /// Settings window). Declining the prompt (or a small file) falls back to the normal
+    /// temp-backed open. Internal (not private) so <see cref="App"/> can call it for a file
+    /// passed on the command line (e.g. a Windows "Open with SHARD" file association).
+    /// </summary>
+    internal async Task OpenDatabaseFileAsync(string path)
+    {
+        string? projectFolder = null;
+        try
+        {
+            var info = new FileInfo(path);
+            if (info.Exists && info.Length >= AppSettings.Current.LargeDatabaseThresholdBytes)
+            {
+                double gib = info.Length / 1024.0 / 1024.0 / 1024.0;
+                var dialog = new CreateProjectWindow(
+                    promptMessage: $"This database is {gib:F1} GB. Choose a folder on disk to build the " +
+                                   "project there directly, instead of temporary storage that may use memory.",
+                    skipButtonText: "Skip");
+                var result = await dialog.ShowDialog<CreateProjectResult?>(this);
+                if (result is not null)
+                    projectFolder = result.FolderPath;
+            }
+        }
+        catch { /* size check is best-effort — fall through to a normal open */ }
+
+        Vm.LoadFile(path, projectFolder);
     }
 
     private void OnCloseClick(object? sender, RoutedEventArgs e) =>
@@ -314,6 +396,19 @@ public partial class MainWindow : Window
 
         if (files is [var file])
             Vm.LoadWalFile(file.Path.LocalPath);
+    }
+
+    private async void OnLoadJournalClick(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title          = "Open Rollback Journal File",
+            AllowMultiple  = false,
+            FileTypeFilter = [JournalFilter, FilePickerFileTypes.All],
+        });
+
+        if (files is [var file])
+            Vm.LoadJournalFile(file.Path.LocalPath);
     }
 
     private async void OnSaveProjectClick(object? sender, RoutedEventArgs e)
@@ -354,21 +449,68 @@ public partial class MainWindow : Window
         vm.CarveUnknownPages(carveTab.RunFocusedCandidates());
     }
 
+    private static readonly FilePickerFileType CarvingProfileFilter = new("Carving Profile")
+    {
+        Patterns = ["*.json"],
+    };
+
+    private async void OnExportCarvingParametersClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel { CarveTab: { } } vm) return;
+
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title             = "Export Carving Parameters",
+            SuggestedFileName = "carving-parameters.json",
+            FileTypeChoices   = [CarvingProfileFilter],
+        });
+        if (file is null) return;
+
+        vm.ExportCarvingParameters(file.Path.LocalPath);
+    }
+
+    private async void OnLoadCarvingParametersClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel { CarveTab: { } } vm) return;
+
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title          = "Load Carving Parameters",
+            AllowMultiple  = false,
+            FileTypeFilter = [CarvingProfileFilter, FilePickerFileTypes.All],
+        });
+        if (files is not [var file]) return;
+
+        var summary = vm.LoadCarvingParameters(file.Path.LocalPath);
+        if (summary is null) return; // failure already reported via StatusText
+
+        var resultVm = new CarvingProfileLoadResultViewModel
+        {
+            AppliedTables  = summary.TablesApplied,
+            NewTables      = summary.NewTablesNotInProfile,
+            MissingTables  = summary.TablesMissingFromDatabase,
+            ColumnWarnings = summary.ColumnsIgnoredPerTable
+                .SelectMany(kv => kv.Value.Select(col => $"{kv.Key}.{col}"))
+                .ToList(),
+        };
+        await new CarvingProfileLoadResultWindow(resultVm).ShowDialog(this);
+    }
+
     // ── Drag-and-drop ────────────────────────────────────────────────────────
 
     private static void OnDragOver(object? sender, DragEventArgs e)
     {
-        e.DragEffects = e.Data.Contains(DataFormats.Files)
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
         e.Handled = true;
     }
 
-    private void OnDrop(object? sender, DragEventArgs e)
+    private async void OnDrop(object? sender, DragEventArgs e)
     {
-        var file = e.Data.GetFiles()?.FirstOrDefault();
+        var file = e.DataTransfer.TryGetFile();
         if (file is not null)
-            Vm.LoadFile(file.Path.LocalPath);
+            await OpenDatabaseFileAsync(file.Path.LocalPath);
         e.Handled = true;
     }
 
@@ -409,6 +551,20 @@ public partial class MainWindow : Window
         this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
     }
 
+    private void OnJournalCellSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: CellSectionViewModel vm }) return;
+        var hexView = this.FindControl<HexView>("JournalHexView");
+        hexView?.ScrollToByteOffset(vm.ByteOffset);
+        hexView?.SetCursorOffset(vm.ByteOffset);
+    }
+
+    private void OnJournalFreeBlockSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: FreeBlockSectionViewModel vm }) return;
+        this.FindControl<HexView>("JournalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
     private void OnFreeBlockRecordClick(object? sender, RoutedEventArgs e)
     {
         if (sender is not Button { DataContext: FreeBlockRecordEntry entry }) return;
@@ -425,6 +581,14 @@ public partial class MainWindow : Window
         hexView?.SetCursorOffset(entry.ByteOffset);
     }
 
+    private void OnJournalFreeBlockRecordClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: FreeBlockRecordEntry entry }) return;
+        var hexView = this.FindControl<HexView>("JournalHexView");
+        hexView?.ScrollToByteOffset(entry.ByteOffset);
+        hexView?.SetCursorOffset(entry.ByteOffset);
+    }
+
     private void OnUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
     {
         if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
@@ -435,6 +599,87 @@ public partial class MainWindow : Window
     {
         if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
         this.FindControl<HexView>("WalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    private void OnJournalUnallocatedRegionSectionExpanded(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Expander { DataContext: UnallocatedRegionSectionViewModel vm }) return;
+        this.FindControl<HexView>("JournalHexView")?.ScrollToByteOffset(vm.ByteOffset);
+    }
+
+    // ── Go to offset ─────────────────────────────────────────────────────────
+    //
+    // Manual counterpart to the click-driven scrolls above: the scrollbar alone is imprecise for
+    // landing on a specific offset, especially one already known from elsewhere in the UI (a cell
+    // offset, a shard-cli/Python report, etc). Accepts decimal or 0x-prefixed hex; out-of-range
+    // input is clamped rather than rejected outright.
+
+    private static void GoToHexOffset(HexView? hexView, TextBox? offsetBox)
+    {
+        if (hexView is null || offsetBox is null) return;
+
+        string text = offsetBox.Text?.Trim() ?? "";
+        if (text.Length == 0) return;
+
+        bool isHex = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+        string digits = isHex ? text[2..] : text;
+        var style = isHex ? NumberStyles.HexNumber : NumberStyles.Integer;
+        if (!int.TryParse(digits, style, CultureInfo.InvariantCulture, out int offset)) return;
+
+        int length = hexView.Data?.Length ?? 0;
+        if (length == 0) return;
+        offset = Math.Clamp(offset, 0, length - 1);
+
+        hexView.SetCursorOffset(offset);
+        hexView.ScrollToByteOffset(offset);
+    }
+
+    private void OnHdrGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("HdrHexView"), this.FindControl<TextBox>("HdrGoToOffsetBox"));
+
+    private void OnHdrGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnHdrGoToOffsetClick(sender, e);
+    }
+
+    private void OnPageGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("PageHexView"), this.FindControl<TextBox>("PageGoToOffsetBox"));
+
+    private void OnPageGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnPageGoToOffsetClick(sender, e);
+    }
+
+    private void OnSchemaGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("SchemaHexView"), this.FindControl<TextBox>("SchemaGoToOffsetBox"));
+
+    private void OnSchemaGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnSchemaGoToOffsetClick(sender, e);
+    }
+
+    private void OnSearchGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("SearchHexView"), this.FindControl<TextBox>("SearchGoToOffsetBox"));
+
+    private void OnSearchGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnSearchGoToOffsetClick(sender, e);
+    }
+
+    private void OnWalGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("WalHexView"), this.FindControl<TextBox>("WalGoToOffsetBox"));
+
+    private void OnWalGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnWalGoToOffsetClick(sender, e);
+    }
+
+    private void OnJournalGoToOffsetClick(object? sender, RoutedEventArgs e) =>
+        GoToHexOffset(this.FindControl<HexView>("JournalHexView"), this.FindControl<TextBox>("JournalGoToOffsetBox"));
+
+    private void OnJournalGoToOffsetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) OnJournalGoToOffsetClick(sender, e);
     }
 
     // ── Search ───────────────────────────────────────────────────────────────

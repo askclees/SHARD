@@ -56,6 +56,69 @@ public class RecoveryApiTests
     }
 
     [Fact]
+    public void GetHashes_ReturnsDigestsTakenAtOpen()
+    {
+        long handle = OpenHandle(OrphanLeafDb);
+        var doc = JsonDocument.Parse(RecoveryApi.GetHashes(handle));
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+
+        var db = doc.RootElement.GetProperty("data").EnumerateArray()
+            .Single(e => e.GetProperty("role").GetString() == "database");
+        string expected = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(OrphanLeafDb)));
+        Assert.Equal(expected, db.GetProperty("sha256").GetString());
+        Assert.Equal(32, db.GetProperty("md5").GetString()!.Length);
+        Assert.Equal(40, db.GetProperty("sha1").GetString()!.Length);
+    }
+
+    [Fact]
+    public void VerifyHashes_UnchangedFile_ReportsMatchAsString()
+    {
+        long handle = OpenHandle(OrphanLeafDb);
+        var doc = JsonDocument.Parse(RecoveryApi.VerifyHashes(handle));
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+        Assert.All(doc.RootElement.GetProperty("data").EnumerateArray(),
+            e => Assert.Equal("Match", e.GetProperty("status").GetString()));
+    }
+
+    [Fact]
+    public void RecoverToFile_InferZeroedJournalHeaderOption_IsParsedAndOffByDefault()
+    {
+        // A PERSIST-mode database whose last transaction deleted a row: its journal header is zeroed
+        string dir = Path.Combine(Path.GetTempPath(), $"shard_native_persist_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        string db = Path.Combine(dir, "p.db");
+        try
+        {
+            using (var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={db};Pooling=False"))
+            {
+                c.Open();
+                using var cmd = c.CreateCommand();
+                cmd.CommandText = """
+                    PRAGMA journal_mode=PERSIST; PRAGMA secure_delete=ON;
+                    CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT);
+                    INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+                    DELETE FROM t WHERE id = 2;
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            long handle = OpenHandle(db);
+            int Inserted(string? options) => JsonDocument.Parse(RecoveryApi.RecoverToFile(handle, Path.Combine(dir, $"{Guid.NewGuid():N}.db"), options))
+                .RootElement.GetProperty("data").GetProperty("journalRecordsInserted").GetInt32();
+
+            Assert.Equal(0, Inserted(null));
+            Assert.Equal(0, Inserted("""{"processWal":true}"""));
+            Assert.True(Inserted("""{"inferZeroedJournalHeader":true}""") > 0);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
     public void GetHeader_ReturnsPageSize()
     {
         long handle = OpenHandle(OrphanLeafDb);
@@ -93,6 +156,25 @@ public class RecoveryApiTests
         // not subject to the envelope's camelCase policy — moz_places declares visit_count.
         Assert.Equal(JsonValueKind.String, fields.GetProperty("url").ValueKind);
         Assert.Equal(JsonValueKind.Number, fields.GetProperty("visit_count").ValueKind);
+    }
+
+    [Fact]
+    public void GetPageResiduals_WithOrphanCarve_ReportsEachPage()
+    {
+        long handle = OpenHandle(OrphanLeafDb);
+        var doc = JsonDocument.Parse(RecoveryApi.GetPageResiduals(handle, "loose", null));
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+
+        var pages = doc.RootElement.GetProperty("data").EnumerateArray().ToList();
+        var page8 = pages.Single(p => p.GetProperty("pageNumber").GetUInt32() == 8);
+        Assert.Equal("page", page8.GetProperty("area").GetString());
+        Assert.Equal(78, page8.GetProperty("recoveredRecords").GetInt32());
+        Assert.Equal(0, page8.GetProperty("unexplainedNonZeroBytes").GetInt32());
+        Assert.True(page8.GetProperty("nonZeroBytes").GetInt32() > 0);
+
+        var withoutCarve = JsonDocument.Parse(RecoveryApi.GetPageResiduals(handle, null, null));
+        Assert.All(withoutCarve.RootElement.GetProperty("data").EnumerateArray(),
+            p => Assert.Equal("unallocated", p.GetProperty("area").GetString()));
     }
 
     [Fact]

@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-Creates places_wal_no_post_restart_writes.db for SHARD WAL false-positive testing.
+Creates places_wal_no_post_restart_writes.db: rows deleted within the WAL that survive only in an
+earlier committed frame.
 
-The process is killed immediately after PRAGMA wal_checkpoint(RESTART) with NO
-subsequent writes.  Because the WAL salt only changes on the first write after a
-RESTART, all frames in the WAL file still carry the original salt and are
-therefore IsCurrent=True from SHARD's perspective.  InsertWalDeletedRows must
-skip every frame and recover ZERO records — even though the deleted rows (4-6)
-physically exist in the historical WAL frames.
+The process is killed immediately after PRAGMA wal_checkpoint(RESTART) with NO subsequent writes.
+Because the WAL salt only changes on the first write after a RESTART, every frame keeps the
+original salt and is committed; the checkpoint has also copied them all into the database file.
 
-This is a correctness / no-false-positive test: confirming that SHARD does not
-misclassify IsCurrent=True frames as recoverable historical data.
+WAL frames:
+  Page 2 frames: empty -> rows 1-10 (frame 3) -> rows 1-3,7-10 (frame 4, after deleting 4-6)
 
-Historical WAL frames (all IsCurrent=True because salt unchanged):
-  Page 2 frames: empty → rows 1-10 → rows 1-3,7-10 (after delete 4-6)
+secure_delete is on, so deleting rows 4-6 zeroes their bytes in frame 4 and in the database file;
+frame 3 (committed, but superseded by frame 4) is the only surviving copy. SHARD must recover
+rows 4-6 from it, and must not report the 7 live rows (present in every frame) as deleted.
 
 Expected recovery:
-  moz_places — rowsAlive=7, rowsDeleted=0  (no IsCurrent=False frames to mine)
+  moz_places - rowsAlive=7, rowsDeleted=3 (ids 4-6, wal_frame, frame 3)
 """
 import os, signal, sqlite3
 
@@ -33,6 +32,7 @@ for path in (DB_PATH, WAL_PATH, DB_PATH + '-shm'):
 conn = sqlite3.connect(DB_PATH, isolation_level=None)
 conn.execute('PRAGMA journal_mode=WAL')
 conn.execute('PRAGMA wal_autocheckpoint=0')
+conn.execute('PRAGMA secure_delete=ON')  # explicit: the default depends on how SQLite was compiled
 
 conn.execute('''
     CREATE TABLE moz_places (
@@ -54,7 +54,7 @@ conn.executemany(
 )
 conn.execute('COMMIT')
 
-# Delete rows 4-6 — these appear in historical frames but MUST NOT be recovered
+# Delete rows 4-6 — with secure_delete on, frame 3 becomes the only copy of them
 conn.execute('BEGIN')
 conn.execute('DELETE FROM moz_places WHERE id BETWEEN 4 AND 6')
 conn.execute('COMMIT')

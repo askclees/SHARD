@@ -13,11 +13,15 @@ public static class CreateTableParser
     private static readonly string[] ColumnConstraintKeywords =
         { "NOT", "PRIMARY", "UNIQUE", "CHECK", "DEFAULT", "COLLATE", "REFERENCES", "GENERATED", "AS" };
 
+    private static readonly string[] DefaultValueBoundaryKeywords =
+        { "NOT", "PRIMARY", "UNIQUE", "CHECK", "COLLATE", "REFERENCES", "GENERATED", "AS" };
+
     private static readonly string[] TableConstraintLeaders =
         { "PRIMARY", "UNIQUE", "CHECK", "FOREIGN", "CONSTRAINT" };
 
     public static TableSchema? ExtractTableSchema(string sql)
     {
+        string originalSql = sql;
         sql = StripLineComments(sql);
         int openParen = FindTableBodyStart(sql);
         if (openParen < 0) return null;
@@ -25,7 +29,7 @@ public static class CreateTableParser
         int closeParen = FindMatchingParen(sql, openParen);
         if (closeParen < 0) return null;
 
-        var schema = new TableSchema { TableName = ExtractTableName(sql, openParen) };
+        var schema = new TableSchema { TableName = ExtractTableName(sql, openParen), Sql = originalSql };
         string body = sql.Substring(openParen + 1, closeParen - openParen - 1);
         var tablePrimaryKeyColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -95,7 +99,20 @@ public static class CreateTableParser
             IsPrimaryKey = IndexOfWord(constraints, "PRIMARY", 0) >= 0,
             IsNotNull = notNull,
             IsUnique = IndexOfWord(constraints, "UNIQUE", 0) >= 0,
+            DefaultValueSql = ExtractDefaultLiteral(constraints),
         };
+    }
+
+    /// <summary>Extracts the raw SQL text following a column's DEFAULT keyword, up to the next constraint keyword.</summary>
+    private static string? ExtractDefaultLiteral(string constraints)
+    {
+        int idx = FindTopLevelKeyword(constraints, new[] { "DEFAULT" });
+        if (idx < 0) return null;
+
+        string rest = constraints.Substring(idx + "DEFAULT".Length);
+        int endIdx = FindTopLevelKeyword(rest, DefaultValueBoundaryKeywords);
+        string valueText = (endIdx < 0 ? rest : rest.Substring(0, endIdx)).Trim();
+        return valueText.Length == 0 ? null : valueText;
     }
 
     private static List<string> ExtractParenColumnNames(string constraintText)

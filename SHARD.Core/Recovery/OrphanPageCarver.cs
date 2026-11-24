@@ -1,3 +1,4 @@
+using SHARD.Core.Analysis;
 using SHARD.Core.Enums;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
@@ -17,6 +18,14 @@ public enum CarveMode
 
 /// <summary>A B-tree leaf cell carved from a page with no known owning table, attributed to one by content matching.</summary>
 public readonly record struct CarvedOrphanRecord(TableSchema Schema, BTreeLeafCell Cell, uint PageNumber);
+
+/// <summary>
+/// One page <see cref="OrphanPageCarver.Carve"/> scanned: how many records it carved there, and how
+/// many of the page's non-zero bytes those records and the page's own structure leave unexplained.
+/// <see cref="PageType"/> is <see cref="Enums.PageType.FreelistTrunk"/> for a trunk found through the
+/// freelist, which reading the page alone can't recognise.
+/// </summary>
+public readonly record struct OrphanPageResidual(uint PageNumber, PageType PageType, int CarvedRecords, ResidualCount Count);
 
 /// <summary>
 /// Explicit, user-triggered scan of pages that <see cref="SqliteForensicDatabase.GetUnclaimedPageNumbers"/>
@@ -140,4 +149,59 @@ public static class OrphanPageCarver
 
         return results;
     }
+
+    /// <summary>
+    /// For each page <see cref="Carve"/> scans that holds any non-zero data, the bytes
+    /// <paramref name="results"/> (from that scan) leave unexplained. The whole page is counted,
+    /// as the carver scans the whole page; see <see cref="ResidualBytes.ForWholePage"/>. Freelist
+    /// trunk pages are read as trunks, so their header and leaf list count as explained.
+    /// </summary>
+    public static IReadOnlyList<OrphanPageResidual> Residuals(
+        SqliteForensicDatabase database, IReadOnlyList<CarvedOrphanRecord> results)
+    {
+        var cellsByPage = results.GroupBy(r => r.PageNumber)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.Cell).ToList());
+        int reserved = database.Header.ReservedBytesPerPage;
+        var trunks = ReadFreelistTrunks(database);
+        var residuals = new List<OrphanPageResidual>();
+
+        foreach (uint pageNumber in database.GetUnclaimedPageNumbers())
+        {
+            SqlitePage page;
+            try { page = database.ReadPage(pageNumber); }
+            catch { continue; }
+
+            var cells = cellsByPage.TryGetValue(pageNumber, out var c) ? c : [];
+            var count = WholePageResidual(page, reserved, cells, trunks);
+            if (count.NonZeroBytes > 0)
+                residuals.Add(new OrphanPageResidual(pageNumber,
+                    trunks.ContainsKey(pageNumber) ? PageType.FreelistTrunk : page.PageType, cells.Count, count));
+        }
+
+        return residuals;
+    }
+
+    /// <summary>
+    /// The database's freelist trunk pages by page number. A trunk has no type byte, so reading
+    /// the page alone can't recognise one; the freelist chain can. Empty if the chain can't be read.
+    /// </summary>
+    public static IReadOnlyDictionary<uint, FreelistTrunkPage> ReadFreelistTrunks(SqliteForensicDatabase database)
+    {
+        var trunks = new Dictionary<uint, FreelistTrunkPage>();
+        try
+        {
+            foreach (var trunk in database.ReadFreelistChain()) trunks.TryAdd(trunk.PageNumber, trunk);
+        }
+        catch { /* a damaged freelist: its pages are counted as ordinary pages */ }
+        return trunks;
+    }
+
+    /// <summary>
+    /// <see cref="ResidualBytes.ForWholePage"/> for a page the carver scans, reading it as a freelist
+    /// trunk if it is one (see <see cref="ReadFreelistTrunks"/>) so its header and leaf list count
+    /// as explained.
+    /// </summary>
+    public static ResidualCount WholePageResidual(SqlitePage page, int reservedBytes, IEnumerable<BTreeLeafCell> cells,
+        IReadOnlyDictionary<uint, FreelistTrunkPage> trunks) =>
+        ResidualBytes.ForWholePage(trunks.TryGetValue(page.PageNumber, out var trunk) ? trunk : page, reservedBytes, cells);
 }

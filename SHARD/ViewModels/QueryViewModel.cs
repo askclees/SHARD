@@ -1,13 +1,16 @@
 using System;
 using System.Collections.ObjectModel;
-using System.Reactive;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using ReactiveUI;
+using ReactiveUI.Primitives;
 using SHARD.Core.Shadow;
 
 namespace SHARD.ViewModels;
+
+/// <summary>A preset filter on the row-state columns (_db_state, _log_state, _is_current).</summary>
+public sealed record RowStateFilter(string Label, string? Condition, string Tip);
 
 public sealed class QueryViewModel : ViewModelBase
 {
@@ -80,7 +83,7 @@ public sealed class QueryViewModel : ViewModelBase
 
     // ── Command ───────────────────────────────────────────────────────────────
 
-    public ReactiveCommand<Unit, Unit> RunQueryCommand { get; }
+    public ReactiveCommand<RxVoid, RxVoid> RunQueryCommand { get; }
 
     public QueryViewModel()
     {
@@ -112,6 +115,11 @@ public sealed class QueryViewModel : ViewModelBase
                     string bare = name[ShadowDatabaseBuilder.DeletedTablePrefix.Length..];
                     TableNames.Add(new QueryTableViewModel(name, $"{bare} (deleted)"));
                 }
+                else if (name.StartsWith(ShadowDatabaseBuilder.RecoveredTablePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    string bare = name[ShadowDatabaseBuilder.RecoveredTablePrefix.Length..];
+                    TableNames.Add(new QueryTableViewModel(name, $"{bare} (recovered)"));
+                }
             }
         }
         catch
@@ -122,11 +130,75 @@ public sealed class QueryViewModel : ViewModelBase
 
     // ── Options ───────────────────────────────────────────────────────────────
 
-    private bool _includeDeletedRecords;
-    public bool IncludeDeletedRecords
+    /// <summary>Which of a table's rows a query runs against: only its live shadow table,
+    /// only its <c>_shard_recovered_*</c> table, or both (unioned, tagged with an
+    /// <c>_is_recovered</c> column). See <see cref="BuildRuntimeSql"/>.</summary>
+    public enum RecordScope { Live, Recovered, LiveAndRecovered }
+
+    private RecordScope _recordScope = RecordScope.Live;
+    public RecordScope SelectedRecordScope
     {
-        get => _includeDeletedRecords;
-        set => this.RaiseAndSetIfChanged(ref _includeDeletedRecords, value);
+        get => _recordScope;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _recordScope, value);
+            this.RaisePropertyChanged(nameof(IsLiveOnly));
+            this.RaisePropertyChanged(nameof(IsRecoveredOnly));
+            this.RaisePropertyChanged(nameof(IsLiveAndRecovered));
+        }
+    }
+
+    // Exposed as three mutually-exclusive bools rather than SelectedRecordScope directly so the
+    // view can bind them straight to a RadioButton group without a value converter.
+    public bool IsLiveOnly
+    {
+        get => _recordScope == RecordScope.Live;
+        set { if (value) SelectedRecordScope = RecordScope.Live; }
+    }
+
+    public bool IsRecoveredOnly
+    {
+        get => _recordScope == RecordScope.Recovered;
+        set { if (value) SelectedRecordScope = RecordScope.Recovered; }
+    }
+
+    public bool IsLiveAndRecovered
+    {
+        get => _recordScope == RecordScope.LiveAndRecovered;
+        set { if (value) SelectedRecordScope = RecordScope.LiveAndRecovered; }
+    }
+
+    /// <summary>The Row state choices. Each wraps the query as
+    /// <c>SELECT * FROM (query) WHERE condition</c>, so the query's results must include the state
+    /// columns (a <c>SELECT *</c> does).</summary>
+    public IReadOnlyList<RowStateFilter> RowStateFilters { get; } =
+    [
+        new("All rows", null, "No filter on row state."),
+        new("Current", $"{RowStates.IsCurrentColumn} = 1",
+            "What SQLite returns now: the database file with its WAL's committed frames applied, or with its hot journal rolled back."),
+        new("Deleted by the WAL", $"{RowStates.DbStateColumn} = 1 AND {RowStates.LogStateColumn} = 2",
+            "Live in the database file, deleted by a committed WAL transaction not yet checkpointed."),
+        new("Added by the WAL", $"{RowStates.DbStateColumn} = 0 AND {RowStates.LogStateColumn} = 1",
+            "Live, but not in the database file yet: added by the WAL."),
+        new("Changed by the WAL (earlier version)", $"{RowStates.DbStateColumn} = 1 AND {RowStates.LogStateColumn} = 3",
+            "The database file's version of a row the WAL has since changed."),
+        new("Only ever in the WAL", $"{RowStates.DbStateColumn} = 0 AND {RowStates.LogStateColumn} = 2",
+            "Inserted and deleted within the WAL: never in the database file, not live now."),
+        new("Restored by the journal", $"{RowStates.DbStateColumn} <> 1 AND {RowStates.LogStateColumn} = 1 AND {RowStates.IsCurrentColumn} = 1",
+            "Not live in the database file, but SQLite restores it when it rolls back the hot journal: removed by a transaction that never committed."),
+        new("Uncommitted (discarded by the journal)", $"{RowStates.DbStateColumn} = 1 AND {RowStates.IsCurrentColumn} = 0 AND {RowStates.LogStateColumn} IN (0, 3)",
+            "Live in the database file, but written by a transaction that never committed: SQLite discards it when it rolls back the hot journal."),
+        new("Deleted since the journal's copy", $"{RowStates.DbStateColumn} <> 1 AND {RowStates.LogStateColumn} = 1 AND {RowStates.IsCurrentColumn} = 0",
+            "Live in a journal record (a page from before a committed transaction), but not live now: deleted or changed by that transaction."),
+        new("Deleted in the database file", $"{RowStates.DbStateColumn} = 2",
+            "Found only in the database file's deleted data (deleted cells, unallocated space, freeblocks)."),
+    ];
+
+    private RowStateFilter? _selectedRowStateFilter;
+    public RowStateFilter SelectedRowStateFilter
+    {
+        get => _selectedRowStateFilter ?? RowStateFilters[0];
+        set => this.RaiseAndSetIfChanged(ref _selectedRowStateFilter, value);
     }
 
     /// <summary>Set the query text to a default "SELECT * FROM ..." for the given table and run it.</summary>
@@ -139,46 +211,84 @@ public sealed class QueryViewModel : ViewModelBase
     private static string QuoteIdentifier(string name) => $"\"{name.Replace("\"", "\"\"")}\"";
 
     /// <summary>
-    /// If <see cref="IncludeDeletedRecords"/> is on, wraps the user's SQL in a CTE and
-    /// UNIONs the matching recovered table, so the original <see cref="QueryText"/> is
-    /// never modified. Returns the original SQL unchanged if no known table is detected.
+    /// Builds the regex that matches "FROM &lt;table&gt;" for either a quoted or bare
+    /// reference to <paramref name="tableName"/>, as it would appear in user-typed SQL.
+    /// </summary>
+    private static string BuildFromMatchPattern(string tableName) =>
+        @"\bFROM\s+(" + Regex.Escape($"\"{tableName}\"") + "|" + Regex.Escape(tableName) + @"\b)";
+
+    /// <summary>
+    /// Finds the first *live* user table (never an internal <c>_shard_*</c> table — those
+    /// are already scope-specific, so they're not candidates for further substitution)
+    /// referenced after FROM in <see cref="QueryText"/>, quoted or bare.
+    /// </summary>
+    private string? FindMatchedLiveTableName()
+    {
+        foreach (var t in TableNames)
+        {
+            if (t.ActualName.StartsWith(ShadowDatabaseBuilder.InternalTablePrefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (Regex.IsMatch(QueryText, BuildFromMatchPattern(t.ActualName), RegexOptions.IgnoreCase))
+                return t.ActualName;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Rewrites the user's SQL to match <see cref="SelectedRecordScope"/>: unchanged for
+    /// <see cref="RecordScope.Live"/>; its FROM table swapped for the matching
+    /// <c>_shard_recovered_*</c> table for <see cref="RecordScope.Recovered"/> (preserving
+    /// any WHERE/ORDER BY/etc. as-is); or wrapped in a CTE and UNIONed with the recovered
+    /// table, tagged with an <c>_is_recovered</c> column, for
+    /// <see cref="RecordScope.LiveAndRecovered"/>. Returns the original SQL unchanged if no
+    /// known live table is detected.
     /// </summary>
     private string BuildRuntimeSql()
     {
-        if (!_includeDeletedRecords) return QueryText;
+        string sql = BuildScopedSql();
+        if (SelectedRowStateFilter.Condition is not { } condition) return sql;
 
-        // Find the first known table referenced after FROM (quoted or bare identifier).
-        string? matched = null;
-        foreach (var t in TableNames)
-        {
-            string pattern = @"\bFROM\s+(" + Regex.Escape($"\"{t.ActualName}\"") + "|" + Regex.Escape(t.ActualName) + @"\b)";
-            if (Regex.IsMatch(QueryText, pattern, RegexOptions.IgnoreCase))
-            {
-                matched = t.ActualName;
-                break;
-            }
-        }
+        // Only a query that returns rows can be filtered
+        string trimmed = sql.Trim().TrimEnd(';').Trim();
+        if (!Regex.IsMatch(trimmed, @"^\s*(SELECT|WITH)\b", RegexOptions.IgnoreCase)) return sql;
+        return $"SELECT * FROM ({trimmed}) WHERE {condition}";
+    }
 
+    private string BuildScopedSql()
+    {
+        if (_recordScope == RecordScope.Live) return QueryText;
+
+        string? matched = FindMatchedLiveTableName();
         if (matched is null) return QueryText;
 
         string recovered = ShadowDatabaseBuilder.RecoveredTablePrefix + matched;
 
-        // Use the recovered table's actual column list on both sides of the UNION so the
-        // column counts always match, even when the live shadow table has extra columns
-        // that an older project's recovered table doesn't (e.g. _overflow_page).
+        if (_recordScope == RecordScope.Recovered)
+        {
+            return Regex.Replace(
+                QueryText, BuildFromMatchPattern(matched), "FROM " + QuoteIdentifier(recovered),
+                RegexOptions.IgnoreCase);
+        }
+
+        // LiveAndRecovered — use the recovered table's actual column list on both sides of the
+        // UNION so the column counts always match, even when the live shadow table has extra
+        // columns that an older project's recovered table doesn't (e.g. _overflow_page).
         var cols = GetTableColumns(recovered);
         if (cols.Count == 0) return QueryText;
 
-        // Live shadow table has all recovered-table columns except _recovery_method.
-        // Substitute NULL on the live side so the UNION column counts match and the
+        // The recovered table has columns the live table doesn't (_recovery_method, _wal_frame, _journal_record).
+        // Substitute NULL for each on the live side so the UNION column counts match and the
         // live SELECT doesn't fail with "no such column".
+        var liveCols = GetTableColumns(matched).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string colList     = string.Join(", ", cols.Select(QuoteIdentifier));
         string liveColList = string.Join(", ", cols.Select(c =>
-            c == ShadowDatabaseBuilder.RecoveryMethodColumn
-                ? $"NULL AS {QuoteIdentifier(c)}"
-                : QuoteIdentifier(c)));
+            liveCols.Contains(c)
+                ? QuoteIdentifier(c)
+                : $"NULL AS {QuoteIdentifier(c)}"));
 
-        return $"WITH _shard_q AS ({QueryText})\n" +
+        // A trailing ';' would end the statement inside the CTE's parentheses
+        string query = QueryText.Trim().TrimEnd(';').TrimEnd();
+        return $"WITH _shard_q AS ({query})\n" +
                $"SELECT {liveColList}, 0 AS _is_recovered FROM _shard_q\n" +
                $"UNION ALL\n" +
                $"SELECT {colList}, 1 AS _is_recovered FROM {QuoteIdentifier(recovered)}";
@@ -306,7 +416,7 @@ public sealed class QueryViewModel : ViewModelBase
         ErrorMessage = null;
         Summary = "";
         HasRun = false;
-        IncludeDeletedRecords = false;
+        SelectedRecordScope = RecordScope.Live;
         Results.Clear();
         ColumnNames.Clear();
         TableNames.Clear();

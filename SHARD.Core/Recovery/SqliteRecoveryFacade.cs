@@ -1,10 +1,11 @@
 using Microsoft.Data.Sqlite;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Schema;
+using SHARD.Core.Session;
 using SHARD.Core.Shadow;
-using SHARD.Core.WAL;
 
 namespace SHARD.Core.Recovery;
 
@@ -15,11 +16,15 @@ namespace SHARD.Core.Recovery;
 // stable contract for out-of-process consumers (SHARD.Native's exports serialize
 // these types directly).
 
-/// <summary>Options controlling <see cref="SqliteRecoveryFacade.Recover"/>.</summary>
+/// <summary>Options controlling <see cref="SqliteRecoveryFacade.Recover"/>. <paramref name="Flags"/>
+/// null means <see cref="RecoveryFlags.Default"/> (everything on, matching historical behavior).
+/// <paramref name="InferZeroedJournalHeader"/> is experimental and off by default: read a sibling
+/// journal whose header SQLite zeroed (journal_mode=PERSIST) — see <c>ZeroedHeaderJournalReader</c>.</summary>
 public sealed record RecoveryOptions(
-    bool ProcessWal = true,
+    RecoveryFlags? Flags = null,
     CarveMode? CarveMode = null,
-    IReadOnlyList<string>? CarveTableFilter = null);
+    IReadOnlyList<string>? CarveTableFilter = null,
+    bool InferZeroedJournalHeader = false);
 
 public sealed record TableRecoverySummary(string TableName, int LiveRowCount, int RecoveredRowCount);
 
@@ -29,7 +34,9 @@ public sealed record RecoveryResult(
     IReadOnlyList<TableRecoverySummary> Tables,
     int WalRecordsInserted,
     int CarvedRecords,
-    int CarveAmbiguousSkipped);
+    int CarveAmbiguousSkipped,
+    int JournalRecordsInserted = 0,
+    IReadOnlyList<EvidenceFileHash>? EvidenceHashes = null);
 
 public sealed record DatabaseHeaderInfo(
     string Magic, int PageSize, string WriteVersion, int ReadVersion, int ReservedBytesPerPage,
@@ -42,6 +49,17 @@ public sealed record SchemaEntryInfo(string Type, string Name, string TableName,
 public sealed record PageInfo(uint PageNumber, string Type, string? TableName, int? DeletedCellCount);
 
 public sealed record RowInfo(long RowId, uint PageNumber, int CellOffset, IReadOnlyDictionary<string, object?> Fields);
+
+/// <summary>
+/// Non-zero bytes left unexplained on one page after recovery (see <see cref="SqliteRecoveryFacade.GetPageResiduals"/>).
+/// <paramref name="Area"/> is <c>"unallocated"</c> for a table leaf page, where only the space no
+/// live row uses is counted, or <c>"page"</c> for a page carved as a whole by the orphan-page
+/// carver. <paramref name="TableName"/> is the owning table, or for an orphan page the table(s) its
+/// carved records matched (null if none).
+/// </summary>
+public sealed record PageResidualInfo(
+    uint PageNumber, string Type, string? TableName, string Area,
+    int RecoveredRecords, int NonZeroBytes, int UnexplainedNonZeroBytes);
 
 public sealed record CarvedRowInfo(string TableName, long RowId, uint PageNumber, int CellOffset, IReadOnlyDictionary<string, object?> Fields);
 
@@ -58,7 +76,7 @@ public static class SqliteRecoveryFacade
     /// <summary>
     /// Opens <paramref name="inputPath"/>, builds a fully recovered SQLite database at
     /// <paramref name="outputPath"/> (live rows, in-tree deleted/freeblock-recovered rows, and —
-    /// per <paramref name="options"/> — WAL-recovered rows and/or orphan-page-carved rows), and
+    /// per <paramref name="options"/> — WAL- or rollback-journal-recovered rows and/or orphan-page-carved rows), and
     /// returns a summary. <paramref name="outputPath"/> is itself a normal, valid SQLite database
     /// any SQLite library (including Python's stdlib <c>sqlite3</c>) can open directly.
     /// </summary>
@@ -66,32 +84,25 @@ public static class SqliteRecoveryFacade
     {
         options ??= new RecoveryOptions();
 
-        using var database = SqliteForensicDatabase.Open(inputPath);
-        var warnings = ShadowDatabaseBuilder.Create(outputPath, database);
-
-        int walInserted = 0;
-        if (options.ProcessWal)
-        {
-            string walPath = inputPath + "-wal";
-            if (File.Exists(walPath))
-            {
-                var wal = new WalFile(walPath, database.Header.TextEncoding, database.Header.ReservedBytesPerPage);
-                using var walConnection = new SqliteConnection($"Data Source={outputPath}");
-                walConnection.Open();
-                walInserted = ShadowDatabaseBuilder.InsertWalDeletedRows(walConnection, database, wal);
-            }
-        }
+        // InferZeroedJournalHeader is experimental and opt-in: see ZeroedHeaderJournalReader
+        using var session = EvidenceSession.Open(inputPath, inferZeroedJournalHeader: options.InferZeroedJournalHeader);
+        // The committed state when a WAL applies, so live row counts match what SQLite returns
+        var database = session.ShadowSource(options.Flags);
+        var (warnings, walInserted, journalInserted) = session.BuildShadowDatabase(outputPath, options.Flags);
 
         int carved = 0, carveAmbiguous = 0;
         if (options.CarveMode is { } mode)
         {
-            var candidates = OrphanPageCarver.BuildCandidates(database, mode, options.CarveTableFilter);
-            var results = OrphanPageCarver.Carve(database, candidates, out carveAmbiguous);
+            var candidates = OrphanPageCarver.BuildCandidates(session.Database, mode, options.CarveTableFilter);
+            var results = OrphanPageCarver.Carve(session.Database, candidates, out carveAmbiguous);
             carved = results.Count;
 
-            using var carveConnection = new SqliteConnection($"Data Source={outputPath}");
-            carveConnection.Open();
-            ShadowDatabaseBuilder.PersistCarvedOrphanRecords(carveConnection, results);
+            using (var carveConnection = new SqliteConnection($"Data Source={outputPath}"))
+            {
+                carveConnection.Open();
+                ShadowDatabaseBuilder.PersistCarvedOrphanRecords(carveConnection, results);
+            }
+            session.UpdateRowStates(outputPath, options.Flags); // label the carved rows too
         }
 
         var tables = new List<TableRecoverySummary>();
@@ -107,8 +118,16 @@ public static class SqliteRecoveryFacade
             }
         }
 
-        return new RecoveryResult(outputPath, warnings, tables, walInserted, carved, carveAmbiguous);
+        return new RecoveryResult(outputPath, warnings, tables, walInserted, carved, carveAmbiguous, journalInserted, session.Hashes);
     }
+
+    /// <summary>MD5, SHA-1 and SHA-256 of the database and every sidecar beside it, computed now.</summary>
+    public static IReadOnlyList<EvidenceFileHash> GetHashes(string inputPath) =>
+        EvidenceHasher.HashEvidenceSet(inputPath);
+
+    /// <summary>Re-hashes the evidence set and compares it with <paramref name="recorded"/>.</summary>
+    public static IReadOnlyList<HashVerification> VerifyHashes(string inputPath, IReadOnlyList<EvidenceFileHash> recorded) =>
+        EvidenceHasher.Verify(inputPath, recorded);
 
     public static DatabaseHeaderInfo GetHeader(string inputPath)
     {
@@ -173,6 +192,56 @@ public static class SqliteRecoveryFacade
                     .Select(cell => new RowInfo(cell.RowId.Value, p.PageNumber, cell.PageOffset, FieldsFromCell(schema, cell)));
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// For each table leaf page, its unallocated space's non-zero bytes and how many of them in-tree
+    /// recovery (deleted-pointer, carving and freeblock recovery) leaves unexplained. With
+    /// <paramref name="orphanCarveMode"/>, also runs the read-only orphan-page carve (as
+    /// <see cref="CarveUnknownPages"/>) and adds each scanned page holding non-zero data, counted
+    /// over the whole page. Pages with no non-zero bytes to explain are left out. Read-only.
+    /// </summary>
+    public static IReadOnlyList<PageResidualInfo> GetPageResiduals(
+        string inputPath, CarveMode? orphanCarveMode = null, IReadOnlyList<string>? tableFilter = null)
+    {
+        using var database = SqliteForensicDatabase.Open(inputPath);
+        var results = new List<PageResidualInfo>();
+
+        foreach (var master in database.ReadSqliteMaster())
+        {
+            if (master.ObjectType != SqliteMasterObjectType.Table || master.RootPage is not > 0) continue; // 0: virtual table
+            var schema = database.GetTableSchema(master.Name);
+            if (schema is null) continue;
+            var structure = RecordStructure.FromSchema(schema);
+
+            foreach (uint pageNumber in database.GetTreePageNumbers(master.RootPage.Value))
+            {
+                if (database.ReadPage(pageNumber) is not TableBTreeLeafPage page) continue;
+                page.CarveDeletedCells(structure);
+                page.CarveFreeblockCells(structure);
+                var count = page.UnallocatedResidual();
+                if (count.NonZeroBytes == 0) continue;
+                int recovered = page.DeletedCells.Count + page.CarvedCells.Count + page.FreeblockCells.Count;
+                results.Add(new PageResidualInfo(pageNumber, page.PageType.ToString(), master.Name, "unallocated",
+                    recovered, count.NonZeroBytes, count.UnexplainedNonZeroBytes));
+            }
+        }
+
+        if (orphanCarveMode is { } mode)
+        {
+            var candidates = OrphanPageCarver.BuildCandidates(database, mode, tableFilter);
+            var carved = OrphanPageCarver.Carve(database, candidates, out _);
+            var tablesByPage = carved.GroupBy(r => r.PageNumber).ToDictionary(
+                g => g.Key,
+                g => string.Join(", ", g.Select(r => r.Schema.TableName).Distinct(StringComparer.OrdinalIgnoreCase)));
+            foreach (var residual in OrphanPageCarver.Residuals(database, carved))
+                results.Add(new PageResidualInfo(residual.PageNumber,
+                    residual.PageType.ToString(),
+                    tablesByPage.GetValueOrDefault(residual.PageNumber), "page",
+                    residual.CarvedRecords, residual.Count.NonZeroBytes, residual.Count.UnexplainedNonZeroBytes));
+        }
+
+        return results.OrderBy(r => r.PageNumber).ToList();
     }
 
     /// <summary>

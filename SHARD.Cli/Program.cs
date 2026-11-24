@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SHARD.Core;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
 using SHARD.Core.Pages;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
@@ -64,6 +65,8 @@ try
         "pages"   => RunPages(positional, outputPath, format),
         "header"  => RunHeader(positional, outputPath, format),
         "carve"   => RunCarve(positional, outputPath, format),
+        "hash"    => RunHash(positional, outputPath, format),
+        "residual" => RunResidual(positional, outputPath, format),
         _         => Die($"Unknown command '{command}'. Run 'shard-cli --help' for usage."),
     };
 }
@@ -265,6 +268,35 @@ int RunHeader(List<string> pos, string? outPath, string fmt)
     return 0;
 }
 
+// ── hash ──────────────────────────────────────────────────────────────────────
+
+int RunHash(List<string> pos, string? outPath, string fmt)
+{
+    if (pos.Count < 2) Die("Usage: shard-cli hash <db-file>");
+    string dbPath = pos[1];
+    if (!File.Exists(dbPath)) Die($"File not found: '{dbPath}'.");
+
+    var hashes = EvidenceHasher.HashEvidenceSet(dbPath);
+    var doc = new { files = hashes };
+
+    Write(outPath, fmt, doc, d =>
+    {
+        var sb = new StringBuilder();
+        foreach (var h in d.files)
+        {
+            sb.AppendLine($"{h.Role}  {h.Path}");
+            sb.AppendLine($"  size      {h.Length:N0} bytes");
+            sb.AppendLine($"  modified  {h.LastWriteUtc:O}");
+            sb.AppendLine($"  md5       {h.Md5}");
+            sb.AppendLine($"  sha1      {h.Sha1}");
+            sb.AppendLine($"  sha256    {h.Sha256}");
+            sb.AppendLine($"  hashed    {h.HashedUtc:O}");
+        }
+        return sb.ToString();
+    });
+    return 0;
+}
+
 // ── carve ─────────────────────────────────────────────────────────────────────
 
 int RunCarve(List<string> pos, string? outPath, string fmt)
@@ -298,6 +330,7 @@ int RunCarve(List<string> pos, string? outPath, string fmt)
     using var db = OpenDb(dbPath!);
     var candidates = OrphanPageCarver.BuildCandidates(db, mode, tableFilter.Count > 0 ? tableFilter : null);
     var carved = OrphanPageCarver.Carve(db, candidates, out int ambiguousSkipped);
+    var carvedPages = OrphanPageCarver.Residuals(db, carved).Where(r => r.CarvedRecords > 0).ToList();
 
     var doc = new
     {
@@ -305,6 +338,15 @@ int RunCarve(List<string> pos, string? outPath, string fmt)
         candidateTables = candidates.Select(c => c.Schema.TableName).ToList(),
         count           = carved.Count,
         ambiguousSkipped,
+        // Each page records were carved from: its non-zero bytes, and how many no carved record
+        // or page structure explains.
+        pages = carvedPages.Select(r => new
+        {
+            page                    = r.PageNumber,
+            carvedRecords           = r.CarvedRecords,
+            nonZeroBytes            = r.Count.NonZeroBytes,
+            unexplainedNonZeroBytes = r.Count.UnexplainedNonZeroBytes,
+        }).ToList(),
         records = carved.Select(r =>
         {
             var columns = BuildColumnNames(r.Schema);
@@ -318,8 +360,51 @@ int RunCarve(List<string> pos, string? outPath, string fmt)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Mode: {d.mode}  Candidates: {d.candidateTables.Count}  Carved: {d.count}  Ambiguous skipped: {d.ambiguousSkipped}");
+        foreach (var p in d.pages)
+            sb.AppendLine($"  Page {p.page,4}: {p.carvedRecords} record(s), {p.unexplainedNonZeroBytes} of {p.nonZeroBytes} non-zero bytes unexplained");
         foreach (var r in d.records)
             sb.AppendLine(JsonSerializer.Serialize(r));
+        return sb.ToString();
+    });
+    return 0;
+}
+
+// ── residual ──────────────────────────────────────────────────────────────────
+
+int RunResidual(List<string> pos, string? outPath, string fmt)
+{
+    string? dbPath = null;
+    string? modeArg = null;
+    for (int i = 1; i < pos.Count; i++)
+    {
+        if (pos[i] == "--carve")
+        {
+            if (++i >= pos.Count) Die("--carve requires a value.");
+            modeArg = pos[i].ToLowerInvariant();
+        }
+        else if (dbPath is null) dbPath = pos[i];
+        else Die($"Unexpected argument '{pos[i]}'.");
+    }
+    if (dbPath is null) Die("Usage: shard-cli residual <db-file> [--carve loose|tight]");
+    if (modeArg is not (null or "loose" or "tight")) Die($"Unknown mode '{modeArg}'. Use 'loose' or 'tight'.");
+    CarveMode? mode = modeArg switch { "loose" => CarveMode.Loose, "tight" => CarveMode.Tight, _ => null };
+
+    using (OpenDb(dbPath!)) { } // the same file checks and error messages as the other commands
+    var pages = SqliteRecoveryFacade.GetPageResiduals(dbPath!, mode);
+
+    var doc = new
+    {
+        nonZeroBytes            = pages.Sum(p => p.NonZeroBytes),
+        unexplainedNonZeroBytes = pages.Sum(p => p.UnexplainedNonZeroBytes),
+        pages,
+    };
+
+    Write(outPath, fmt, doc, d =>
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Unexplained after recovery: {d.unexplainedNonZeroBytes} of {d.nonZeroBytes} non-zero bytes");
+        foreach (var p in d.pages)
+            sb.AppendLine($"  {p.PageNumber,4}  {p.Type,-18}  {p.Area,-11}  {p.UnexplainedNonZeroBytes,6} of {p.NonZeroBytes,-6}  {p.RecoveredRecords} recovered  {p.TableName ?? ""}");
         return sb.ToString();
     });
     return 0;
@@ -417,6 +502,13 @@ static void PrintHelp() => Console.WriteLine("""
       header  <db>           Dump database header fields
       carve   <db>           Try every live table's schema against unclaimed pages
                               [--mode loose|tight] [--table <name> ...]
+      hash    <db>           MD5, SHA-1 and SHA-256 of the database and any
+                              -wal, -journal or -shm file beside it
+      residual <db>          Per page, the non-zero bytes recovery leaves
+                              unexplained in table leaf pages' unallocated
+                              space; --carve also counts unclaimed pages
+                              after the orphan-page carve
+                              [--carve loose|tight]
 
     Global options:
       -f, --format json|text   Output format (default: json)
@@ -433,7 +525,9 @@ static void PrintHelp() => Console.WriteLine("""
       shard-cli schema  mydb.sqlite
       shard-cli pages   mydb.sqlite -f text
       shard-cli header  mydb.sqlite
+      shard-cli hash    mydb.sqlite -f text
       shard-cli rows    mydb.sqlite users -o rows.json
       shard-cli carve   mydb.sqlite --mode tight
       shard-cli carve   mydb.sqlite --mode loose --table users --table notes
+      shard-cli residual mydb.sqlite --carve loose -f text
     """);

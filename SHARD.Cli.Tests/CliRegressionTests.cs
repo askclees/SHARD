@@ -69,6 +69,32 @@ public class CliRegressionTests
     }
 
     [Fact]
+    public void Residual_MatchesFacade()
+    {
+        string dbPath = Path.Combine(AppContext.BaseDirectory, "TestData", "Corpus", "0D", "0D-01.db");
+        var expected = SqliteRecoveryFacade.GetPageResiduals(dbPath);
+        Assert.NotEmpty(expected);
+
+        var result = CliRunner.Run("residual", dbPath, "-f", "json");
+        Assert.Equal(0, result.ExitCode);
+
+        using var doc = JsonDocument.Parse(result.Stdout);
+        Assert.Equal(expected.Count, doc.RootElement.GetProperty("pages").GetArrayLength());
+        Assert.Equal(expected.Sum(p => p.NonZeroBytes), doc.RootElement.GetProperty("nonZeroBytes").GetInt32());
+        Assert.Equal(expected.Sum(p => p.UnexplainedNonZeroBytes),
+            doc.RootElement.GetProperty("unexplainedNonZeroBytes").GetInt32());
+    }
+
+    [Fact]
+    public void Residual_RejectsAnUnknownCarveMode()
+    {
+        string dbPath = Path.Combine(AppContext.BaseDirectory, "TestData", "Corpus", "0D", "0D-01.db");
+        var result = CliRunner.Run("residual", dbPath, "--carve", "medium");
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("Unknown mode", result.Stderr);
+    }
+
+    [Fact]
     public void CorruptPage1_FailsWithFriendlyMessage_NotAStackTrace()
     {
         string dbPath = Fixtures.CreateCorruptPage1Db();
@@ -82,5 +108,27 @@ public class CliRegressionTests
             Assert.DoesNotContain("Unhandled exception", result.Stderr);
         }
         finally { File.Delete(dbPath); }
+    }
+
+    [Fact]
+    public void Hash_ReportsDigestsOfDatabase()
+    {
+        string dbPath = Fixtures.CreateRowidAliasNotFirstColumnDb();
+        try
+        {
+            var result = CliRunner.Run("hash", dbPath, "-f", "json");
+            Assert.Equal(0, result.ExitCode);
+
+            using var doc = JsonDocument.Parse(result.Stdout);
+            var db = doc.RootElement.GetProperty("files").EnumerateArray()
+                .Single(e => e.GetProperty("role").GetString() == "database");
+            string expected = Convert.ToHexStringLower(
+                System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(dbPath)));
+            Assert.Equal(expected, db.GetProperty("sha256").GetString());
+        }
+        finally
+        {
+            File.Delete(dbPath);
+        }
     }
 }

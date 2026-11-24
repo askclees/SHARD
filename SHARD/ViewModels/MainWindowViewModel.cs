@@ -5,11 +5,15 @@ using Avalonia.Media;
 using ReactiveUI;
 using SHARD.Controls;
 using SHARD.Core;
+using SHARD.Core.Analysis;
 using SHARD.Core.Enums;
+using SHARD.Core.Integrity;
+using SHARD.Core.Journal;
 using SHARD.Core.Pages;
 using SHARD.Core.Records;
 using SHARD.Core.Recovery;
 using SHARD.Core.Schema;
+using SHARD.Core.Session;
 using SHARD.Core.Shadow;
 using SHARD.Core.WAL;
 
@@ -36,6 +40,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    private EvidenceSession? _session;
     private Dictionary<uint, string>? _pageTableMap;
     private readonly Dictionary<string, TableSchema> _manualSchemas  = new();
     private readonly Dictionary<uint, TableSchema>   _freedPageSchemas = new();
@@ -93,6 +98,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         set { this.RaiseAndSetIfChanged(ref _filterMinNonZero, value); if (_filterMinNonZeroEnabled) RebuildFilteredPages(); }
     }
 
+    private bool _filterUnexplainedOnly;
+    /// <summary>
+    /// Makes the unallocated filters count only the non-zero bytes recovery leaves unexplained,
+    /// and count each page no B-tree uses as one region covering the whole page. Needs recovery run
+    /// on every page, so the counts are taken the first time it's on and kept until the page list
+    /// is rebuilt (see <see cref="EnsureUnexplainedCounts"/>).
+    /// </summary>
+    public bool FilterUnexplainedOnly
+    {
+        get => _filterUnexplainedOnly;
+        set { this.RaiseAndSetIfChanged(ref _filterUnexplainedOnly, value); RebuildFilteredPages(); }
+    }
+
+    private bool UnexplainedFilterActive => FilterMinNonZeroEnabled && FilterUnexplainedOnly;
+
     private bool _filterHasDeletedPointers;
     public bool FilterHasDeletedPointers
     {
@@ -144,6 +164,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         bool deletedActive          = FilterHasDeletedPointers;
         bool deletedRecordsActive   = FilterHasDeletedRecords;
         bool hasTableFilter     = !string.IsNullOrEmpty(_filterTableName);
+        bool unexplained        = anyUnallocActive && UnexplainedFilterActive;
+        if (unexplained) EnsureUnexplainedCounts();
 
         foreach (var page in Pages)
         {
@@ -151,7 +173,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 continue;
             if (hasTableFilter && page.TableName != _filterTableName)
                 continue;
-            if (anyUnallocActive && !page.UnallocatedRegions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
+            var regions = unexplained ? page.UnexplainedRegions ?? page.UnallocatedRegions : page.UnallocatedRegions;
+            if (anyUnallocActive && !regions.Any(r => RegionMatchesFilter(r.Size, r.NonZeroBytes)))
                 continue;
             if (deletedActive && !page.HasDeletedPointers)
                 continue;
@@ -200,7 +223,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         foreach (var section in SelectedPageDetail.UnallocatedRegionSections)
         {
-            if (!anyActive || RegionMatchesFilter(section.Size, section.NonZeroBytes))
+            int nonZero = UnexplainedFilterActive ? section.UnexplainedNonZeroBytes : section.NonZeroBytes;
+            if (!anyActive || RegionMatchesFilter(section.Size, nonZero))
                 FilteredUnallocatedSections.Add(section);
         }
 
@@ -230,6 +254,153 @@ public sealed class MainWindowViewModel : ViewModelBase
         return new PageListEntryViewModel(page.PageNumber, page.PageType, tableName, regions, hasDeletedPointers, hasDeletedRecords);
     }
 
+    /// <summary>
+    /// Runs the recovery the Pages tab shows for <paramref name="page"/>: in-tree carving with its
+    /// table's schema, carving a dropped table's freed root page, and the records Carve Unknown
+    /// Pages stored for it (<paramref name="orphanOffsets"/> if already read, else read now).
+    /// </summary>
+    private void RunPageRecovery(SqlitePage page, string? tableName, IEnumerable<int>? orphanOffsets = null)
+    {
+        if (Database is null) return;
+        if (page is TableBTreeLeafPage tlp && tableName is not null)
+        {
+            var schema = Database.GetTableSchema(tableName)
+                      ?? (_manualSchemas.TryGetValue(tableName, out var ms) ? ms : null);
+            if (schema is not null)
+            {
+                var rs = RecordStructure.FromSchema(schema);
+                tlp.CarveDeletedCells(rs);
+                tlp.CarveFreeblockCells(rs);
+            }
+        }
+        else if (_freedPageSchemas.TryGetValue(page.PageNumber, out var freedSchema))
+        {
+            var rs     = RecordStructure.FromSchema(freedSchema);
+            var carved = DeletedRecordParser.CarveRawBytes(page.Data, Database.Header.TextEncoding, rs);
+            page.CarvedRecoveredCells.AddRange(carved);
+        }
+        AddOrphanCarvedCells(page, orphanOffsets);
+    }
+
+    // Pages no B-tree claims (the ones Carve Unknown Pages scans) and the freelist trunks among
+    // them, read once per open database.
+    private HashSet<uint>? _unclaimedPages;
+    private IReadOnlyDictionary<uint, FreelistTrunkPage>? _freelistTrunks;
+
+    private bool IsUnclaimed(uint pageNumber)
+    {
+        if (Database is null) return false;
+        if (_unclaimedPages is null)
+        {
+            try { _unclaimedPages = Database.GetUnclaimedPageNumbers().ToHashSet(); }
+            catch { _unclaimedPages = []; }
+        }
+        return _unclaimedPages.Contains(pageNumber);
+    }
+
+    /// <summary>
+    /// What recovery leaves unexplained over the whole of an unclaimed <paramref name="page"/>.
+    /// Recovered and carved cells count as explained; cells that merely parse as live don't, as no
+    /// table owns the page, so its rows aren't recovered until something carves them.
+    /// </summary>
+    private ResidualCount WholePageResidual(SqlitePage page)
+    {
+        _freelistTrunks ??= Database is null
+            ? new Dictionary<uint, FreelistTrunkPage>()
+            : OrphanPageCarver.ReadFreelistTrunks(Database);
+        IEnumerable<BTreeLeafCell> cells = page.CarvedRecoveredCells;
+        if (page is TableBTreeLeafPage tlp)
+            cells = cells.Concat(tlp.DeletedCells).Concat(tlp.CarvedCells)
+                .Concat(tlp.FreeblockCells).Concat(tlp.AnnotatedCells);
+        return OrphanPageCarver.WholePageResidual(page, Database?.Header.ReservedBytesPerPage ?? 0,
+            cells.ToList(), _freelistTrunks);
+    }
+
+    /// <summary>
+    /// Counts the unexplained bytes of every page in the list that hasn't been counted yet, running
+    /// the same recovery as selecting it does. Table leaf pages count per unallocated region;
+    /// unclaimed pages count whole, as one region the size of the page.
+    /// </summary>
+    private void EnsureUnexplainedCounts()
+    {
+        if (Database is null || Pages.All(p => p.UnexplainedRegions is not null)) return;
+
+        Dictionary<uint, List<int>> orphanOffsets = [];
+        if (Project is not null)
+        {
+            try
+            {
+                orphanOffsets = Project.ReadAllOrphanCarvedCells()
+                    .GroupBy(c => c.PageNumber)
+                    .ToDictionary(g => g.Key, g => g.Select(c => c.CellOffset).ToList());
+            }
+            catch { /* nothing carved yet, or the project can't be read */ }
+        }
+
+        int usableSize = Database.Layout.UsableSize;
+        foreach (var entry in Pages)
+        {
+            if (entry.UnexplainedRegions is not null) continue;
+            try
+            {
+                var page = Database.ReadPage(entry.PageNumber);
+                RunPageRecovery(page, entry.TableName, orphanOffsets.GetValueOrDefault(entry.PageNumber) ?? []);
+                if (IsUnclaimed(entry.PageNumber))
+                {
+                    var count = WholePageResidual(page);
+                    entry.UnexplainedRegions = count.NonZeroBytes > 0
+                        ? [(usableSize, count.UnexplainedNonZeroBytes)]
+                        : [];
+                }
+                else if (page is TableBTreeLeafPage tlp)
+                {
+                    var explained = tlp.ExplainedRanges().ToList();
+                    entry.UnexplainedRegions = tlp.UnallocatedRegions
+                        .Select(r => (r.Size, ResidualBytes.Count(tlp.Data, r.Offset, r.End, explained).UnexplainedNonZeroBytes))
+                        .ToList();
+                }
+                else entry.UnexplainedRegions = [];
+            }
+            catch
+            {
+                entry.UnexplainedRegions = entry.UnallocatedRegions; // fall back to the raw counts
+            }
+        }
+    }
+
+    /// <summary>
+    /// Adds the records Carve Unknown Pages carved from <paramref name="page"/> (read back from the
+    /// project) to its <see cref="SqlitePage.CarvedRecoveredCells"/>, so they're listed, highlighted
+    /// and counted as explained. Each is re-read at its stored offset; its record header gives its
+    /// length. Offsets already holding a recovered cell are skipped; a live-looking cell doesn't
+    /// count, since on a page no B-tree uses it isn't a live row.
+    /// </summary>
+    private void AddOrphanCarvedCells(SqlitePage page, IEnumerable<int>? storedOffsets = null)
+    {
+        if (Project is null || Database is null) return;
+        if (storedOffsets is null)
+        {
+            try { storedOffsets = Project.ReadOrphanCarvedCells(page.PageNumber).Select(c => c.CellOffset).ToList(); }
+            catch { return; } // no recovered tables yet, or the project can't be read: nothing to add
+        }
+
+        var known = new HashSet<int>(page.CarvedRecoveredCells.Select(c => c.PageOffset));
+        if (page is TableBTreeLeafPage tlp)
+            known.UnionWith(tlp.DeletedCells.Concat(tlp.CarvedCells)
+                .Concat(tlp.FreeblockCells).Concat(tlp.AnnotatedCells).Select(c => c.PageOffset));
+
+        foreach (int offset in storedOffsets.Distinct().Order())
+        {
+            if (!known.Add(offset)) continue;
+            try
+            {
+                var result = DeletedRecordParser.RecoverBTreeLeafRecord(page.Data, offset, Database.Header.TextEncoding);
+                if (result.IsValid) page.CarvedRecoveredCells.Add(result.Cell!);
+            }
+            catch { /* the stored offset no longer parses (e.g. the evidence changed): skip it */ }
+        }
+    }
+
     // ── Selected page (left panel selection; right panel detail) ─────────
     private PageListEntryViewModel? _selectedPage;
     public PageListEntryViewModel? SelectedPage
@@ -241,26 +412,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             SqlitePage? page = value is not null && Database is not null
                 ? Database.ReadPage(value.PageNumber)
                 : null;
-            if (page is TableBTreeLeafPage tlp && value?.TableName is { } tn)
-            {
-                var schema = Database!.GetTableSchema(tn)
-                          ?? (_manualSchemas.TryGetValue(tn, out var ms) ? ms : null);
-                if (schema is not null)
-                {
-                    var rs = RecordStructure.FromSchema(schema);
-                    tlp.CarveDeletedCells(rs);
-                    tlp.CarveFreeblockCells(rs);
-                }
-            }
-            else if (page is not null && value is not null
-                     && _freedPageSchemas.TryGetValue(value.PageNumber, out var freedSchema)
-                     && Database is not null)
-            {
-                var rs     = RecordStructure.FromSchema(freedSchema);
-                var carved = DeletedRecordParser.CarveRawBytes(page.Data, Database.Header.TextEncoding, rs);
-                page.CarvedRecoveredCells.AddRange(carved);
-            }
-            SelectedPageDetail = page is not null ? new PageViewModel(page) : null;
+            if (page is not null) RunPageRecovery(page, value!.TableName);
+            SelectedPageDetail = page is not null
+                ? new PageViewModel(page, Database?.Header.ReservedBytesPerPage ?? 0,
+                    IsUnclaimed(page.PageNumber) ? () => WholePageResidual(page) : null)
+                : null;
             LastRecoveryResult = null;
             this.RaisePropertyChanged(nameof(CanTryRecoverRecord));
         }
@@ -279,6 +435,21 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     // ── Overview panel info rows ──────────────────────────────────────────
     public ObservableCollection<InfoRow> DatabaseInfoRows { get; } = [];
+
+    // ── Evidence integrity ────────────────────────────────────────────────
+    private string? _integrityWarning;
+    /// <summary>Set when a hash check finds an evidence file changed, missing or added; shown as
+    /// a banner above the status bar until the file is closed or a later check passes.</summary>
+    public string? IntegrityWarning
+    {
+        get => _integrityWarning;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _integrityWarning, value);
+            this.RaisePropertyChanged(nameof(HasIntegrityWarning));
+        }
+    }
+    public bool HasIntegrityWarning => IntegrityWarning is not null;
 
     // ── Raw bytes + highlights for the HexView ────────────────────────────
     private byte[] _headerBytes = [];
@@ -422,6 +593,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
     public bool HasWal => WalTab is not null;
 
+    // ── Rollback journal file ────────────────────────────────────────────
+    // A database is in either WAL or rollback-journal mode, so only one of WalTab / JournalTab
+    // is ever set: loading one clears the other.
+    private JournalViewModel? _journalTab;
+    public JournalViewModel? JournalTab
+    {
+        get => _journalTab;
+        private set
+        {
+            this.RaiseAndSetIfChanged(ref _journalTab, value);
+            this.RaisePropertyChanged(nameof(HasJournal));
+        }
+    }
+    public bool HasJournal => JournalTab is not null;
+
     // ── Shadow project ───────────────────────────────────────────────────
     private ShadowProject? _project;
     public ShadowProject? Project
@@ -446,6 +632,46 @@ public sealed class MainWindowViewModel : ViewModelBase
     private CarveUnknownPagesViewModel? _carveTab;
     public CarveUnknownPagesViewModel? CarveTab =>
         _carveTab ??= Database is not null ? new CarveUnknownPagesViewModel(Database) : null;
+
+    /// <summary>Exports the Carve Unknown Pages tab's current include/exclude and Focused-range
+    /// tuning to <paramref name="filePath"/> as JSON (see <see cref="CarvingProfile"/>).</summary>
+    public void ExportCarvingParameters(string filePath)
+    {
+        if (CarveTab is not { } carveTab) { StatusText = "No database open."; return; }
+        try
+        {
+            string? sourceName = CurrentFilePath is { } p ? Path.GetFileName(p) : null;
+            File.WriteAllText(filePath, carveTab.BuildExportProfile(sourceName).ToJson());
+            StatusText = $"Exported carving parameters to {filePath}";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to export carving parameters: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Loads a previously-exported carving profile from <paramref name="filePath"/> and applies it
+    /// to the Carve Unknown Pages tab. Returns the reconciliation summary (tables applied/new/
+    /// missing, columns ignored) for the caller to display, or null if it couldn't be loaded at
+    /// all (already reported via <see cref="StatusText"/> in that case).
+    /// </summary>
+    public CarveUnknownPagesViewModel.LoadProfileSummary? LoadCarvingParameters(string filePath)
+    {
+        if (CarveTab is not { } carveTab) { StatusText = "No database open."; return null; }
+        try
+        {
+            var summary = carveTab.LoadProfile(File.ReadAllText(filePath));
+            StatusText = $"Loaded carving parameters — {summary.TablesApplied.Count} table(s) applied" +
+                (summary.NewTablesNotInProfile.Count > 0 ? $", {summary.NewTablesNotInProfile.Count} new table(s) found" : "");
+            return summary;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to load carving parameters: {ex.Message}";
+            return null;
+        }
+    }
 
     // ── Record recovery ────────────────────────────────────────────────────
     private int _selectedByteOffset = -1;
@@ -680,6 +906,24 @@ public sealed class MainWindowViewModel : ViewModelBase
         private set => this.RaiseAndSetIfChanged(ref _statusText, value);
     }
 
+    // ── Loading overlay ──────────────────────────────────────────────────
+    // LoadFile runs synchronously on the UI thread (see its doc comment), so this
+    // reports coarse-grained stage text rather than a true progress percentage —
+    // enough to show the user the app hasn't hung on a large evidence file.
+    private bool _isLoading;
+    public bool IsLoading
+    {
+        get => _isLoading;
+        private set => this.RaiseAndSetIfChanged(ref _isLoading, value);
+    }
+
+    private string _loadingStatusText = "";
+    public string LoadingStatusText
+    {
+        get => _loadingStatusText;
+        private set => this.RaiseAndSetIfChanged(ref _loadingStatusText, value);
+    }
+
     public MainWindowViewModel()
     {
         SearchTab = new SearchViewModel(
@@ -698,6 +942,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             new(PageType.Overflow,           RebuildFilteredPages),
             new(PageType.FreelistTrunk,      RebuildFilteredPages),
             new(PageType.FreelistLeaf,       RebuildFilteredPages),
+            new(PageType.PointerMap,         RebuildFilteredPages),
+            new(PageType.LockByte,           RebuildFilteredPages),
             new(PageType.Unknown,            RebuildFilteredPages),
         };
     }
@@ -707,17 +953,28 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// Load a SQLite file by path.  Called from the view after the file picker resolves.
     /// Populates <see cref="DatabaseInfoRows"/> and (once the forensic library is
-    /// implemented) <see cref="Pages"/>.
+    /// implemented) <see cref="Pages"/>. Runs synchronously on the UI thread — there's no
+    /// background worker, so <see cref="Report"/> pumps the dispatcher after each stage
+    /// update so the window keeps repainting instead of appearing frozen on a large file.
+    /// <paramref name="projectFolder"/>, when given (e.g. for a large evidence file the user
+    /// chose to build a project for up front), builds the shadow database directly there
+    /// instead of a temp file, so the working data doesn't need to be re-saved later —
+    /// and, on systems where the temp directory is RAM-backed (e.g. tmpfs on Linux), avoids
+    /// implicitly consuming memory for a large database.
     /// </summary>
-    public void LoadFile(string path)
+    public void LoadFile(string path, string? projectFolder = null)
     {
+        IsLoading = true;
         try
         {
             CloseFile();
+            Report("Opening database…");
 
             var info = new FileInfo(path);
 
-            var db = SqliteForensicDatabase.Open(path);
+            _session = EvidenceSession.Open(path, ReportHashProgress(),
+                inferZeroedJournalHeader: InferZeroedJournalHeader);
+            var db = _session.Database;
             Database = db;
             _currentFilePath = path;
             _pageTableMap = db.BuildPageTableMap();
@@ -732,6 +989,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             DatabaseInfoRows.Add(new InfoRow("File",                        info.Name));
             DatabaseInfoRows.Add(new InfoRow("Path",                        path));
             DatabaseInfoRows.Add(new InfoRow("Size",                        FormatBytes(info.Length)));
+            AddHashRows(_session.Hashes);
 
             // ── Header fields in byte-offset order ───────────────────────────
             // Offset 0
@@ -780,6 +1038,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Offset 96
             DatabaseInfoRows.Add(new InfoRow("SQLite Version (96)",         $"{header.SqliteVersionNumber}  —  {FormatSqliteVersion(header.SqliteVersionNumber)}"));
 
+            Report("Reading schema…");
             foreach (var row in db.ReadSqliteMaster())
                 SchemaRows.Add(row);
 
@@ -792,8 +1051,12 @@ public sealed class MainWindowViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(HasDeletedSchemaRows));
             this.RaisePropertyChanged(nameof(DeletedSchemaHeader));
 
+            Report($"Scanning pages… 0/{db.PageCount:N0}");
             foreach (var page in db.ReadAllPages())
+            {
                 Pages.Add(MakePageListEntry(page));
+                if (Pages.Count % 2000 == 0) Report($"Scanning pages… {Pages.Count:N0}/{db.PageCount:N0}");
+            }
             RefreshAvailableTableNames();
             RebuildFilteredPages();
 
@@ -803,48 +1066,28 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Build shadow DB immediately so Query and recovery work without a saved project.
             try
             {
-                var (project, warnings) = ShadowProject.CreateTemporary(_currentFilePath!, Database);
+                Report("Building shadow database…");
+                var (project, warnings) = projectFolder is null
+                    ? ShadowProject.CreateTemporary(_currentFilePath!, _session.ShadowSource(), reportProgress: msg => Report(msg),
+                                                    evidenceHashes: _session.Hashes, layoutDatabase: Database)
+                    : ShadowProject.Create(_currentFilePath!, _session.ShadowSource(), projectFolder, reportProgress: msg => Report(msg),
+                                           evidenceHashes: _session.Hashes, layoutDatabase: Database);
                 Project = project;
 
-                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Valid
-                                                                     && d.RootPage.HasValue
-                                                                     && d.Sql is not null))
-                {
-                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
-                    if (schema is null) continue;
-                    try
-                    {
-                        var pageNums = Database.GetTreePageNumbers(deletedVm.RootPage!.Value).ToList();
-                        project.AddDeletedTableRecords(schema, Database.ReadTableRows(deletedVm.RootPage!.Value));
-                        project.TagDeletedTablePages(schema.TableName, pageNums);
-                    }
-                    catch { }
-                }
+                Report("Recovering deleted records…");
+                var droppedTables = DeletedSchemaRows
+                    .Where(d => d.RootPage.HasValue && d.Sql is not null)
+                    .Select(d => (Schema: CreateTableParser.ExtractTableSchema(d.Sql!), RootPage: d.RootPage!.Value, d.RootPageStatus))
+                    .Where(t => t.Schema is not null)
+                    .Select(t => (t.Schema!, t.RootPage, t.RootPageStatus))
+                    .ToList();
 
-                // Carve freed pages: the root page is now a freelist page but may still
-                // hold the original table's bytes.
-                foreach (var deletedVm in DeletedSchemaRows.Where(d => d.RootPageStatus == RootPageStatus.Freed
-                                                                     && d.RootPage.HasValue
-                                                                     && d.Sql is not null))
-                {
-                    var schema = CreateTableParser.ExtractTableSchema(deletedVm.Sql!);
-                    if (schema is null) continue;
-                    try
-                    {
-                        var rs       = RecordStructure.FromSchema(schema);
-                        var pageData = Database.ReadPage(deletedVm.RootPage!.Value).Data;
-                        var carved   = DeletedRecordParser.CarveRawBytes(pageData, Database.Header.TextEncoding, rs);
-                        if (carved.Count > 0)
-                        {
-                            project.AddFreedPageCarvedRecords(schema, carved, deletedVm.RootPage!.Value);
-                            project.TagDeletedTablePages(schema.TableName, [deletedVm.RootPage!.Value]);
-                        }
-                        // Register schema so navigating to the page triggers lazy carving for highlights.
-                        _freedPageSchemas[deletedVm.RootPage!.Value] = schema;
-                    }
-                    catch { }
-                }
+                var recoveredDropped = _session.RecoverDroppedTables(project, droppedTables);
+                foreach (var entry in recoveredDropped.Where(e => e.Status == RootPageStatus.Freed))
+                    // Register schema so navigating to the page triggers lazy carving for highlights.
+                    _freedPageSchemas[entry.RootPage] = entry.Schema;
 
+                Report("Refreshing page list…");
                 QueryTab.SetShadowDatabasePath(Project.ShadowDatabasePath);
                 RefreshPagesFromShadowDatabase();
                 if (warnings.Count > 0)
@@ -859,12 +1102,39 @@ public sealed class MainWindowViewModel : ViewModelBase
                 StatusText += $"  ·  Shadow DB failed: {ex.Message}";
             }
 
-            string walPath = path + "-wal";
-            if (File.Exists(walPath))
-                LoadWalFile(walPath);
+            // EvidenceSession has already detected and parsed whichever sidecar matches the
+            // database's journal mode; this only populates the tab or reports why it failed.
+            if (_session.HasWal)
+            {
+                Report("Loading WAL file…");
+                LoadWalFile(_session.WalPath, _session.Wal);
+            }
+            else if (_session.WalError is not null)
+            {
+                StatusText = $"WAL file could not be loaded: {_session.WalError}";
+            }
+            else if (_session.HasJournal)
+            {
+                Report("Loading journal file…");
+                LoadJournalFile(_session.JournalPath, _session.Journal);
+            }
+            else if (_session.JournalError is not null)
+            {
+                StatusText = $"Journal file could not be loaded: {_session.JournalError}" +
+                             (_session.JournalError.Contains("InferZeroedJournalHeader")
+                                 ? " (Recovery → Read Journals with a Zeroed Header, then reopen)" : "");
+            }
+            if (_session.IgnoredSidecarNote is not null)
+                StatusText += $"  ·  {_session.IgnoredSidecarNote}";
 
             if (AutoCarveUnknownPagesOnOpen)
+            {
+                Report("Carving unknown pages…");
                 CarveUnknownPages(OrphanPageCarver.BuildCandidates(Database, CarveMode.Loose));
+            }
+
+            Report("Labelling row states…");
+            UpdateRowStates();
         }
         catch (InvalidDataException ex)
         {
@@ -874,12 +1144,127 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             StatusText = $"Error: {ex.Message}";
         }
+        finally
+        {
+            IsLoading = false;
+            LoadingStatusText = "";
+        }
+    }
+
+    /// <summary>
+    /// Updates <see cref="LoadingStatusText"/> and pumps the Avalonia dispatcher so the
+    /// window repaints immediately — <see cref="LoadFile"/> has no background worker, so
+    /// without this the UI would otherwise only redraw once the whole synchronous load finishes.
+    /// </summary>
+    private void Report(string message)
+    {
+        LoadingStatusText = message;
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+    }
+
+    /// <summary>
+    /// Returns a hashing progress callback for <see cref="EvidenceSession.Open"/> that reports at
+    /// most once per whole percent per file, so pumping the dispatcher doesn't slow hashing down.
+    /// </summary>
+    private Action<string, long, long> ReportHashProgress()
+    {
+        string? lastRole = null;
+        int lastPercent = -1;
+        return (role, done, total) =>
+        {
+            int percent = total == 0 ? 100 : (int)(done * 100 / total);
+            if (role == lastRole && percent == lastPercent) return;
+            lastRole = role;
+            lastPercent = percent;
+            Report($"Hashing {RoleLabel(role)} file… {percent}%");
+        };
+    }
+
+    private static string RoleLabel(string role) => role switch
+    {
+        EvidenceFileRole.Database => "database",
+        EvidenceFileRole.Wal      => "WAL",
+        EvidenceFileRole.Journal  => "journal",
+        EvidenceFileRole.Shm      => "SHM",
+        _                         => role,
+    };
+
+    private void AddHashRows(IReadOnlyList<EvidenceFileHash> hashes)
+    {
+        foreach (var h in hashes)
+        {
+            bool isDatabase = h.Role == EvidenceFileRole.Database;
+            string prefix = isDatabase ? "" : $"{RoleLabel(h.Role)} ";
+            if (!isDatabase)
+                DatabaseInfoRows.Add(new InfoRow($"{prefix}Size", FormatBytes(h.Length)));
+            DatabaseInfoRows.Add(new InfoRow($"{prefix}MD5",     h.Md5));
+            DatabaseInfoRows.Add(new InfoRow($"{prefix}SHA-1",   h.Sha1));
+            DatabaseInfoRows.Add(new InfoRow($"{prefix}SHA-256", h.Sha256));
+        }
+        if (hashes.Count > 0)
+            DatabaseInfoRows.Add(new InfoRow("Hashed (UTC)", hashes[^1].HashedUtc.ToString("yyyy-MM-dd HH:mm:ss")));
+    }
+
+    /// <summary>Compares the evidence as just opened against the hashes saved with the project.</summary>
+    private void CheckProjectHashes(ShadowProject project)
+    {
+        if (_session is null) return;
+        if (project.EvidenceHashes is not { } recorded)
+        {
+            StatusText += "  ·  project has no recorded evidence hashes (created before hashing was added)";
+            return;
+        }
+
+        var results = EvidenceHasher.Compare(recorded, _session.Hashes);
+        if (results.All(r => r.Status == HashVerificationStatus.Match))
+            StatusText += $"  ·  evidence hashes match the project ({results.Count} file{(results.Count == 1 ? "" : "s")})";
+        else
+            IntegrityWarning = DescribeMismatch(results, "since the project was created");
+    }
+
+    /// <summary>Re-hashes the evidence files and reports whether any changed since they were opened.</summary>
+    public void VerifyEvidenceHashes()
+    {
+        if (_session is null) return;
+        IsLoading = true;
+        try
+        {
+            var results = _session.VerifyHashes(ReportHashProgress());
+            if (results.All(r => r.Status == HashVerificationStatus.Match))
+            {
+                IntegrityWarning = null;
+                StatusText = $"Evidence hashes verified: {results.Count} file{(results.Count == 1 ? "" : "s")} unchanged since opened";
+            }
+            else
+            {
+                IntegrityWarning = DescribeMismatch(results, "since it was opened");
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Hash verification failed: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            LoadingStatusText = "";
+        }
+    }
+
+    private static string DescribeMismatch(IReadOnlyList<HashVerification> results, string since)
+    {
+        var problems = results
+            .Where(r => r.Status != HashVerificationStatus.Match)
+            .Select(r => $"{RoleLabel(r.Role)} file {r.Status.ToString().ToLowerInvariant()}");
+        return $"Evidence has changed {since}: {string.Join(", ", problems)}.";
     }
 
     /// <summary>Close the current database and reset the UI state.</summary>
     public void CloseFile()
     {
-        Database?.Dispose();
+        IntegrityWarning = null;
+        _session?.Dispose(); // disposes Database — session owns that lifetime now
+        _session = null;
         _carveTab = null; // clear before Database, so Database's setter-driven CarveTab notification sees it already gone
         Database = null;
         _currentFilePath = null;
@@ -903,8 +1288,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         SelectedPage = null;
         HasDatabase  = false;
         WalTab       = null;
+        JournalTab   = null;
         _manualSchemas.Clear();
         _freedPageSchemas.Clear();
+        _unclaimedPages = null;
+        _freelistTrunks = null;
         _project?.Dispose();
         Project      = null;
         StatusText   = "Open a SQLite database to begin.";
@@ -955,7 +1343,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             QueryTab.SetShadowDatabasePath(project.ShadowDatabasePath);
             RefreshPagesFromShadowDatabase();
             StatusText = $"Project opened from {projectFolder}";
+            CheckProjectHashes(project);
             SyncWalToProject();
+            SyncJournalToProject();
         }
         catch (Exception ex)
         {
@@ -1011,6 +1401,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 : "Carve unknown pages: nothing recovered" +
                   (ambiguousSkipped > 0 ? $"  ·  {ambiguousSkipped} ambiguous byte range{(ambiguousSkipped == 1 ? "" : "s")} skipped" : "");
             RefreshPagesFromShadowDatabase();
+            UpdateRowStates();
         }
         catch (Exception ex)
         {
@@ -1021,14 +1412,44 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>When true, <see cref="LoadFile"/> automatically runs <see cref="CarveUnknownPages"/> in loose mode right after a file finishes loading.</summary>
     public bool AutoCarveUnknownPagesOnOpen { get; set; }
 
-    public void LoadWalFile(string walPath)
+    /// <summary>
+    /// Experimental: read a journal whose header SQLite zeroed (journal_mode=PERSIST), inferring the
+    /// header's values. Saved in the app settings; applies the next time a database or journal is
+    /// opened.
+    /// </summary>
+    public bool InferZeroedJournalHeader
+    {
+        get => SHARD.Settings.AppSettings.Current.InferZeroedJournalHeader;
+        set
+        {
+            var settings = SHARD.Settings.AppSettings.Current;
+            if (settings.InferZeroedJournalHeader == value) return;
+            settings.InferZeroedJournalHeader = value;
+            try { settings.Save(); } catch { /* still applies for this session */ }
+            this.RaisePropertyChanged();
+            StatusText = value
+                ? "Reading journals with a zeroed header (experimental) — applies the next time a database or journal is opened"
+                : "No longer reading journals with a zeroed header — applies the next time a database or journal is opened";
+        }
+    }
+
+    /// <summary><paramref name="preloaded"/>, if given, is used instead of re-parsing
+    /// <paramref name="walPath"/> — the auto-detected-sibling load path in <see cref="LoadFile"/>
+    /// already has it via <see cref="EvidenceSession.Wal"/>. The manual "Load WAL File…" action
+    /// always omits it, since that can point at an arbitrary path unrelated to the open evidence
+    /// file's own sibling.</summary>
+    public void LoadWalFile(string walPath, WalFile? preloaded = null)
     {
         if (Database is null) return;
         try
         {
-            var wal = new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage);
+            var wal = preloaded ?? new WalFile(walPath, Database.Header.TextEncoding, Database.Header.ReservedBytesPerPage, Database.Layout);
             WalTab = new WalViewModel(walPath, wal, Database);
+            JournalTab = null;
             StatusText += $"  ·  WAL: {wal.Frames.Count} frames";
+            StatusText += $" ({wal.CommittedFrameCount} committed)";
+            foreach (var problem in EvidenceSession.DescribeWalProblems(wal))
+                StatusText += $"  ·  WAL: {problem}";
 
             // If a project is already open sync immediately; if not, CreateProject/OpenProject
             // will call SyncWalToProject once the project is set (WAL loads before the project
@@ -1041,30 +1462,82 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Loads a rollback journal into the Journal tab. <paramref name="preloaded"/> is
+    /// passed by the auto-detect path, where <see cref="EvidenceSession"/> has already parsed and
+    /// validated it; the manual "Load Journal File…" action omits it.</summary>
+    public void LoadJournalFile(string journalPath, RollbackJournalFile? preloaded = null)
+    {
+        if (Database is null) return;
+        try
+        {
+            var journal = preloaded;
+            if (journal is null)
+            {
+                (journal, string? error) = EvidenceSession.LoadJournal(journalPath, Database, InferZeroedJournalHeader);
+                if (journal is null)
+                {
+                    StatusText = $"Journal file could not be loaded: {error}";
+                    return;
+                }
+            }
+
+            JournalTab = new JournalViewModel(journalPath, journal, Database);
+            WalTab = null;
+            int records = JournalTab.Records.Count;
+            StatusText += $"  ·  Journal: {records} record{(records == 1 ? "" : "s")} in " +
+                          $"{journal.Segments.Count} segment{(journal.Segments.Count == 1 ? "" : "s")}";
+            foreach (var problem in EvidenceSession.DescribeJournalProblems(journal))
+                StatusText += $"  ·  Journal: {problem}";
+
+            // Same as the WAL: a project exists by now in both LoadFile and the manual menu
+            // action; OpenProject calls this again once the saved project replaces it.
+            SyncJournalToProject();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Journal file could not be loaded: {ex.Message}";
+        }
+    }
+
+    private void SyncJournalToProject()
+    {
+        if (Project is null || JournalTab is null || _session is null) return;
+        var (recovered, error) = _session.RecoverJournal(Project, JournalTab.JournalFile);
+        if (recovered > 0)
+            StatusText += $"  ·  {recovered} deleted journal record{(recovered == 1 ? "" : "s")} recovered";
+        if (error is not null)
+            StatusText += $"  ·  Journal recovery failed: {error}";
+        UpdateRowStates();
+    }
+
+    /// <summary>Recomputes the shadow database's row-state columns (_db_state, _log_state,
+    /// _is_current) after a recovery step, against whichever WAL or journal its tab shows.</summary>
+    private void UpdateRowStates()
+    {
+        if (Project is null || _session is null) return;
+        try
+        {
+            _session.UpdateRowStates(Project.ShadowDatabasePath, wal: WalTab?.WalFile, journal: JournalTab?.JournalFile);
+        }
+        catch (Exception ex)
+        {
+            StatusText += $"  ·  Row states could not be computed: {ex.Message}";
+        }
+    }
+
     private void SyncWalToProject()
     {
-        if (Project is null || WalTab is null || Database is null) return;
-        try
-        {
-            int added = Project.SyncWalFramesToShadow(WalTab.WalFile, Database);
-            if (added > 0)
-                StatusText += $"  ·  {added} WAL record{(added == 1 ? "" : "s")} synced";
-        }
-        catch (Exception ex)
-        {
-            StatusText += $"  ·  WAL sync failed: {ex.Message}";
-        }
-
-        try
-        {
-            int recovered = Project.RecoverWalDeletedRows(WalTab.WalFile, Database);
-            if (recovered > 0)
-                StatusText += $"  ·  {recovered} deleted WAL record{(recovered == 1 ? "" : "s")} recovered";
-        }
-        catch (Exception ex)
-        {
-            StatusText += $"  ·  WAL deleted recovery failed: {ex.Message}";
-        }
+        if (Project is null || WalTab is null || _session is null) return;
+        var result = _session.SyncAndRecoverWal(Project, WalTab.WalFile);
+        if (result.Synced > 0)
+            StatusText += $"  ·  {result.Synced} WAL record{(result.Synced == 1 ? "" : "s")} synced";
+        if (result.SyncError is not null)
+            StatusText += $"  ·  WAL sync failed: {result.SyncError}";
+        if (result.Recovered > 0)
+            StatusText += $"  ·  {result.Recovered} deleted WAL record{(result.Recovered == 1 ? "" : "s")} recovered";
+        if (result.RecoveryError is not null)
+            StatusText += $"  ·  WAL deleted recovery failed: {result.RecoveryError}";
+        UpdateRowStates();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

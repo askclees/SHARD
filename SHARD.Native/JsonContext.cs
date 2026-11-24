@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using SHARD.Core.Integrity;
 using SHARD.Core.Recovery;
 
 namespace SHARD.Native;
@@ -18,7 +19,7 @@ public sealed class ApiEnvelope
 public sealed record OpenResult(long Handle);
 
 /// <summary>Wire shape for <c>shard_recover_to_file</c>'s options argument — CarveMode is a plain string ("loose"/"tight") rather than the C# enum, to sidestep enum-JSON-converter/source-gen edge cases across the native boundary.</summary>
-public sealed record RecoverOptionsInput(bool ProcessWal = true, string? CarveMode = null, List<string>? CarveTableFilter = null);
+public sealed record RecoverOptionsInput(bool ProcessWal = true, string? CarveMode = null, List<string>? CarveTableFilter = null, bool ProcessJournal = true, bool InferZeroedJournalHeader = false);
 
 /// <summary>
 /// Source-generated (reflection-free) JSON (de)serialization context — required for Native AOT
@@ -39,6 +40,9 @@ public sealed record RecoverOptionsInput(bool ProcessWal = true, string? CarveMo
 [JsonSerializable(typeof(List<PageInfo>))]
 [JsonSerializable(typeof(List<RowInfo>))]
 [JsonSerializable(typeof(List<CarvedRowInfo>))]
+[JsonSerializable(typeof(List<PageResidualInfo>))]
+[JsonSerializable(typeof(List<EvidenceFileHash>))]
+[JsonSerializable(typeof(List<HashVerification>))]
 [JsonSerializable(typeof(IReadOnlyDictionary<string, object?>))]
 [JsonSerializable(typeof(Dictionary<string, object?>))]
 [JsonSerializable(typeof(long))]

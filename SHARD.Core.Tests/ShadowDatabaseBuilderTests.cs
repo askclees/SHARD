@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using SHARD.Core.Recovery;
 using SHARD.Core.Shadow;
 
 namespace SHARD.Core.Tests;
@@ -166,9 +167,10 @@ public class ShadowDatabaseBuilderTests
             shadow.Open();
 
             var tables = GetTableNames(shadow);
-            Assert.Equal(82, tables.Count); // 40 source tables + 40 _shard_recovered_* tables + _shard_overflow_pages + _shard_pages
+            Assert.Equal(83, tables.Count); // 40 source tables + 40 _shard_recovered_* tables + _shard_overflow_pages + _shard_pages + _shard_info
             Assert.Contains("_shard_overflow_pages", tables);
             Assert.Contains("_shard_pages", tables);
+            Assert.Contains("_shard_info", tables);
             Assert.DoesNotContain(tables, t => t.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase));
         }
         finally
@@ -308,6 +310,129 @@ public class ShadowDatabaseBuilderTests
         finally
         {
             if (File.Exists(shadowPath)) File.Delete(shadowPath);
+        }
+    }
+
+    [Fact]
+    public void Create_FillsSchemaDefault_ForRowsPredatingAlterTableAddColumn()
+    {
+        // Reproduces the WhatsApp msgstore.db "NOT NULL constraint failed" bug: a row written
+        // before a later "ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT ..." migration has no
+        // physical value for that column, and must fall back to the schema's DEFAULT rather than
+        // NULL when mirrored into the shadow database's live table.
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"shard_evidence_{Guid.NewGuid():N}.db");
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var setup = new SqliteConnection($"Data Source={evidencePath}"))
+            {
+                setup.Open();
+                using var cmd = setup.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE message_group (id INTEGER PRIMARY KEY, name TEXT);
+                    INSERT INTO message_group (name) VALUES ('OldGroup');
+                    ALTER TABLE message_group ADD COLUMN group_type INTEGER NOT NULL DEFAULT 0;
+                    INSERT INTO message_group (name, group_type) VALUES ('NewGroup', 2);
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            var warnings = ShadowDatabaseBuilder.Create(shadowPath, db);
+            Assert.Empty(warnings);
+
+            using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+            shadow.Open();
+
+            using var oldRowCommand = shadow.CreateCommand();
+            oldRowCommand.CommandText = "SELECT group_type FROM message_group WHERE name = 'OldGroup'";
+            Assert.Equal(0L, (long)oldRowCommand.ExecuteScalar()!);
+
+            using var newRowCommand = shadow.CreateCommand();
+            newRowCommand.CommandText = "SELECT group_type FROM message_group WHERE name = 'NewGroup'";
+            Assert.Equal(2L, (long)newRowCommand.ExecuteScalar()!);
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
+        }
+    }
+
+    /// <summary>Builds an evidence db where a plain DELETE (insert then delete, no checkpoint
+    /// tricks) is empirically known to populate only <c>_shard_</c>'s "freeblock" recovery
+    /// method — verified by hand before writing this test — so RecoveryFlags.FreeblockCarving
+    /// is the one flag with a reliable, simple fixture. The other two in-tree flags
+    /// (DeletedCells, InTreeCarving) share the exact same code shape (see InsertDeletedRows) so
+    /// this is exercised here as proof the per-flag gating is wired correctly and doesn't leak
+    /// across flags, not because the other two flags are untested in principle.</summary>
+    private static string BuildEvidenceWithFreeblockDeletedRows()
+    {
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"shard_evidence_{Guid.NewGuid():N}.db");
+        using var setup = new SqliteConnection($"Data Source={evidencePath}");
+        setup.Open();
+        using var cmd = setup.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT);
+            INSERT INTO people (name) VALUES ('Alice'), ('Bob'), ('Charlie'), ('Dave'), ('Eve');
+            DELETE FROM people WHERE name IN ('Bob', 'Dave');
+            """;
+        cmd.ExecuteNonQuery();
+        return evidencePath;
+    }
+
+    private static int CountRecoveredRows(string shadowPath, string table)
+    {
+        using var shadow = new SqliteConnection($"Data Source={shadowPath}");
+        shadow.Open();
+        using var cmd = shadow.CreateCommand();
+        cmd.CommandText = $"SELECT COUNT(*) FROM \"{ShadowDatabaseBuilder.RecoveredTablePrefix}{table}\"";
+        return (int)(long)cmd.ExecuteScalar()!;
+    }
+
+    [Theory]
+    [InlineData(true,  true,  true,  2)] // all on (default) — both deleted rows recovered via freeblock
+    [InlineData(false, true,  true,  2)] // DeletedCells off — no effect; this fixture never triggers that category
+    [InlineData(true,  false, true,  2)] // InTreeCarving off — no effect; this fixture never triggers that category
+    [InlineData(true,  true,  false, 0)] // FreeblockCarving off — the only flag that actually gates this fixture's rows
+    public void Create_FreeblockCarvingFlag_GatesIndependently(
+        bool deletedCells, bool inTreeCarving, bool freeblockCarving, int expectedRecoveredCount)
+    {
+        string evidencePath = BuildEvidenceWithFreeblockDeletedRows();
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            var flags = new RecoveryFlags(DeletedCells: deletedCells, InTreeCarving: inTreeCarving, FreeblockCarving: freeblockCarving);
+            ShadowDatabaseBuilder.Create(shadowPath, db, flags);
+
+            Assert.Equal(expectedRecoveredCount, CountRecoveredRows(shadowPath, "people"));
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
+        }
+    }
+
+    [Fact]
+    public void Create_OmittingFlagsArgument_MatchesAllFlagsOnDefault()
+    {
+        // The pre-refactor call shape — Create(path, db) with no flags argument at all — must
+        // keep recovering exactly what it always did, since RecoveryFlags default to true.
+        string evidencePath = BuildEvidenceWithFreeblockDeletedRows();
+        string shadowPath   = Path.Combine(Path.GetTempPath(), $"shard_shadow_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = SqliteForensicDatabase.Open(evidencePath);
+            ShadowDatabaseBuilder.Create(shadowPath, db); // no flags argument
+
+            Assert.Equal(2, CountRecoveredRows(shadowPath, "people"));
+        }
+        finally
+        {
+            if (File.Exists(evidencePath)) File.Delete(evidencePath);
+            if (File.Exists(shadowPath))   File.Delete(shadowPath);
         }
     }
 }

@@ -203,4 +203,14 @@ public class CreateTableParserTests
         Assert.Equal("column_with_a_fairly_long_name_24", schema.Columns[24].Name);
         Assert.All(schema.Columns, c => Assert.Equal(TypeAffinity.Text, c.Affinity));
     }
+
+    [Fact]
+    public void ExtractTableSchema_RetainsOriginalSqlVerbatim()
+    {
+        const string sql = "CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT)";
+
+        var schema = CreateTableParser.ExtractTableSchema(sql);
+
+        Assert.Equal(sql, schema!.Sql);
+    }
 }

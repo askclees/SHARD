@@ -1,0 +1,28 @@
+# SHARD WAL Test Data Manifest — freeblocks inside WAL frames (secure_delete OFF)
+# Database: places_wal_freeblocks.db
+# Created by: create_places_wal_freeblocks.py
+# Created: 2026-11-16
+#
+# secure_delete is OFF, so deleted cells keep their bytes in the freed space of the page images
+# written to the WAL. Row 50 is inserted and deleted within one transaction and survives only as a
+# freeblock inside WAL frames; row 30 survives as a live cell in a superseded committed frame; row 2
+# is live in the database file and deleted by the WAL.
+# All three files were captured as-is after SIGKILL with no SQLite cleanup.
+
+[places_wal_freeblocks.db]
+size    = 8192
+md5     = a909aa55224657f30e29bd43ac1f4020
+sha1    = 2676787ba92096a74e3f9b365ce9ca23aa114017
+sha256  = a258ac4d7faada676017b2cf325d2d0a71471b5c1e5269cf1ede0ba5ac39a3e7
+
+[places_wal_freeblocks.db-shm]
+size    = 32768
+md5     = 11da58bf787845bec69e367e5cd132b3
+sha1    = fa7d1d250c725916a14f538ceff05ed069037383
+sha256  = 1394818de2be0483ab576319c8d60a0fca49984273cdc34864d2be1b78b89e40
+
+[places_wal_freeblocks.db-wal]
+size    = 16512
+md5     = da4431676bcc123a2188c676d19377f6
+sha1    = aa457e5d2be53fd3660cb8a4dbcfbea0ae50770d
+sha256  = a225dbb45814a72c14a6b3e5d0dff5a9449e64d514ad6c901406754b55ebf080
